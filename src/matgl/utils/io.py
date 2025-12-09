@@ -144,8 +144,15 @@ class IOMixIn:
             if isinstance(v, dict) and "@class" in v and "@module" in v:
                 modname = v["@module"]
                 classname = v["@class"]
+                cls_lower = classname.lower()
 
-                if "m3gnet" in classname.lower() or "megnet" in classname.lower() or "chgnet" in classname.lower():
+                if (
+                    "m3gnet" in cls_lower or "megnet" in cls_lower or "chgnet" in cls_lower or "qet" in cls_lower
+                ) and matgl.config.BACKEND == "PYG":
+                    warnings.warn(
+                        f"Model {classname} is a DGL model, but the backend is PYG. Setting the backend to DGL.",
+                        stacklevel=2,
+                    )
                     matgl.set_backend("DGL")
                 mod = __import__(modname, globals(), locals(), [classname], 0)
                 cls_ = getattr(mod, classname)
