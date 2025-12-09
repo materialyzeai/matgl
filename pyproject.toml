@@ -50,7 +50,7 @@ classifiers = [
 ]
 dependencies = [
     "ase",
-    "torch<=2.7.0",  # TODO: Remove this pin. For some reason, torch 2.9 gives different results.
+    "torch<=2.8.0",  # TODO: Remove this pin. For some reason, torch 2.9 gives different results.
     "torchdata",
     "pymatgen",
     "lightning<=2.6.0",
