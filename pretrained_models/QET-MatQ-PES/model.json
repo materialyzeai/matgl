@@ -1,7 +1,7 @@
 {
     "@class": "Potential",
     "@module": "matgl.apps._pes_dgl",
-    "@model_version": 2,
+    "@model_version": 3,
     "metadata": null,
     "kwargs": {
         "model": {
