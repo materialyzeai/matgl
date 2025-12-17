@@ -51,6 +51,7 @@ classifiers = [
 dependencies = [
     "ase",
     "torch<=2.7.0",  # TODO: Remove this pin. For some reason, torch 2.9 gives different results.
+    "warp-lang>=10.1",
     "torchdata",
     "pymatgen",
     "lightning<=2.6.0.dev20251123",

@@ -11,10 +11,10 @@ please refer to::
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Mapping, Any
 
 import torch
-from torch import nn
+from torch import nn, Tensor
 
 import matgl
 from matgl.config import DEFAULT_ELEMENTS
@@ -29,12 +29,18 @@ from matgl.layers._readout_torch import (
     WeightedReadOut,
 )
 from matgl.utils.cutoff import cosine_cutoff
-from matgl.utils.maths import (
-    decompose_tensor,
-    new_radial_tensor,
-    scatter_add,
-    vector_to_skewtensor,
-    vector_to_symtensor,
+from matgl.utils.maths import scatter_add
+
+from matgl.ops import (
+    fn_radial_message_passing,
+    fn_compose_tensor,
+    fn_decompose_tensor,
+    fn_tensor_norm3,
+    fn_message_passing,
+    fn_radial_message_passing,
+    fn_tensor_matmul_o3_3x3,
+    fn_tensor_matmul_so3_3x3,
+    graph_transform,
 )
 
 from ._core import MatGLModel
@@ -43,40 +49,6 @@ if TYPE_CHECKING:
     from matgl.graph._converters_pyg import GraphConverter
 
 logger = logging.getLogger(__file__)
-
-
-def compose_tensor(I_tensor: torch.Tensor, A: torch.Tensor, S: torch.Tensor) -> torch.Tensor:
-    """Compose tensor from scalar (I_tensor), skew-symmetric (A), and traceless symmetric (S) components.
-
-    Args:
-        I_tensor: Scalar component, shape (num_nodes, 1, 1, units) or (num_nodes, 3, 3, units)
-        A: Skew-symmetric component, shape (num_nodes, 3, 3, units)
-        S: Traceless symmetric component, shape (num_nodes, 3, 3, units)
-
-    Returns:
-        Composed tensor, shape (num_nodes, 3, 3, units)
-    """
-    # I_tensor is scalar (1x1), A is skew (3x3), S is traceless symmetric (3x3)
-    # For I_tensor, we need to expand it to 3x3 identity matrix
-    if I_tensor.shape[1] == 1 and I_tensor.shape[2] == 1:
-        # I_tensor has shape (num_nodes, 1, 1, units)
-        # Expand scalar to 3x3 identity matrix: multiply I_tensor by identity
-        eye = torch.eye(3, 3, device=I_tensor.device, dtype=I_tensor.dtype)  # (3, 3)
-        # I_tensor: (num_nodes, 1, 1, units)
-        # We need: I_expanded[i, :, :, u] = I_tensor[i, 0, 0, u] * eye
-        # I_values: (num_nodes, units)
-        I_values = I_tensor.squeeze(1).squeeze(1)  # (num_nodes, units)
-        # eye_expanded: (1, 3, 3, 1) for broadcasting
-        eye_expanded = eye.unsqueeze(0).unsqueeze(-1)  # (1, 3, 3, 1)
-        # I_values.unsqueeze(1).unsqueeze(1): (num_nodes, 1, 1, units)
-        # Multiply: (num_nodes, 1, 1, units) * (1, 3, 3, 1) -> (num_nodes, 3, 3, units)
-        I_expanded = I_values.unsqueeze(1).unsqueeze(1) * eye_expanded  # (num_nodes, 3, 3, units)
-    else:
-        I_expanded = I_tensor
-
-    # A is already 3x3 skew-symmetric, shape (num_nodes, 3, 3, units)
-    # S is already 3x3 traceless symmetric, shape (num_nodes, 3, 3, units)
-    return I_expanded + A + S
 
 
 def compute_pair_vector_and_distance(
@@ -108,151 +80,9 @@ def compute_pair_vector_and_distance(
     return bond_vec, bond_dist
 
 
-def radial_message_passing(
-    edge_vec_norm: torch.Tensor,
-    edge_attr: torch.Tensor,
-    edge_index: torch.Tensor,
-    num_nodes: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Perform radial message passing to aggregate edge information to nodes.
-
-    Args:
-        edge_vec_norm: Normalized edge vectors, shape (num_edges, 3)
-        edge_attr: Edge attributes, shape (num_edges, 3, units)
-        edge_index: Edge indices, shape (2, num_edges)
-        num_nodes: Number of nodes
-
-    Returns:
-        I: Scalar components, shape (num_nodes, 1, 1, units)
-        A: Skew-symmetric components, shape (num_nodes, 3, 3, units)
-        S: Traceless symmetric components, shape (num_nodes, 3, 3, units)
-    """
-    dst = edge_index[1]
-
-    # Create radial tensors from edge vectors
-    # For scalars: use (1, 1, 1, 1) which will broadcast with f_I
-    eye_scalar_base = torch.ones(1, 1, 1, 1, device=edge_vec_norm.device, dtype=edge_vec_norm.dtype)
-    A_skew_base = vector_to_skewtensor(edge_vec_norm).unsqueeze(-3)  # (num_edges, 1, 3, 3)
-    S_sym_base = vector_to_symtensor(edge_vec_norm).unsqueeze(-3)  # (num_edges, 1, 3, 3)
-
-    # Split edge_attr into three components
-    edge_attr_I = edge_attr[:, 0, :]  # (num_edges, units)
-    edge_attr_A = edge_attr[:, 1, :]  # (num_edges, units)
-    edge_attr_S = edge_attr[:, 2, :]  # (num_edges, units)
-
-    # Call new_radial_tensor
-    # new_radial_tensor multiplies f_I[..., None, None] * scalars
-    # f_I: (num_edges, units) -> (num_edges, units, 1, 1)
-    # scalars: (1, 1, 1, 1) -> broadcasts to (num_edges, units, 1, 1)
-    # Result: I_ij (num_edges, units, 1, 1), A_ij (num_edges, units, 3, 3), S_ij (num_edges, units, 3, 3)
-    I_ij, A_ij, S_ij = new_radial_tensor(
-        eye_scalar_base,
-        A_skew_base,
-        S_sym_base,
-        edge_attr_I,
-        edge_attr_A,
-        edge_attr_S,
-    )
-
-    # new_radial_tensor returns with units in position 1, we need units in position -1
-    # Transpose: (num_edges, units, 1, 1) -> (num_edges, 1, 1, units)
-    # Transpose: (num_edges, units, 3, 3) -> (num_edges, 3, 3, units)
-    I_ij = I_ij.permute(0, 2, 3, 1)  # (num_edges, 1, 1, units)
-    A_ij = A_ij.permute(0, 2, 3, 1)  # (num_edges, 3, 3, units)
-    S_ij = S_ij.permute(0, 2, 3, 1)  # (num_edges, 3, 3, units)
-
-    # Aggregate to nodes
-    I_tensor = scatter_add(I_ij, dst, dim_size=num_nodes, dim=0)
-    A = scatter_add(A_ij, dst, dim_size=num_nodes, dim=0)
-    S = scatter_add(S_ij, dst, dim_size=num_nodes, dim=0)
-
-    return I_tensor, A, S
-
-
-def message_passing(
-    I_tensor: torch.Tensor,
-    A: torch.Tensor,
-    S: torch.Tensor,
-    edge_attr: torch.Tensor,
-    edge_index: torch.Tensor,
-    num_nodes: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Perform message passing for tensor components.
-
-    Args:
-        I_tensor: Scalar components, shape (num_nodes, 1, 1, units)
-        A: Skew-symmetric components, shape (num_nodes, 3, 3, units)
-        S: Traceless symmetric components, shape (num_nodes, 3, 3, units)
-        edge_attr: Edge attributes, shape (num_edges, 3, units)
-        edge_index: Edge indices, shape (2, num_edges)
-        num_nodes: Number of nodes
-
-    Returns:
-        Im: Aggregated scalar messages, shape (num_nodes, 1, 1, units)
-        Am: Aggregated skew messages, shape (num_nodes, 3, 3, units)
-        Sm: Aggregated traceless messages, shape (num_nodes, 3, 3, units)
-    """
-    dst = edge_index[1]
-
-    # Get node features for destination nodes
-    I_j = I_tensor[dst]
-    A_j = A[dst]
-    S_j = S[dst]
-
-    # Extract edge attribute components
-    # edge_attr has shape (num_edges, 3, units) where dim 1 is (I, A, S) components
-    edge_attr_I = edge_attr[:, 0, :]  # (num_edges, units)
-    edge_attr_A = edge_attr[:, 1, :]  # (num_edges, units)
-    edge_attr_S = edge_attr[:, 2, :]  # (num_edges, units)
-
-    # After linear transformations, I_tensor, A, S all have shape (num_nodes, 3, 3, units)
-    # So I_j, A_j, S_j have shape (num_edges, 3, 3, units)
-    # Expand edge attributes for broadcasting: (num_edges, units) -> (num_edges, 1, 1, units)
-    edge_attr_I = edge_attr_I.unsqueeze(1).unsqueeze(1)  # (num_edges, 1, 1, units)
-    edge_attr_A = edge_attr_A.unsqueeze(1).unsqueeze(1)  # (num_edges, 1, 1, units)
-    edge_attr_S = edge_attr_S.unsqueeze(1).unsqueeze(1)  # (num_edges, 1, 1, units)
-
-    # Apply edge attributes to node features
-    I_m = I_j * edge_attr_I  # (num_edges, 3, 3, units)
-    A_m = A_j * edge_attr_A  # (num_edges, 3, 3, units)
-    S_m = S_j * edge_attr_S  # (num_edges, 3, 3, units)
-
-    # Aggregate messages
-    Im = scatter_add(I_m, dst, dim_size=num_nodes, dim=0)
-    Am = scatter_add(A_m, dst, dim_size=num_nodes, dim=0)
-    Sm = scatter_add(S_m, dst, dim_size=num_nodes, dim=0)
-
-    return Im, Am, Sm
-
-
-def tensor_matmul_o3(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-    """O(3) equivariant tensor multiplication.
-
-    Args:
-        X: First tensor, shape (num_nodes, 3, 3, units)
-        Y: Second tensor, shape (num_nodes, 3, 3, units)
-
-    Returns:
-        Result tensor, shape (num_nodes, 3, 3, units)
-    """
-    # O(3) equivariant: A + B where A = X @ Y, B = Y @ X
-    A = torch.einsum("nijk,njlk->nilk", X, Y)
-    B = torch.einsum("nijk,njlk->nilk", Y, X)
-    return A + B
-
-
-def tensor_matmul_so3(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-    """SO(3) equivariant tensor multiplication.
-
-    Args:
-        X: First tensor, shape (num_nodes, 3, 3, units)
-        Y: Second tensor, shape (num_nodes, 3, 3, units)
-
-    Returns:
-        Result tensor, shape (num_nodes, 3, 3, units)
-    """
-    # SO(3) equivariant: 2 * (X @ Y)
-    return 2 * torch.einsum("nijk,njlk->nilk", X, Y)
+def tensor_norm(tensor):
+    """Computes Frobenius norm."""
+    return (tensor*tensor).sum((-3, -2))    
 
 
 class TensorEmbedding(nn.Module):
@@ -271,9 +101,7 @@ class TensorEmbedding(nn.Module):
         self.units = units
         self.cutoff = cutoff
 
-        self.distance_proj1 = nn.Linear(degree_rbf, units, dtype=dtype)
-        self.distance_proj2 = nn.Linear(degree_rbf, units, dtype=dtype)
-        self.distance_proj3 = nn.Linear(degree_rbf, units, dtype=dtype)
+        self.distance_proj = nn.Linear(degree_rbf, 3 * units, dtype=dtype)
         self.emb = nn.Embedding(ntypes_node, units, dtype=dtype)
         self.emb2 = nn.Linear(2 * units, units, dtype=dtype)
         self.act = activation
@@ -288,10 +116,25 @@ class TensorEmbedding(nn.Module):
 
         self.reset_parameters()
 
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        # since the we changed distance_proj to be a single linear layer,
+        # we need to concatenate the weights and biases of the three distance_proj layers
+        # into a single weight and bias tensor
+        w_keys = [f"{prefix}distance_proj{i}.weight" for i in (1, 2, 3)]
+        b_keys = [f"{prefix}distance_proj{i}.bias"   for i in (1, 2, 3)]
+        new_w  = f"{prefix}distance_proj.weight"
+        new_b  = f"{prefix}distance_proj.bias"
+
+        if all(k in state_dict for k in (w_keys + b_keys)):
+            state_dict = dict(state_dict)
+
+            state_dict[new_w] = torch.cat([state_dict.pop(k) for k in w_keys], dim=0)
+            state_dict[new_b] = torch.cat([state_dict.pop(k) for k in b_keys], dim=0)
+
+        return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)        
+
     def reset_parameters(self):
-        self.distance_proj1.reset_parameters()
-        self.distance_proj2.reset_parameters()
-        self.distance_proj3.reset_parameters()
+        self.distance_proj.reset_parameters()
         self.emb.reset_parameters()
         self.emb2.reset_parameters()
         for linear in self.linears_tensor:
@@ -307,6 +150,8 @@ class TensorEmbedding(nn.Module):
         edge_weight: torch.Tensor,
         edge_vec: torch.Tensor,
         edge_attr: torch.Tensor,
+        row_data: torch.Tensor,
+        row_indptr: torch.Tensor,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -320,90 +165,52 @@ class TensorEmbedding(nn.Module):
         Returns:
             X: Tensor representation, shape (num_nodes, 3, 3, units)
         """
-        num_nodes = z.shape[0]
-
         # Node embedding
         x = self.emb(z)  # (num_nodes, units)
 
         # Edge processing
         C = cosine_cutoff(edge_weight, self.cutoff)
-        W1 = self.distance_proj1(edge_attr) * C.view(-1, 1)  # (num_edges, units)
-        W2 = self.distance_proj2(edge_attr) * C.view(-1, 1)
-        W3 = self.distance_proj3(edge_attr) * C.view(-1, 1)
-
-        edge_vec_norm = edge_vec / torch.norm(edge_vec, dim=1, keepdim=True).clamp(min=1e-6)
+        edge_attr = self.distance_proj(edge_attr).view(-1, 3, self.units)
 
         # Get atomic number messages
-        src, dst = edge_index[0], edge_index[1]
-        vi = x[src]
-        vj = x[dst]
-        zij = torch.cat([vi, vj], dim=-1)
+        zij = x.index_select(0, edge_index.t().flip(-1).reshape(-1)).view(
+                -1, self.units * 2
+            )
         Zij = self.emb2(zij)  # (num_edges, units)
 
         # Create edge attributes with Zij
-        edge_attr_processed = torch.stack([W1, W2, W3], dim=1)  # (num_edges, 3, units)
-        edge_attr_processed = edge_attr_processed * Zij.unsqueeze(1)  # (num_edges, 3, units)
+        edge_attr_processed = \
+            edge_attr.view(-1, 3, self.units) \
+            * C.view(-1, 1, 1) \
+            * Zij.view(-1, 1, self.units)
 
         # Radial message passing
-        I_tensor, A, S = radial_message_passing(edge_vec_norm, edge_attr_processed, edge_index, num_nodes)
+        edge_vec_norm = edge_vec / torch.norm(edge_vec, dim=1, keepdim=True).clamp(min=1e-6)
+        I, A, S = fn_radial_message_passing(
+            edge_vec_norm, edge_attr_processed, row_data, row_indptr
+        )
 
         # Compose initial tensor to get proper shape for norm computation
-        X = compose_tensor(I_tensor, A, S)  # (num_nodes, 3, 3, units)
+        X = fn_compose_tensor(I, A, S)  # (num_nodes, 3, 3, units)
 
         # Normalize and process
-        # Following original: norm = tensor_norm(scalars + skew_matrices + traceless_tensors)
-        # For X with shape (num_nodes, 3, 3, units), we need to sum over (-3, -2)
-        # which are the (3, 3) spatial dimensions
-        # tensor_norm sums over (-2, -1), but we need (-3, -2) for our tensor shape
-        # So we compute the norm manually: sum over the spatial (3, 3) dimensions
-        norm = (X**2).sum((-3, -2))  # (num_nodes, units)
+
+        norm = tensor_norm(X)  # (num_nodes, units)
         norm = self.init_norm(norm)  # (num_nodes, units)
-
-        # Apply tensor linear transformations
-        # I_tensor has shape (num_nodes, 1, 1, units), A and S have (num_nodes, 3, 3, units)
-        # The linear layer expects (..., units) as the last dimension
-        # Original code: permute(0, 2, 3, 1) puts units in position -2, then linear, then permute back
-        # For (num_nodes, 3, 3, units): permute(0, 2, 3, 1) -> (num_nodes, 3, units, 3)
-        # But linear expects (..., units), so we need to reshape or use a different approach
-        # Actually, the linear is applied to each spatial position independently
-        # So we reshape to (num_nodes * 3 * 3, units), apply linear, reshape back
-        if I_tensor.shape[1] == 1 and I_tensor.shape[2] == 1:
-            # Expand I_tensor from (num_nodes, 1, 1, units) to (num_nodes, 3, 3, units)
-            eye = torch.eye(3, 3, device=I_tensor.device, dtype=I_tensor.dtype)  # (3, 3)
-            I_values = I_tensor.squeeze(1).squeeze(1)  # (num_nodes, units)
-            I_expanded = I_values.unsqueeze(1).unsqueeze(1) * eye.unsqueeze(0).unsqueeze(-1)  # (num_nodes, 3, 3, units)
-            # Reshape to (num_nodes * 3 * 3, units), apply linear, reshape back
-            I_reshaped = I_expanded.reshape(-1, self.units)  # (num_nodes * 9, units)
-            I_reshaped = self.linears_tensor[0](I_reshaped)  # (num_nodes * 9, units)
-            I_tensor = I_reshaped.reshape(I_expanded.shape)  # (num_nodes, 3, 3, units)
-        else:
-            # Reshape to (num_nodes * 3 * 3, units), apply linear, reshape back
-            I_reshaped = I_tensor.reshape(-1, self.units)  # (num_nodes * 9, units)
-            I_reshaped = self.linears_tensor[0](I_reshaped)  # (num_nodes * 9, units)
-            I_tensor = I_reshaped.reshape(I_tensor.shape)  # (num_nodes, 3, 3, units)
-
-        # Same for A and S
-        A_reshaped = A.reshape(-1, self.units)  # (num_nodes * 9, units)
-        A_reshaped = self.linears_tensor[1](A_reshaped)  # (num_nodes * 9, units)
-        A = A_reshaped.reshape(A.shape)  # (num_nodes, 3, 3, units)
-
-        S_reshaped = S.reshape(-1, self.units)  # (num_nodes * 9, units)
-        S_reshaped = self.linears_tensor[2](S_reshaped)  # (num_nodes * 9, units)
-        S = S_reshaped.reshape(S.shape)  # (num_nodes, 3, 3, units)
 
         # Process norm through scalar layers
         for linear_scalar in self.linears_scalar:
             norm = self.act(linear_scalar(norm))
 
-        norm = norm.reshape(norm.shape[0], self.units, 3)
-        norm_I, norm_A, norm_S = norm[..., 0], norm[..., 1], norm[..., 2]
+        norm = norm.view(-1, self.units, 3)
+        norm_I, norm_A, norm_S = norm.unbind(dim=-1)
 
         # Apply norm to tensors
-        I_tensor = I_tensor * norm_I.unsqueeze(1).unsqueeze(1)
-        A = A * norm_A.unsqueeze(1).unsqueeze(1)
-        S = S * norm_S.unsqueeze(1).unsqueeze(1)
+        I = self.linears_tensor[0](I) * norm_I.unsqueeze(-2)
+        A = self.linears_tensor[1](A) * norm_A.unsqueeze(-2)
+        S = self.linears_tensor[2](S) * norm_S.unsqueeze(-2)
 
-        X = compose_tensor(I_tensor, A, S)
+        X = fn_compose_tensor(I, A, S)
 
         return X
 
@@ -453,6 +260,12 @@ class TensorNetInteraction(nn.Module):
         edge_index: torch.Tensor,
         edge_weight: torch.Tensor,
         edge_attr: torch.Tensor,
+        row_data: torch.Tensor,
+        row_indices: torch.Tensor,
+        row_indptr: torch.Tensor,
+        col_data: torch.Tensor,
+        col_indices: torch.Tensor,
+        col_indptr: torch.Tensor,        
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -465,93 +278,65 @@ class TensorNetInteraction(nn.Module):
         Returns:
             X: Updated tensor representations, shape (num_nodes, 3, 3, units)
         """
-        num_nodes = X.shape[0]
-
         # Process edge attributes
         C = cosine_cutoff(edge_weight, self.cutoff)
         edge_attr_processed = edge_attr
         for linear_scalar in self.linears_scalar:
             edge_attr_processed = self.act(linear_scalar(edge_attr_processed))
-        edge_attr_processed = (edge_attr_processed * C.view(-1, 1)).reshape(
+        edge_attr_processed = (edge_attr_processed * C.view(-1, 1)).view(
             edge_attr.shape[0], 3, self.units
-        )  # (num_edges, 3, units)
+        ).mT.contiguous()  # (num_edges, units, 3)
 
         # Normalize input tensor
         # For X with shape (num_nodes, 3, 3, units), we need to sum over (-3, -2)
         # which are the (3, 3) spatial dimensions to get (num_nodes, units)
-        norm_X = (X**2).sum((-3, -2)) + 1  # (num_nodes, units)
-        X = X / norm_X.reshape(-1, 1, 1, X.shape[-1])
+        norm_X = (X*X).sum((-3, -2)) + 1  # (num_nodes, units)
+        X = X / norm_X.view(-1, 1, 1, X.shape[-1])
 
         # Decompose input tensor
-        # X has shape (num_nodes, 3, 3, units)
-        # decompose_tensor expects (..., 3, 3), so we permute to (num_nodes, units, 3, 3)
-        # then apply decompose_tensor which works on the last two dimensions (3, 3)
-        X_permuted = X.permute(0, 3, 1, 2)  # (num_nodes, units, 3, 3)
-        # decompose_tensor works on last two dims, so this will work for each (num_nodes, units) slice
-        I_permuted, A_permuted, S_permuted = decompose_tensor(X_permuted)  # Each: (num_nodes, units, 3, 3)
-        # Permute back: (num_nodes, units, 3, 3) -> (num_nodes, 3, 3, units)
-        I_tensor = I_permuted.permute(0, 2, 3, 1)  # (num_nodes, 3, 3, units)
-        A = A_permuted.permute(0, 2, 3, 1)  # (num_nodes, 3, 3, units)
-        S = S_permuted.permute(0, 2, 3, 1)  # (num_nodes, 3, 3, units)
+        I, A, S = fn_decompose_tensor(X)
 
         # Apply tensor linear transformations
-        # Reshape to (num_nodes * 9, units), apply linear, reshape back
-        I_reshaped = I_tensor.reshape(-1, self.units)  # (num_nodes * 9, units)
-        I_reshaped = self.linears_tensor[0](I_reshaped)  # (num_nodes * 9, units)
-        I_tensor = I_reshaped.reshape(I_tensor.shape)  # (num_nodes, 3, 3, units)
+        I = self.linears_tensor[0](I)
+        A = self.linears_tensor[1](A)
+        S = self.linears_tensor[2](S)
 
-        A_reshaped = A.reshape(-1, self.units)  # (num_nodes * 9, units)
-        A_reshaped = self.linears_tensor[1](A_reshaped)  # (num_nodes * 9, units)
-        A = A_reshaped.reshape(A.shape)  # (num_nodes, 3, 3, units)
-
-        S_reshaped = S.reshape(-1, self.units)  # (num_nodes * 9, units)
-        S_reshaped = self.linears_tensor[2](S_reshaped)  # (num_nodes * 9, units)
-        S = S_reshaped.reshape(S.shape)  # (num_nodes, 3, 3, units)
-        Y = compose_tensor(I_tensor, A, S)
+        # compose back
+        Y = fn_compose_tensor(I, A, S)
 
         # Message passing
-        Im, Am, Sm = message_passing(I_tensor, A, S, edge_attr_processed, edge_index, num_nodes)
-        msg = compose_tensor(Im, Am, Sm)
+        Im, Am, Sm = fn_message_passing(
+            I,
+            A,
+            S,
+            edge_attr,
+            row_data,
+            row_indices,
+            row_indptr,
+            col_data,
+            col_indices,
+            col_indptr,
+        )
+        msg = fn_compose_tensor(Im, Am, Sm)
 
         # Apply group action
         if self.equivariance_invariance_group == "O(3)":
-            C = tensor_matmul_o3(Y, msg)  # (num_nodes, 3, 3, units)
+            C = fn_tensor_matmul_o3_3x3(Y, msg)
         else:  # SO(3)
-            C = tensor_matmul_so3(Y, msg)  # (num_nodes, 3, 3, units)
-            C = 2 * C
-
-        # decompose_tensor expects (..., 3, 3), so permute to (num_nodes, units, 3, 3)
-        C_permuted = C.permute(0, 3, 1, 2)  # (num_nodes, units, 3, 3)
-        I_permuted, A_permuted, S_permuted = decompose_tensor(C_permuted)  # Each: (num_nodes, units, 3, 3)
-        # Permute back: (num_nodes, units, 3, 3) -> (num_nodes, 3, 3, units)
-        I_tensor = I_permuted.permute(0, 2, 3, 1)  # (num_nodes, 3, 3, units)
-        A = A_permuted.permute(0, 2, 3, 1)  # (num_nodes, 3, 3, units)
-        S = S_permuted.permute(0, 2, 3, 1)  # (num_nodes, 3, 3, units)
+            C = fn_tensor_matmul_so3_3x3(Y, msg)
+            C = C = C
+        I, A, S = fn_decompose_tensor(C)
 
         # Normalize
-        # For compose_tensor(I_tensor, A, S) with shape (num_nodes, 3, 3, units),
-        # we need to sum over (-3, -2) to get (num_nodes, units)
-        X_composed = compose_tensor(I_tensor, A, S)  # (num_nodes, 3, 3, units)
-        normp1 = ((X_composed**2).sum((-3, -2)) + 1).reshape(-1, 1, 1, X_composed.shape[-1])
-        I_tensor, A, S = I_tensor / normp1, A / normp1, S / normp1
+        normp1 = (tensor_norm(C) + 1).unsqueeze(-2)
+        I, A, S = I / normp1, A / normp1, S / normp1
 
         # Final tensor transformations
-        # Reshape to (num_nodes * 9, units), apply linear, reshape back
-        I_reshaped = I_tensor.reshape(-1, self.units)  # (num_nodes * 9, units)
-        I_reshaped = self.linears_tensor[3](I_reshaped)  # (num_nodes * 9, units)
-        I_tensor = I_reshaped.reshape(I_tensor.shape)  # (num_nodes, 3, 3, units)
-
-        A_reshaped = A.reshape(-1, self.units)  # (num_nodes * 9, units)
-        A_reshaped = self.linears_tensor[4](A_reshaped)  # (num_nodes * 9, units)
-        A = A_reshaped.reshape(A.shape)  # (num_nodes, 3, 3, units)
-
-        S_reshaped = S.reshape(-1, self.units)  # (num_nodes * 9, units)
-        S_reshaped = self.linears_tensor[5](S_reshaped)  # (num_nodes * 9, units)
-        S = S_reshaped.reshape(S.shape)  # (num_nodes, 3, 3, units)
-        dX = compose_tensor(I_tensor, A, S)
-
-        # Update
-        X = X + dX + torch.einsum("nijk,njlk->nilk", dX, dX)
+        I = self.linears_tensor[3](I)
+        A = self.linears_tensor[4](A)
+        S = self.linears_tensor[5](S)
+        dX = fn_compose_tensor(I, A, S)
+        X = X + dX + fn_tensor_matmul_so3_3x3(dX, dX)
 
         return X
 
@@ -760,31 +545,43 @@ class TensorNet(MatGLModel):
         # Obtain graph, with distances and relative position vectors
         bond_vec, bond_dist = compute_pair_vector_and_distance(pos, edge_index, pbc_offshift)
 
+        # perpare graph indices for message passing
+        row_data, row_indices, row_indptr, col_data, col_indices, col_indptr = (
+                graph_transform(edge_index.int(), z.shape[0])
+        )
+
         # Expand distances with radial basis functions
         edge_attr = self.bond_expansion(bond_dist)
 
         # Embedding layer
-        X = self.tensor_embedding(z, edge_index, bond_dist, bond_vec, edge_attr)
+        X = self.tensor_embedding(
+            z,
+            edge_index,
+            bond_dist,
+            bond_vec,
+            edge_attr,
+            row_data,
+            row_indptr
+        )
 
         # Interaction layers
         for layer in self.layers:
-            X = layer(X, edge_index, bond_dist, edge_attr)
+            X = layer(
+                X,
+                edge_index,
+                bond_dist,
+                edge_attr,
+                row_data,
+                row_indices,
+                row_indptr,
+                col_data,
+                col_indices,
+                col_indptr,
+            )
 
-        # decompose_tensor expects (..., 3, 3), so permute to (num_nodes, units, 3, 3)
-        # X has shape (num_nodes, 3, 3, units)
-        X_permuted = X.permute(0, 3, 1, 2)  # (num_nodes, units, 3, 3)
-        scalars_permuted, skew_metrices_permuted, traceless_tensors_permuted = decompose_tensor(X_permuted)
-        # Permute back: (num_nodes, units, 3, 3) -> (num_nodes, 3, 3, units)
-        scalars = scalars_permuted.permute(0, 2, 3, 1)  # (num_nodes, 3, 3, units)
-        skew_metrices = skew_metrices_permuted.permute(0, 2, 3, 1)  # (num_nodes, 3, 3, units)
-        traceless_tensors = traceless_tensors_permuted.permute(0, 2, 3, 1)  # (num_nodes, 3, 3, units)
-
-        # tensor_norm sums over (-2, -1), but for (num_nodes, 3, 3, units) we need to sum over (-3, -2)
-        # to get (num_nodes, units)
-        scalars_norm = (scalars**2).sum((-3, -2))  # (num_nodes, units)
-        skew_norm = (skew_metrices**2).sum((-3, -2))  # (num_nodes, units)
-        traceless_norm = (traceless_tensors**2).sum((-3, -2))  # (num_nodes, units)
-        x = torch.cat((scalars_norm, skew_norm, traceless_norm), dim=-1)  # (num_nodes, 3 * units)
+        # compute I, A, S norms
+        x = fn_tensor_norm3(X)
+        # normalize
         x = self.out_norm(x)
         x = self.linear(x)
 
