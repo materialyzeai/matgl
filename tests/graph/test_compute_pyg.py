@@ -57,7 +57,7 @@ def _calculate_cos_loop(graph, threebody_cutoff=4.0):
 class TestCompute:
     def test_compute_pair_vector(self, graph_Mo_pyg):
         s1, g1, _ = graph_Mo_pyg
-        lattice = torch.tensor(s1.lattice.matrix, dtype=matgl.float_th).unsqueeze(dim=0)
+        lattice = torch.tensor(s1.lattice.matrix, dtype=matgl.float_th, device=g1.pos.device).unsqueeze(dim=0)
         g1.pbc_offshift = torch.matmul(g1.pbc_offset, lattice[0])
         g1.pos = g1.frac_coords @ lattice[0]
         bv, _ = compute_pair_vector_and_distance(g1.pos, g1.edge_index, g1.pbc_offshift)
@@ -66,16 +66,16 @@ class TestCompute:
 
         _, _, _, d2 = s1.get_neighbor_list(r=5.0)
 
-        np.testing.assert_array_almost_equal(np.sort(d), np.sort(d2))
+        np.testing.assert_array_almost_equal(np.sort(d.cpu().numpy()), np.sort(d2))
 
     def test_compute_pair_vector_for_molecule(self, graph_CH4_pyg):
         _, g2, _ = graph_CH4_pyg
-        lattice = torch.tensor(np.identity(3), dtype=matgl.float_th).unsqueeze(dim=0)
+        lattice = torch.tensor(np.identity(3), dtype=matgl.float_th, device=g2.pos.device).unsqueeze(dim=0)
         g2.pbc_offshift = torch.matmul(g2.pbc_offset, lattice[0])
         g2.pos = g2.frac_coords @ lattice[0]
         bv, _ = compute_pair_vector_and_distance(g2.pos, g2.edge_index, g2.pbc_offshift)
         g2.bond_vec = bv
-        d = torch.linalg.norm(g2.bond_vec, axis=1)
+        d = torch.linalg.norm(g2.bond_vec, axis=1).cpu().numpy()
 
         d2 = np.array(
             [

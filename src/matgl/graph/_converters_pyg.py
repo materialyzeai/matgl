@@ -62,25 +62,27 @@ class GraphConverter(metaclass=abc.ABCMeta):
         dst_id = torch.as_tensor(dst_id, dtype=matgl.int_th)
         edge_index = torch.stack([src_id, dst_id], dim=0)
 
+        device = edge_index.device
+
         # Create Data object
         graph = Data(num_nodes=len(structure), edge_index=edge_index)
 
         # Add periodic boundary condition (PBC) offset as edge attribute
-        pbc_offset = torch.as_tensor(images, dtype=matgl.float_th)
+        pbc_offset = torch.as_tensor(images, dtype=matgl.float_th, device=device)
         graph.pbc_offset = pbc_offset  # Store as edge_attr instead of separate pbc_offset
 
         # Convert lattice matrix to tensor
-        lattice = torch.as_tensor(lattice_matrix, dtype=matgl.float_th)
+        lattice = torch.as_tensor(lattice_matrix, dtype=matgl.float_th, device=device)
 
         # Create node features (node_type based on element indices)
         if is_atoms:
             node_type = np.array([element_types.index(elem) for elem in structure.get_chemical_symbols()])
         else:
             node_type = np.array([element_types.index(site.specie.symbol) for site in structure])
-        graph.node_type = torch.tensor(node_type, dtype=torch.long)  # Node features
+        graph.node_type = torch.tensor(node_type, dtype=torch.long, device=device)  # Node features
 
         # Add fractional coordinates as node attribute
-        graph.frac_coords = torch.as_tensor(frac_coords, dtype=matgl.float_th)
+        graph.frac_coords = torch.as_tensor(frac_coords, dtype=matgl.float_th, device=device)
 
         # Default state attributes
         state_attr = np.array([0.0, 0.0], dtype=matgl.float_np)

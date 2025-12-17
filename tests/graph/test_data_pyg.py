@@ -44,8 +44,8 @@ class TestDataset:
         assert g2.num_nodes == cry_graph.get_graph(BaNiO3)[0].num_nodes
         assert np.shape(pes1["forces"])[0] == 28
         assert np.shape(pes2["forces"])[0] == 10
-        assert np.allclose(lat1.detach().numpy(), structures[0].lattice.matrix)
-        assert np.allclose(lat2.detach().numpy(), structures[1].lattice.matrix)
+        assert np.allclose(lat1.detach().cpu().numpy(), structures[0].lattice.matrix)
+        assert np.allclose(lat2.detach().cpu().numpy(), structures[1].lattice.matrix)
         # Check that structures are indeed cleared.
         assert len(dataset.structures) == 0
 
@@ -66,8 +66,8 @@ class TestDataset:
         assert g2.num_nodes == cry_graph.get_graph(BaNiO3)[0].num_nodes
         assert np.shape(pes1["forces"])[0] == 28
         assert np.shape(pes2["forces"])[0] == 10
-        assert np.allclose(lat1.detach().numpy(), structures[0].lattice.matrix)
-        assert np.allclose(lat2.detach().numpy(), structures[1].lattice.matrix)
+        assert np.allclose(lat1.detach().cpu().numpy(), structures[0].lattice.matrix)
+        assert np.allclose(lat2.detach().cpu().numpy(), structures[1].lattice.matrix)
         shutil.rmtree(f"{dataset.root}")
 
     def test_mgl_property_dataset(self, LiFePO4, BaNiO3):
