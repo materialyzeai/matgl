@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
-import scipy.sparse as sp
+import torch
 from pymatgen.core import Element
-from pymatgen.optimization.neighbors import find_points_in_spheres
 
 from matgl.graph._converters_pyg import GraphConverter
+from matgl.ext._alchmtk import neighbor_list_from_structure
 
 if TYPE_CHECKING:
     from pymatgen.core.structure import Molecule, Structure
@@ -56,24 +56,24 @@ class Molecule2Graph(GraphConverter):
             lat: default lattice for molecular systems (np.ones)
             state_attr: state features
         """
+        src_id, dst_id, _, images, positions = neighbor_list_from_structure(
+            structure=mol,
+            cutoff=self.cutoff,
+            compute_distances=False,
+        )
         natoms = len(mol)
-        R = mol.cart_coords
         element_types = self.element_types
         weight = mol.composition.weight / len(mol)
-        dist = np.linalg.norm(R[:, None, :] - R[None, :, :], axis=-1)
-        dists = mol.distance_matrix.flatten()
-        nbonds = (np.count_nonzero(dists <= self.cutoff) - natoms) / 2
-        nbonds /= natoms
-        adj = sp.csr_matrix(dist <= self.cutoff) - sp.eye(natoms, dtype=np.bool_)
-        adj = adj.tocoo()
+        nbonds = len(src_id) / (2 * natoms)
+        lattice_matrix = torch.eye(3, dtype=torch.float32, device=src_id.device).unsqueeze(0)
         g, lat, _ = super().get_graph_from_processed_structure(
             mol,
-            adj.row,
-            adj.col,
-            np.zeros((len(adj.row), 3)),  # type: ignore[arg-type]
-            np.expand_dims(np.identity(3), axis=0),
+            src_id,
+            dst_id,
+            images,
+            lattice_matrix,
             element_types,
-            R,
+            positions,
         )
         state_attr = [weight, nbonds]
         return g, lat, state_attr
@@ -105,32 +105,19 @@ class Structure2Graph(GraphConverter):
             lat: lattice for periodic systems
             state_attr: state features
         """
-        numerical_tol = 1.0e-8
-        pbc = np.array([1, 1, 1], dtype=np.int64)
+        src_id, dst_id, _, images, _ = neighbor_list_from_structure(
+            structure=structure,
+            cutoff=self.cutoff,
+            compute_distances=False,
+        )
         element_types = self.element_types
-        lattice_matrix = structure.lattice.matrix
-        cart_coords = structure.cart_coords
-        src_id, dst_id, images, bond_dist = find_points_in_spheres(
-            cart_coords,
-            cart_coords,
-            r=self.cutoff,
-            pbc=pbc,
-            lattice=lattice_matrix,
-            tol=numerical_tol,
-        )
-        exclude_self = (src_id != dst_id) | (bond_dist > numerical_tol)
-        src_id, dst_id, images, bond_dist = (
-            src_id[exclude_self],
-            dst_id[exclude_self],
-            images[exclude_self],
-            bond_dist[exclude_self],
-        )
+        lattice_matrix = torch.as_tensor(structure.lattice.matrix, dtype=torch.float32, device=src_id.device).unsqueeze(0)
         g, lat, state_attr = super().get_graph_from_processed_structure(
             structure,
             src_id,
             dst_id,
             images,
-            [lattice_matrix],  # type: ignore[arg-type]
+            lattice_matrix,
             element_types,
             structure.frac_coords,
         )

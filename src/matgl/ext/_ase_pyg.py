@@ -33,9 +33,9 @@ from ase.md.verlet import VelocityVerlet
 from ase.stress import full_3x3_to_voigt_6_stress
 from pymatgen.core.structure import Molecule, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
-from pymatgen.optimization.neighbors import find_points_in_spheres
 
 from matgl.graph._converters_pyg import GraphConverter
+from matgl.ext._alchmtk import neighbor_list_from_ase
 
 if TYPE_CHECKING:
     from typing import Any
@@ -90,44 +90,25 @@ class Atoms2Graph(GraphConverter):
             g: DGL graph
             state_attr: state features
         """
-        numerical_tol = 1.0e-8
-        # Note this needs to be specified as np.int64 or the code will fail on Windows systems as it will default to
-        # long.
-        pbc = np.array([1, 1, 1], dtype=np.int64)
-        element_types = self.element_types
-        lattice_matrix = np.array(atoms.get_cell()) if atoms.pbc.all() else np.expand_dims(np.identity(3), axis=0)
-        cart_coords = atoms.get_positions()
-        if atoms.pbc.all():
-            src_id, dst_id, images, bond_dist = find_points_in_spheres(
-                cart_coords,
-                cart_coords,
-                r=self.cutoff,
-                pbc=pbc,
-                lattice=lattice_matrix,
-                tol=numerical_tol,
-            )
-            exclude_self = (src_id != dst_id) | (bond_dist > numerical_tol)
-            src_id, dst_id, images, bond_dist = (
-                src_id[exclude_self],
-                dst_id[exclude_self],
-                images[exclude_self],
-                bond_dist[exclude_self],
-            )
+        src_id, dst_id, _, images, positions = neighbor_list_from_ase(
+            atoms=atoms,
+            cutoff=self.cutoff,
+            calculate_distances=False,
+        )
+        if atoms.get_pbc().any():
+            lattice_matrix = torch.as_tensor(atoms.cell.array, dtype=torch.float32, device=src_id.device)
         else:
-            dist = np.linalg.norm(cart_coords[:, None, :] - cart_coords[None, :, :], axis=-1)
-            adj = sp.csr_matrix(dist <= self.cutoff) - sp.eye(len(atoms.get_positions()), dtype=np.bool_)
-            adj = adj.tocoo()
-            src_id = adj.row
-            dst_id = adj.col
+            lattice_matrix = torch.eye(3, dtype=torch.float32, device=src_id.device).unsqueeze(0)
+        element_types = self.element_types
 
         g, lat, state_attr = super().get_graph_from_processed_structure(
             atoms,
             src_id,
             dst_id,
-            images if atoms.pbc.all() else np.zeros((len(adj.row), 3), dtype=int),
+            images,
             lattice_matrix,
             element_types,
-            atoms.get_scaled_positions(False) if atoms.pbc.all() else cart_coords,
+            positions,
             is_atoms=True,
         )
 

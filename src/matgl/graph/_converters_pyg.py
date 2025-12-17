@@ -30,12 +30,12 @@ class GraphConverter(metaclass=abc.ABCMeta):
     def get_graph_from_processed_structure(
         self,
         structure,
-        src_id: list[int],
-        dst_id: list[int],
-        images: np.ndarray,
-        lattice_matrix: np.ndarray,
+        src_id: list[int] | np.ndarray | torch.Tensor,
+        dst_id: list[int] | np.ndarray | torch.Tensor,
+        images: np.ndarray | torch.Tensor,
+        lattice_matrix: np.ndarray | torch.Tensor,
         element_types: tuple[str, ...],
-        frac_coords: np.ndarray,
+        frac_coords: np.ndarray | torch.Tensor,
         is_atoms: bool = False,
     ) -> tuple[Data, torch.Tensor, np.ndarray]:
         """
@@ -58,17 +58,19 @@ class GraphConverter(metaclass=abc.ABCMeta):
             - np.ndarray: State attributes.
         """
         # Create edge_index from src_id and dst_id
-        edge_index = torch.tensor(np.array([src_id, dst_id]), dtype=matgl.int_th)
+        src_id = torch.as_tensor(src_id, dtype=matgl.int_th)
+        dst_id = torch.as_tensor(dst_id, dtype=matgl.int_th)
+        edge_index = torch.stack([src_id, dst_id], dim=0)
 
         # Create Data object
         graph = Data(num_nodes=len(structure), edge_index=edge_index)
 
         # Add periodic boundary condition (PBC) offset as edge attribute
-        pbc_offset = torch.tensor(images, dtype=matgl.float_th)
+        pbc_offset = torch.as_tensor(images, dtype=matgl.float_th)
         graph.pbc_offset = pbc_offset  # Store as edge_attr instead of separate pbc_offset
 
         # Convert lattice matrix to tensor
-        lattice = torch.tensor(np.array(lattice_matrix), dtype=matgl.float_th)
+        lattice = torch.as_tensor(lattice_matrix, dtype=matgl.float_th)
 
         # Create node features (node_type based on element indices)
         if is_atoms:
@@ -78,7 +80,7 @@ class GraphConverter(metaclass=abc.ABCMeta):
         graph.node_type = torch.tensor(node_type, dtype=torch.long)  # Node features
 
         # Add fractional coordinates as node attribute
-        graph.frac_coords = torch.tensor(frac_coords, dtype=matgl.float_th)
+        graph.frac_coords = torch.as_tensor(frac_coords, dtype=matgl.float_th)
 
         # Default state attributes
         state_attr = np.array([0.0, 0.0], dtype=matgl.float_np)
