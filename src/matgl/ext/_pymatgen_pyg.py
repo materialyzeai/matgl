@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import numpy as np
 import torch
 from pymatgen.core import Element
 
+from matgl.ext._alchmtk import neighbor_list_from_molecule, neighbor_list_from_structure
 from matgl.graph._converters_pyg import GraphConverter
-from matgl.ext._alchmtk import neighbor_list_from_structure
 
 if TYPE_CHECKING:
     from pymatgen.core.structure import Molecule, Structure
@@ -56,8 +55,8 @@ class Molecule2Graph(GraphConverter):
             lat: default lattice for molecular systems (np.ones)
             state_attr: state features
         """
-        src_id, dst_id, _, images, positions = neighbor_list_from_structure(
-            structure=mol,
+        src_id, dst_id, _, positions = neighbor_list_from_molecule(
+            molecule=mol,
             cutoff=self.cutoff,
             compute_distances=False,
         )
@@ -66,6 +65,7 @@ class Molecule2Graph(GraphConverter):
         weight = mol.composition.weight / len(mol)
         nbonds = len(src_id) / (2 * natoms)
         lattice_matrix = torch.eye(3, dtype=torch.float32, device=src_id.device).unsqueeze(0)
+        images = torch.zeros(len(src_id), 3, dtype=torch.float32, device=src_id.device)
         g, lat, _ = super().get_graph_from_processed_structure(
             mol,
             src_id,
@@ -111,7 +111,10 @@ class Structure2Graph(GraphConverter):
             compute_distances=False,
         )
         element_types = self.element_types
-        lattice_matrix = torch.as_tensor(structure.lattice.matrix, dtype=torch.float32, device=src_id.device).unsqueeze(0)
+        lattice_matrix = torch.as_tensor(
+            structure.lattice.matrix.copy(), dtype=torch.float32, device=src_id.device
+        ).unsqueeze(0)
+        frac_coords = torch.as_tensor(structure.frac_coords, dtype=torch.float32, device=src_id.device)
         g, lat, state_attr = super().get_graph_from_processed_structure(
             structure,
             src_id,
@@ -119,6 +122,6 @@ class Structure2Graph(GraphConverter):
             images,
             lattice_matrix,
             element_types,
-            structure.frac_coords,
+            frac_coords,
         )
         return g, lat, state_attr

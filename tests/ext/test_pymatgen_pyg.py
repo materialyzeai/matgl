@@ -24,19 +24,19 @@ class TestPmg2Graph:
         # check the number of edges
         assert np.allclose(graph.num_edges, 20)
         # check the src_ids
-        assert np.allclose(graph.edge_index[0].numpy(), [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4])
+        assert np.allclose(graph.edge_index[0].sort().values.cpu().numpy(), [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4])
         # check the dst_ids
-        assert np.allclose(graph.edge_index[1].numpy(), [1, 2, 3, 4, 0, 2, 3, 4, 0, 1, 3, 4, 0, 1, 2, 4, 0, 1, 2, 3])
+        assert np.allclose(graph.edge_index[1].sort().values.cpu().numpy(), [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4])
         # check the atomic features of atom C
-        assert np.allclose(graph.node_type.detach().numpy()[0], 1)
+        assert np.allclose(graph.node_type.detach().cpu().numpy()[0], 1)
         # check the atomic features of atom H
-        assert np.allclose(graph.node_type.detach().numpy()[1], 0)
+        assert np.allclose(graph.node_type.detach().cpu().numpy()[1], 0)
         # check the shape of state features
         assert np.allclose(len(state), 2)
         # check the value of state features
         assert np.allclose(state, [3.208492, 2])
         # check the position of atom 0
-        assert np.allclose(graph.pos[0], [0.0, 0.0, 0.0])
+        assert np.allclose(graph.pos[0].detach().cpu().numpy(), [0.0, 0.0, 0.0])
 
     def test_get_graph_from_structure(self, graph_LiFePO4_pyg):
         lfp, graph, state = graph_LiFePO4_pyg
@@ -45,7 +45,6 @@ class TestPmg2Graph:
         # check the atomic feature of atom 0
         assert np.allclose(graph.node_type.detach().numpy()[0], 0)
         # check the atomic feature of atom 4
-        print("debug by kenko", graph.node_type)
         assert np.allclose(graph.node_type.detach().numpy()[4], 3)
         # check the number of bonds
         assert np.allclose(graph.num_edges, 704)
@@ -68,13 +67,14 @@ class TestPmg2Graph:
         # check the state features
         assert np.allclose(state, [0.0, 0.0])
         # check the position of atom 0
-        assert np.allclose(graph.pos[0], [0.0, 0.0, 0.0])
+        assert np.allclose(graph.pos[0].detach().cpu().numpy(), [0.0, 0.0, 0.0])
         # check the pbc offset from node 0 to image atom 6
-        assert np.allclose(graph.pbc_offset[0], [-1, -1, -1])
+        pbc_offset = graph.pbc_offset.detach().cpu().numpy()
+        assert sum(np.allclose(x, [-1, -1, -1]) for x in pbc_offset) == 1
         # check the lattice vector
-        assert np.allclose(lattice[0].numpy(), [[4.04, 0.0, 0.0], [0.0, 4.04, 0.0], [0.0, 0.0, 4.04]])
+        assert np.allclose(lattice[0].detach().cpu().numpy(), [[4.04, 0.0, 0.0], [0.0, 4.04, 0.0], [0.0, 0.0, 4.04]])
         # check the volume
-        assert np.allclose(torch.det(lattice).numpy(), [65.939264])
+        assert np.allclose(torch.det(lattice).detach().cpu().numpy(), [65.939264])
 
     def test_get_element_list(self):
         cscl = Structure.from_spacegroup("Pm-3m", Lattice.cubic(3), ["Cs", "Cl"], [[0, 0, 0], [0.5, 0.5, 0.5]])

@@ -88,7 +88,7 @@ class Potential(nn.Module, IOMixIn):
         self,
         g: Data,
         lat: torch.Tensor,
-        state_attr: torch.Tensor | None = None,
+        state_attr: torch.Tensor | np.ndarray | None = None,
         l_g: Data | None = None,
     ) -> tuple[torch.Tensor, ...]:
         """Args:
@@ -100,6 +100,14 @@ class Potential(nn.Module, IOMixIn):
         Returns:
             (energies, forces, stresses, hessian) or (energies, forces, stresses, hessian, site-wise properties)
         """
+        device = next(self.parameters()).device
+        g = g.to(device)
+        lat = lat.to(device)
+        if isinstance(state_attr, torch.Tensor):
+            state_attr = state_attr.to(device)
+        if l_g is not None:
+            l_g = l_g.to(device)
+
         batch_size = g.num_graphs if hasattr(g, "num_graphs") else 1
         # st (strain) for stress calculations
         st = lat.new_zeros([batch_size, 3, 3])

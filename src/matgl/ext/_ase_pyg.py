@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Literal
 import ase.optimize as opt
 import numpy as np
 import pandas as pd
-import scipy.sparse as sp
 import torch
 from ase import Atoms, units
 from ase.calculators.calculator import Calculator, all_changes
@@ -34,13 +33,12 @@ from ase.stress import full_3x3_to_voigt_6_stress
 from pymatgen.core.structure import Molecule, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 
-from matgl.graph._converters_pyg import GraphConverter
 from matgl.ext._alchmtk import neighbor_list_from_ase
+from matgl.graph._converters_pyg import GraphConverter
 
 if TYPE_CHECKING:
     from typing import Any
 
-    import torch
     from ase.optimize.optimize import Optimizer
     from torch_geometric.data import Data
 
@@ -93,7 +91,7 @@ class Atoms2Graph(GraphConverter):
         src_id, dst_id, _, images, positions = neighbor_list_from_ase(
             atoms=atoms,
             cutoff=self.cutoff,
-            calculate_distances=False,
+            compute_distances=False,
         )
         if atoms.get_pbc().any():
             lattice_matrix = torch.as_tensor(atoms.cell.array, dtype=torch.float32, device=src_id.device)
