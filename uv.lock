@@ -2099,7 +2099,7 @@ wheels = [
 
 [[package]]
 name = "matgl"
-version = "2.0.4"
+version = "2.0.6"
 source = { editable = "." }
 dependencies = [
     { name = "ase" },
@@ -2147,11 +2147,11 @@ requires-dist = [
     { name = "dgl", marker = "sys_platform == 'darwin' and extra == 'dgl'", specifier = "==2.2.0" },
     { name = "dgl", marker = "sys_platform == 'linux' and extra == 'dgl'", specifier = "<=2.4.0" },
     { name = "dgl", marker = "sys_platform == 'win32' and extra == 'dgl'", specifier = "<=2.1.0" },
-    { name = "lightning", specifier = "<=2.6.0.dev20251123" },
+    { name = "lightning", specifier = "<=2.6.0" },
     { name = "numpy", specifier = "<3.0" },
     { name = "pydantic" },
     { name = "pymatgen" },
-    { name = "torch", specifier = "<=2.7.0" },
+    { name = "torch", specifier = "<=2.8.0" },
     { name = "torch-geometric" },
     { name = "torchdata" },
 ]

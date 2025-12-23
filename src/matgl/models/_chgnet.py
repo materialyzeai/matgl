@@ -26,15 +26,10 @@ from matgl.graph._compute_dgl import (
     create_line_graph,
     ensure_line_graph_compatibility,
 )
-from matgl.layers import (
-    ActivationFunction,
-    CHGNetAtomGraphBlock,
-    CHGNetBondGraphBlock,
-    FourierExpansion,
-    GatedMLPNorm,
-    MLPNorm,
-    RadialBesselFunction,
-)
+from matgl.layers._activations import ActivationFunction
+from matgl.layers._basis import FourierExpansion, RadialBesselFunction
+from matgl.layers._core_dgl import GatedMLPNorm, MLPNorm
+from matgl.layers._graph_convolution_dgl import CHGNetAtomGraphBlock, CHGNetBondGraphBlock
 from matgl.utils.cutoff import polynomial_cutoff
 
 from ._core import MatGLModel

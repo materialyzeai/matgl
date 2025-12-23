@@ -17,6 +17,11 @@ def test_form_e(LiFePO4):
         assert model.predict_structure(LiFePO4) == pytest.approx(-2.5489, 3)
 
 
+@pytest.mark.skipif(matgl.config.BACKEND != "DGL", reason="Only works with DGL.")
+def test_chgnet_loading():
+    matgl.load_model("CHGNet-MatPES-PBE-2025.2.10-2.7M-PES")
+
+
 @pytest.mark.skipif(os.getenv("CI") == "true" or matgl.config.BACKEND != "DGL", reason="Unreliable in CI environments.")
 def test_loading_all_models():
     """

@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
-from torch_geometric.nn import MessagePassing
 
 from matgl.utils.cutoff import cosine_cutoff
 from matgl.utils.maths import (
@@ -18,7 +17,7 @@ if TYPE_CHECKING:
     from torch_geometric.data import Data
 
 
-class TensorNetInteraction(MessagePassing):
+class TensorNetInteraction(nn.Module):
     """A Graph Convolution block for TensorNet adapted for PyTorch Geometric."""
 
     def __init__(
@@ -39,7 +38,7 @@ class TensorNetInteraction(MessagePassing):
             equivariance_invariance_group: Group action on geometric tensor representations, either O(3) or SO(3).
             dtype: Data type for all variables.
         """
-        super().__init__(aggr="add")  # Aggregate messages by summation
+        super().__init__()
         self.num_rbf = num_rbf
         self.units = units
         self.cutoff = cutoff

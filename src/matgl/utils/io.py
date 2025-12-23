@@ -12,6 +12,7 @@ from pathlib import Path
 import requests
 import torch
 
+import matgl
 from matgl.config import MATGL_CACHE, PRETRAINED_MODELS_BASE_URL
 
 logger = logging.getLogger(__file__)
@@ -143,6 +144,16 @@ class IOMixIn:
             if isinstance(v, dict) and "@class" in v and "@module" in v:
                 modname = v["@module"]
                 classname = v["@class"]
+                cls_lower = classname.lower()
+
+                if (
+                    "m3gnet" in cls_lower or "megnet" in cls_lower or "chgnet" in cls_lower or "qet" in cls_lower
+                ) and matgl.config.BACKEND == "PYG":
+                    warnings.warn(
+                        f"Model {classname} is a DGL model, but the backend is PYG. Setting the backend to DGL.",
+                        stacklevel=2,
+                    )
+                    matgl.set_backend("DGL")
                 mod = __import__(modname, globals(), locals(), [classname], 0)
                 cls_ = getattr(mod, classname)
                 _check_ver(cls_, v)  # Check version of any subclasses too.
@@ -233,8 +244,9 @@ def load_model(path: str | Path, **kwargs):
             return cls_.load(fpaths, **kwargs)
     except (ImportError, ValueError) as ex:
         raise ValueError(
-            "Bad serialized model or bad model name. It is possible that you have an older model cached. Please "
-            'clear your cache by running `python -c "import matgl; matgl.clear_cache()"`'
+            "Bad serialized model or bad model name. There are several possible causes. If you are using a DGL model, "
+            "you need to set the backend to DGL using `matgl.set_backend('DGL')`. If you have an outdated cached model,"
+            " please 'clear your cache by running `python -c 'import matgl; matgl.clear_cache()'`"
         ) from ex
     except BaseException as ex:
         import traceback

@@ -6,6 +6,12 @@ nav_order: 3
 
 # Change Log
 
+## 2.0.6
+- Bug fix for CHGnet loading.
+
+## 2.0.5
+- Improved error messages for backend/model mismatch. Try to transparently handle simple situations.
+
 ## 2.0.4
 - Bug fix for matgl.graph.data and matgl.graph.converter imports for different backends.
 

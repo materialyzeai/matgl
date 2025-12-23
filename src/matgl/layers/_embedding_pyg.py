@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 import torch
 from torch import nn
-from torch_geometric.nn import MessagePassing
 
 import matgl
 from matgl.utils.cutoff import cosine_cutoff
@@ -22,7 +21,7 @@ if TYPE_CHECKING:
     from torch_geometric.data import Data
 
 
-class TensorEmbedding(MessagePassing):
+class TensorEmbedding(nn.Module):
     """Embedding block for TensorNet to generate node, edge, and optional state features using PyG.
     Adapted from the DGL implementation in https://github.com/torchmd/torchmd-net.
     """
@@ -45,7 +44,7 @@ class TensorEmbedding(MessagePassing):
             cutoff (float): Cutoff radius for graph construction.
             dtype (torch.dtype): Data type for all variables.
         """
-        super().__init__(aggr="add")  # Use 'add' aggregation for summing messages
+        super().__init__()
         self.units = units
         self.cutoff = cutoff
 
