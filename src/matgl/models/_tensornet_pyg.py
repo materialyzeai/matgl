@@ -208,12 +208,19 @@ class TensorNet(MatGLModel):
             layer.reset_parameters()
         self.out_norm.reset_parameters()
 
-    def forward(self, g: Data, state_attr: torch.Tensor | None = None, **kwargs):
+    def forward(
+        self,
+        g: Data,
+        state_attr: torch.Tensor | None = None,
+        return_all_layer_output: bool = False,
+        **kwargs,
+    ):
         """
 
         Args:
             g : PyG Graph for a batch of graphs.
             state_attr: State attrs for a batch of graphs.
+            return_all_layer_output: Whether to return outputs of all layers.
             **kwargs: For future flexibility. Not used at the moment.
 
         Returns:
@@ -228,9 +235,17 @@ class TensorNet(MatGLModel):
         g.edge_attr = self.bond_expansion(g.bond_dist)
         # Embedding layer
         X, _ = self.tensor_embedding(g.node_type, g.edge_index, g.edge_attr, g.bond_dist, g.bond_vec, state_attr)
+
+        fea_dict = {
+            "edge_attr": g.edge_attr,
+            "embedding": X,
+        }
+
         # Interaction layers
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
             X = layer(g.edge_index, g.bond_dist, g.edge_attr, X)
+            fea_dict[f"gc_{i + 1}"] = X
+
         scalars, skew_metrices, traceless_tensors = decompose_tensor(X)
 
         x = torch.cat((tensor_norm(scalars), tensor_norm(skew_metrices), tensor_norm(traceless_tensors)), dim=-1)
@@ -238,6 +253,7 @@ class TensorNet(MatGLModel):
         x = self.linear(x)
 
         g.node_feat = x
+        fea_dict["readout"] = x
 
         if self.is_intensive:
             node_vec = self.readout(g)
@@ -245,24 +261,33 @@ class TensorNet(MatGLModel):
             output = self.final_layer(vec)
             if self.task_type == "classification":
                 output = self.sigmoid(output)
-            return torch.squeeze(output)
-        atomic_energies = self.final_layer(g.node_feat)
-        if isinstance(g, Batch) and hasattr(g, "batch") and g.batch is not None:
-            # edge case, if we do squeeze() directly, we will get torch.size([]) and it will crash in the training.
-            if atomic_energies.shape == (1, 1):
-                atomic_energies = atomic_energies.squeeze(-1)
+            output = torch.squeeze(output)
+        else:
+            atomic_energies = self.final_layer(g.node_feat)
+            if isinstance(g, Batch) and hasattr(g, "batch") and g.batch is not None:
+                # edge case, if we do squeeze() directly, we will get torch.size([]) and it will crash in the training.
+                if atomic_energies.shape == (1, 1):
+                    atomic_energies = atomic_energies.squeeze(-1)
+                else:
+                    atomic_energies = atomic_energies.squeeze()
+                # Batch case: Use scatter_add with batch tensor
+                output = scatter_add(atomic_energies, g.batch, dim_size=g.num_graphs)
             else:
-                atomic_energies = atomic_energies.squeeze()
-            # Batch case: Use scatter_add with batch tensor
-            return scatter_add(atomic_energies, g.batch, dim_size=g.num_graphs)
-        # Single graph case: Sum all energies (equivalent to scatter_add with all nodes in one graph)
-        return torch.sum(atomic_energies, dim=0, keepdim=True).squeeze()
+                # Single graph case: Sum all energies (equivalent to scatter_add with all nodes in one graph)
+                output = torch.sum(atomic_energies, dim=0, keepdim=True).squeeze()
+
+        fea_dict["final"] = output
+        if return_all_layer_output:
+            return fea_dict
+        return output
 
     def predict_structure(
         self,
         structure,
         state_feats: torch.Tensor | None = None,
         graph_converter: GraphConverter | None = None,
+        output_layers: list | None = None,
+        return_features: bool = False,
     ):
         """Convenience method to directly predict property from structure.
 
@@ -270,10 +295,26 @@ class TensorNet(MatGLModel):
             structure: An input crystal/molecule.
             state_feats (torch.tensor): Graph attributes
             graph_converter: Object that implements a get_graph_from_structure.
+            output_layers: List of names for the layer of GNN as output.
+            return_features (bool): If True, return specified layer outputs. If False, only return final output.
 
         Returns:
             output (torch.tensor): output property
         """
+        allowed_output_layers = [
+            "edge_attr",
+            "embedding",
+            "readout",
+            "final",
+        ] + [f"gc_{i + 1}" for i in range(self.num_layers)]
+
+        if not return_features:
+            output_layers = ["final"]
+        elif output_layers is None:
+            output_layers = allowed_output_layers
+        elif not isinstance(output_layers, list) or set(output_layers).difference(allowed_output_layers):
+            raise ValueError(f"Invalid output_layers, it must be a sublist of {allowed_output_layers}.")
+
         if graph_converter is None:
             from matgl.ext._pymatgen_pyg import Structure2Graph
 
@@ -283,4 +324,13 @@ class TensorNet(MatGLModel):
         g.pos = g.frac_coords @ lat[0]
         if state_feats is None:
             state_feats = torch.tensor(state_feats_default)
+
+        if return_features:
+            model_output = self(g=g, state_attr=state_feats, return_all_layer_output=True)
+            return {
+                k: v.detach() if isinstance(v, torch.Tensor) else v
+                for k, v in model_output.items()
+                if k in output_layers
+            }
+
         return self(g=g, state_attr=state_feats).detach()

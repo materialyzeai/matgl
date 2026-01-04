@@ -38,7 +38,7 @@ class GaussianExpansion(nn.Module):
         if width is None:
             self.width = 1.0 / torch.diff(self.centers).mean()
         else:
-            self.width = width
+            self.width = torch.as_tensor(width)
 
     def reset_parameters(self):
         """Reinitialize model parameters."""

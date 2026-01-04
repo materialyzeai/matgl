@@ -321,6 +321,7 @@ class CHGNet(MatGLModel):
         state_attr: torch.Tensor | None = None,
         l_g: dgl.DGLGraph | None = None,
         error_handling: bool = True,
+        return_all_layer_output: bool = False,
     ):
         """Forward pass of the model.
 
@@ -330,6 +331,7 @@ class CHGNet(MatGLModel):
             l_g (dgl.DGLGraph, optional): Line graph. Defaults to None and is computed internally.
             error_handling (bool, optional): Whether to allow numerical tolerance when an error occurs in
                 l_g construction. Defaults to True.
+            return_all_layer_output (bool, optional): Whether to return all layer outputs. Defaults to False.
 
         Returns:
             torch.Tensor: Model output.
@@ -350,6 +352,15 @@ class CHGNet(MatGLModel):
         else:
             state_attr = None
 
+        fea_dict = {
+            "bond_expansion": bond_expansion,
+            "embedding": {
+                "atom_feat": atom_features,
+                "bond_feat": bond_features,
+                "state_feat": state_attr,
+            },
+        }
+
         # create bond graph (line graph) with necessary node and edge data
         if self.use_bond_graph:
             if l_g is None:
@@ -369,6 +380,8 @@ class CHGNet(MatGLModel):
             bond_graph.apply_edges(compute_theta)
             bond_graph.edata["angle_expansion"] = self.angle_expansion(bond_graph.edata["theta"])  # type: ignore[misc]
             angle_features = self.angle_embedding(bond_graph.edata["angle_expansion"])  # type: ignore[misc]
+            fea_dict["angle_expansion"] = bond_graph.edata["angle_expansion"]
+            fea_dict["embedding"]["angle_feat"] = angle_features
         else:
             bond_graph = None
             angle_features = None
@@ -395,14 +408,27 @@ class CHGNet(MatGLModel):
                 bond_features, angle_features = self.bond_graph_layers[i](  # type: ignore
                     bond_graph, atom_features, bond_features, angle_features, threebody_bond_weights
                 )
+            fea_dict[f"gc_{i + 1}"] = {
+                "atom_feat": atom_features,
+                "bond_feat": bond_features,
+                "angle_feat": angle_features,
+                "state_feat": state_attr,
+            }
 
         # site wise target readout
         g.ndata["magmom"] = self.sitewise_readout(atom_features)
+        fea_dict["magmom"] = g.ndata["magmom"]
 
         # last atom graph message passing layer
         atom_features, bond_features, state_attr = self.atom_graph_layers[-1](
             g, atom_features, bond_features, state_attr, atom_bond_weights, bond_bond_weights
         )
+        fea_dict[f"gc_{self.n_blocks}"] = {
+            "atom_feat": atom_features,
+            "bond_feat": bond_features,
+            "angle_feat": angle_features,
+            "state_feat": state_attr,
+        }
 
         # readout
         if self.readout_field == "atom_feat":
@@ -416,6 +442,14 @@ class CHGNet(MatGLModel):
             structure_properties = readout_edges(bond_graph, "angle_feat", op=self.readout_operation)
 
         structure_properties = torch.squeeze(structure_properties)
+        fea_dict["readout"] = {
+            "atom_feat": g.ndata.get("atom_feat"),
+            "bond_feat": g.edata.get("bond_feat"),
+            "angle_feat": bond_graph.edata.get("angle_feat") if bond_graph is not None else None,
+        }
+        fea_dict["final"] = structure_properties
+        if return_all_layer_output:
+            return fea_dict
         return structure_properties
 
     def predict_structure(
@@ -424,19 +458,39 @@ class CHGNet(MatGLModel):
         state_feats: torch.Tensor | None = None,
         graph_converter: GraphConverter | None = None,
         error_handling: bool = True,
+        output_layers: list | None = None,
+        return_features: bool = False,
     ):
         """Convenience method to directly predict property from structure.
 
         Args:
             structure: An input crystal/molecule.
-            state_feats (torch.tensor): Graph attributes
+            state_feats (torch.Tensor): Graph attributes
             graph_converter: Object that implements a get_graph_from_structure.
             error_handling (bool, optional): Whether to allow numerical tolerance when an error occurs in
                 l_g construction. Defaults to True.
+            output_layers (list, optional): List of layer names to return. Defaults to None.
+            return_features (bool, optional): Whether to return features. Defaults to False.
 
         Returns:
             output (torch.tensor): output property
         """
+        allowed_output_layers = [
+            "bond_expansion",
+            "angle_expansion",
+            "embedding",
+            "magmom",
+            "readout",
+            "final",
+        ] + [f"gc_{i + 1}" for i in range(self.n_blocks)]
+
+        if not return_features:
+            output_layers = ["final"]
+        elif output_layers is None:
+            output_layers = allowed_output_layers
+        elif not isinstance(output_layers, list) or set(output_layers).difference(allowed_output_layers):
+            raise ValueError(f"Invalid output_layers, it must be a sublist of {allowed_output_layers}.")
+
         if graph_converter is None:
             from matgl.ext._pymatgen_dgl import Structure2Graph
 
@@ -447,4 +501,11 @@ class CHGNet(MatGLModel):
         graph.ndata["pos"] = graph.ndata["frac_coords"] @ lattice[0]
         if state_feats is None:
             state_feats = torch.tensor(state_feats_default)
+
+        if return_features:
+            model_output = self(
+                g=graph, state_attr=state_feats, error_handling=error_handling, return_all_layer_output=True
+            )
+            return {k: v for k, v in model_output.items() if k in output_layers}
+
         return self(g=graph, state_attr=state_feats, error_handling=error_handling)

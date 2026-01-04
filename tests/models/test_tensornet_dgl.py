@@ -84,3 +84,37 @@ class TestTensorNet:
         )
         output = model(g=graph)
         assert torch.numel(output) == 1
+
+    def test_return_features(self, graph_MoS):
+        structure, graph, _ = graph_MoS
+        lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th)
+        graph.edata["pbc_offshift"] = torch.matmul(graph.edata["pbc_offset"], lat[0])
+        graph.ndata["pos"] = graph.ndata["frac_coords"] @ lat[0]
+        
+        model = TensorNet(element_types=["Mo", "S"], is_intensive=True)
+        
+        # Test default return (just final property)
+        out = model.predict_structure(structure, return_features=False)
+        assert isinstance(out, torch.Tensor)
+        
+        # Test return features
+        out_feats = model.predict_structure(structure, return_features=True)
+        assert isinstance(out_feats, dict)
+        assert "final" in out_feats
+        assert "readout" in out_feats
+        assert "edge_attr" in out_feats
+        assert "embedding" in out_feats
+        assert "gc_1" in out_feats
+        
+        # Check shapes
+        assert out_feats["final"].shape == torch.Size([])  # Scalar output
+        assert out_feats["readout"].shape[0] == structure.num_sites
+        
+        # Test specific output layers
+        out_feats_subset = model.predict_structure(
+            structure, 
+            return_features=True, 
+            output_layers=["final", "gc_1"]
+        )
+        assert set(out_feats_subset.keys()) == {"final", "gc_1"}
+

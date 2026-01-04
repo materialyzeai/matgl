@@ -134,3 +134,36 @@ class TestCHGNet:
         calculator2 = PESCalculator(potential2)
         forces2 = calculator2.get_forces(AseAtomsAdaptor.get_atoms(structure))
         assert np.allclose(forces1, forces2, rtol=1e-3, atol=1e-6)
+
+    def test_return_features(self, graph_MoS):
+        structure, graph, _ = graph_MoS
+        lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th)
+        graph.edata["pbc_offshift"] = torch.matmul(graph.edata["pbc_offset"], lat[0])
+        graph.ndata["pos"] = graph.ndata["frac_coords"] @ lat[0]
+
+        model = CHGNet(element_types=("Mo", "S"))
+
+        # Test default return (just final property)
+        out = model.predict_structure(structure, return_features=False)
+        assert isinstance(out, torch.Tensor)
+
+        # Test return features
+        out_feats = model.predict_structure(structure, return_features=True)
+        assert isinstance(out_feats, dict)
+        assert "final" in out_feats
+        assert "readout" in out_feats
+        assert "bond_expansion" in out_feats
+        assert "embedding" in out_feats
+        assert "gc_1" in out_feats
+
+        # Check shapes
+        assert out_feats["final"].shape == torch.Size([])  # Scalar output
+        assert out_feats["readout"]["atom_feat"].shape[0] == structure.num_sites
+
+        # Test specific output layers
+        out_feats_subset = model.predict_structure(
+            structure,
+            return_features=True,
+            output_layers=["final", "gc_1"]
+        )
+        assert set(out_feats_subset.keys()) == {"final", "gc_1"}
