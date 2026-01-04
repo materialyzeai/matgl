@@ -161,9 +161,5 @@ class TestCHGNet:
         assert out_feats["readout"]["atom_feat"].shape[0] == structure.num_sites
 
         # Test specific output layers
-        out_feats_subset = model.predict_structure(
-            structure,
-            return_features=True,
-            output_layers=["final", "gc_1"]
-        )
+        out_feats_subset = model.predict_structure(structure, return_features=True, output_layers=["final", "gc_1"])
         assert set(out_feats_subset.keys()) == {"final", "gc_1"}
