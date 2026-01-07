@@ -37,7 +37,7 @@ from matgl.kernels import get_module, get_stream
 
 
 @torch.library.custom_op(
-    "nvtensornet::message_passing_fwd_primitive",
+    "tensornet::message_passing_fwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -96,7 +96,7 @@ def _(
     return [output_x, output_y, output_z]
 
 
-@torch.library.register_fake("nvtensornet::message_passing_fwd_primitive")
+@torch.library.register_fake("tensornet::message_passing_fwd_primitive")
 def _(
     x: Tensor,
     y: Tensor,
@@ -113,7 +113,7 @@ def _(
 
 
 @torch.library.custom_op(
-    "nvtensornet::message_passing_bwd_primitive",
+    "tensornet::message_passing_bwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -187,7 +187,7 @@ def _(
     return [grad_x, grad_y, grad_z, grad_edge_attr]
 
 
-@torch.library.register_fake("nvtensornet::message_passing_bwd_primitive")
+@torch.library.register_fake("tensornet::message_passing_bwd_primitive")
 def _(
     grad_output_x: Tensor,
     grad_output_y: Tensor,
@@ -212,7 +212,7 @@ def _(
 
 
 @torch.library.custom_op(
-    "nvtensornet::message_passing_bwd_bwd_primitive",
+    "tensornet::message_passing_bwd_bwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -237,9 +237,12 @@ def _(
 ) -> List[Tensor]:
     stream = get_stream(x.device)
     device = wp.device_from_torch(x.device)
+
+    # Convert inputs to warp arrays
     x_wp = wp.from_torch(x.detach(), return_ctype=True)
     y_wp = wp.from_torch(y.detach(), return_ctype=True)
     z_wp = wp.from_torch(z.detach(), return_ctype=True)
+    edge_attr_wp = wp.from_torch(edge_attr.detach(), return_ctype=True)
 
     grad_grad_x_wp = wp.from_torch(grad_grad_x.detach(), return_ctype=True)
     grad_grad_y_wp = wp.from_torch(grad_grad_y.detach(), return_ctype=True)
@@ -247,31 +250,10 @@ def _(
     grad_grad_edge_attr_wp = wp.from_torch(
         grad_grad_edge_attr.detach(), return_ctype=True
     )
+
     grad_output_x_wp = wp.from_torch(grad_output_x.detach(), return_ctype=True)
     grad_output_y_wp = wp.from_torch(grad_output_y.detach(), return_ctype=True)
     grad_output_z_wp = wp.from_torch(grad_output_z.detach(), return_ctype=True)
-
-    dgrad_output_x = torch.empty_like(grad_output_x)
-    dgrad_output_y = torch.empty_like(grad_output_y)
-    dgrad_output_z = torch.empty_like(grad_output_z)
-
-    dgrad_x = torch.empty_like(x)
-    dgrad_y = torch.empty_like(y)
-    dgrad_z = torch.empty_like(z)
-
-    dgrad_edge_attr = torch.empty_like(edge_attr)
-
-    edge_attr_wp = wp.from_torch(edge_attr.detach(), return_ctype=True)
-
-    dgrad_x_wp = wp.from_torch(dgrad_x.detach(), return_ctype=True)
-    dgrad_y_wp = wp.from_torch(dgrad_y.detach(), return_ctype=True)
-    dgrad_z_wp = wp.from_torch(dgrad_z.detach(), return_ctype=True)
-
-    dgrad_edge_attr_wp = wp.from_torch(dgrad_edge_attr.detach(), return_ctype=True)
-
-    dgrad_output_x_wp = wp.from_torch(dgrad_output_x.detach(), return_ctype=True)
-    dgrad_output_y_wp = wp.from_torch(dgrad_output_y.detach(), return_ctype=True)
-    dgrad_output_z_wp = wp.from_torch(dgrad_output_z.detach(), return_ctype=True)
 
     col_data_wp = wp.from_torch(col_data.detach(), return_ctype=True)
     col_indices_wp = wp.from_torch(col_indices.detach(), return_ctype=True)
@@ -281,10 +263,59 @@ def _(
     row_indices_wp = wp.from_torch(row_indices.detach(), return_ctype=True)
     row_indptr_wp = wp.from_torch(row_indptr.detach(), return_ctype=True)
 
-    message_passing_bwd_bwd = get_module("message_passing_bwd_bwd", [str(x.dtype)])
+    # Allocate output tensors (no zero-init needed with two-kernel approach)
+    dgrad_x = torch.empty_like(x)
+    dgrad_y = torch.empty_like(y)
+    dgrad_z = torch.empty_like(z)
+    dgrad_edge_attr = torch.empty_like(edge_attr)
+    dgrad_output_x = torch.empty_like(grad_output_x)
+    dgrad_output_y = torch.empty_like(grad_output_y)
+    dgrad_output_z = torch.empty_like(grad_output_z)
 
+    dgrad_x_wp = wp.from_torch(dgrad_x.detach(), return_ctype=True)
+    dgrad_y_wp = wp.from_torch(dgrad_y.detach(), return_ctype=True)
+    dgrad_z_wp = wp.from_torch(dgrad_z.detach(), return_ctype=True)
+    dgrad_edge_attr_wp = wp.from_torch(dgrad_edge_attr.detach(), return_ctype=True)
+    dgrad_output_x_wp = wp.from_torch(dgrad_output_x.detach(), return_ctype=True)
+    dgrad_output_y_wp = wp.from_torch(dgrad_output_y.detach(), return_ctype=True)
+    dgrad_output_z_wp = wp.from_torch(dgrad_output_z.detach(), return_ctype=True)
+
+    # Kernel 1: col-based - computes d2I, d2A, d2S, d2edge_attr
+    message_passing_edge_bwd_bwd = get_module(
+        "message_passing_edge_bwd_bwd", [str(x.dtype)]
+    )
     wp.launch(
-        message_passing_bwd_bwd,
+        message_passing_edge_bwd_bwd,
+        dim=(x.shape[0], x.shape[-1]),
+        stream=stream,
+        device=device,
+        inputs=(
+            x_wp,
+            y_wp,
+            z_wp,
+            grad_grad_x_wp,
+            grad_grad_y_wp,
+            grad_grad_z_wp,
+            grad_grad_edge_attr_wp,
+            grad_output_x_wp,
+            grad_output_y_wp,
+            grad_output_z_wp,
+            col_data_wp,
+            col_indices_wp,
+            col_indptr_wp,
+            dgrad_x_wp,
+            dgrad_y_wp,
+            dgrad_z_wp,
+            dgrad_edge_attr_wp,
+        ),
+    )
+
+    # Kernel 2: row-based - computes d2output_I, d2output_A, d2output_S
+    message_passing_output_bwd_bwd = get_module(
+        "message_passing_output_bwd_bwd", [str(x.dtype)]
+    )
+    wp.launch(
+        message_passing_output_bwd_bwd,
         dim=(x.shape[0], x.shape[-1]),
         stream=stream,
         device=device,
@@ -297,24 +328,15 @@ def _(
             grad_grad_y_wp,
             grad_grad_z_wp,
             grad_grad_edge_attr_wp,
-            grad_output_x_wp,
-            grad_output_y_wp,
-            grad_output_z_wp,
             row_data_wp,
             row_indices_wp,
             row_indptr_wp,
-            col_data_wp,
-            col_indices_wp,
-            col_indptr_wp,
-            dgrad_x_wp,
-            dgrad_y_wp,
-            dgrad_z_wp,
-            dgrad_edge_attr_wp,
             dgrad_output_x_wp,
             dgrad_output_y_wp,
             dgrad_output_z_wp,
         ),
     )
+
     return [
         dgrad_output_x,
         dgrad_output_y,
@@ -326,7 +348,7 @@ def _(
     ]
 
 
-@torch.library.register_fake("nvtensornet::message_passing_bwd_bwd_primitive")
+@torch.library.register_fake("tensornet::message_passing_bwd_bwd_primitive")
 def _(
     grad_output_x: Tensor,
     grad_output_y: Tensor,
@@ -419,7 +441,7 @@ def message_passing_setup_bwd_context(ctx, inputs, output):
 
 @torch.compiler.allow_in_graph
 def message_passing_fwd(*args):
-    return torch.ops.nvtensornet.message_passing_fwd_primitive(*args)
+    return torch.ops.tensornet.message_passing_fwd_primitive(*args)
 
 
 @torch.compiler.allow_in_graph
@@ -437,7 +459,7 @@ def message_passing_bwd(ctx, grad_outputs):
         col_indptr,
     ) = ctx.saved_tensors
 
-    result = torch.ops.nvtensornet.message_passing_bwd_primitive(
+    result = torch.ops.tensornet.message_passing_bwd_primitive(
         grad_outputs[0],
         grad_outputs[1],
         grad_outputs[2],
@@ -478,7 +500,7 @@ def message_passing_bwd_bwd(ctx, *grad_outputs):
         col_indptr,
     ) = ctx.saved_tensors
 
-    result = torch.ops.nvtensornet.message_passing_bwd_bwd_primitive(
+    result = torch.ops.tensornet.message_passing_bwd_bwd_primitive(
         grad_output_x,
         grad_output_y,
         grad_output_z,
@@ -516,13 +538,13 @@ def message_passing_bwd_bwd(ctx, *grad_outputs):
 
 
 torch.library.register_autograd(
-    "nvtensornet::message_passing_fwd_primitive",
+    "tensornet::message_passing_fwd_primitive",
     message_passing_bwd,
     setup_context=message_passing_setup_fwd_context,
 )
 
 torch.library.register_autograd(
-    "nvtensornet::message_passing_bwd_primitive",
+    "tensornet::message_passing_bwd_primitive",
     message_passing_bwd_bwd,
     setup_context=message_passing_setup_bwd_context,
 )
@@ -540,7 +562,7 @@ def fn_message_passing(
     col_indices: Tensor,
     col_indptr: Tensor,
 ) -> List[Tensor]:
-    return torch.ops.nvtensornet.message_passing_fwd_primitive(
+    return torch.ops.tensornet.message_passing_fwd_primitive(
         x,
         y,
         z,

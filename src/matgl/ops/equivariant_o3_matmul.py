@@ -36,7 +36,7 @@ from matgl.kernels import get_module, get_stream
 
 
 @torch.library.custom_op(
-    "nvtensornet::tensor_matmul_o3_3x3_fwd_primitive",
+    "tensornet::tensor_matmul_o3_3x3_fwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -66,13 +66,13 @@ def _(x: Tensor, y: Tensor) -> Tensor:
     return output
 
 
-@torch.library.register_fake("nvtensornet::tensor_matmul_o3_3x3_fwd_primitive")
+@torch.library.register_fake("tensornet::tensor_matmul_o3_3x3_fwd_primitive")
 def _(x: Tensor, y: Tensor) -> Tensor:
     return torch.empty_like(x)
 
 
 @torch.library.custom_op(
-    "nvtensornet::tensor_matmul_o3_3x3_bwd_primitive",
+    "tensornet::tensor_matmul_o3_3x3_bwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -104,13 +104,13 @@ def _(grad_output: Tensor, x: Tensor, y: Tensor) -> List[Tensor]:
     return [grad_x, grad_y]
 
 
-@torch.library.register_fake("nvtensornet::tensor_matmul_o3_3x3_bwd_primitive")
+@torch.library.register_fake("tensornet::tensor_matmul_o3_3x3_bwd_primitive")
 def _(grad_output: List[Tensor], x: Tensor, y: Tensor) -> List[Tensor]:
     return [torch.empty_like(x), torch.empty_like(y)]
 
 
 @torch.library.custom_op(
-    "nvtensornet::tensor_matmul_o3_3x3_bwd_bwd_primitive",
+    "tensornet::tensor_matmul_o3_3x3_bwd_bwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -162,7 +162,7 @@ def _(
     return [grad_grad_output, grad_x, grad_y]
 
 
-@torch.library.register_fake("nvtensornet::tensor_matmul_o3_3x3_bwd_bwd_primitive")
+@torch.library.register_fake("tensornet::tensor_matmul_o3_3x3_bwd_bwd_primitive")
 def _(
     grad_output: Tensor, grad_grad_x: Tensor, grad_grad_y: Tensor, x: Tensor, y: Tensor
 ) -> List[Tensor]:
@@ -185,7 +185,7 @@ def tensor_matmul_o3_3x3_setup_bwd_context(ctx, inputs, output):
 
 @torch.compiler.allow_in_graph
 def tensor_matmul_o3_3x3_fwd(*args):
-    return getattr(torch.ops.nvtensornet, "tensor_matmul_o3_3x3_fwd_primitive")(
+    return getattr(torch.ops.tensornet, "tensor_matmul_o3_3x3_fwd_primitive")(
         *args
     )
 
@@ -193,7 +193,7 @@ def tensor_matmul_o3_3x3_fwd(*args):
 @torch.compiler.allow_in_graph
 def tensor_matmul_o3_3x3_bwd(ctx, grad_output):
     x, y = ctx.saved_tensors
-    dx, dy = getattr(torch.ops.nvtensornet, "tensor_matmul_o3_3x3_bwd_primitive")(
+    dx, dy = getattr(torch.ops.tensornet, "tensor_matmul_o3_3x3_bwd_primitive")(
         grad_output, x, y
     )
     return dx, dy
@@ -207,24 +207,24 @@ def tensor_matmul_o3_3x3_bwd_bwd(ctx, *grad_outputs):
     grad_output_saved, x, y = ctx.saved_tensors
 
     outputs = getattr(
-        torch.ops.nvtensornet, "tensor_matmul_o3_3x3_bwd_bwd_primitive"
+        torch.ops.tensornet, "tensor_matmul_o3_3x3_bwd_bwd_primitive"
     )(grad_output_saved, grad_grad_x, grad_grad_y, x, y)
     return outputs[0], outputs[1], outputs[2]
 
 
 torch.library.register_autograd(
-    "nvtensornet::tensor_matmul_o3_3x3_fwd_primitive",
+    "tensornet::tensor_matmul_o3_3x3_fwd_primitive",
     tensor_matmul_o3_3x3_bwd,
     setup_context=tensor_matmul_o3_3x3_setup_fwd_context,
 )
 
 torch.library.register_autograd(
-    "nvtensornet::tensor_matmul_o3_3x3_bwd_primitive",
+    "tensornet::tensor_matmul_o3_3x3_bwd_primitive",
     tensor_matmul_o3_3x3_bwd_bwd,
     setup_context=tensor_matmul_o3_3x3_setup_bwd_context,
 )
 
 
 def fn_tensor_matmul_o3_3x3(x: Tensor, y: Tensor) -> Tensor:
-    z = getattr(torch.ops.nvtensornet, "tensor_matmul_o3_3x3_fwd_primitive")(x, y)
+    z = getattr(torch.ops.tensornet, "tensor_matmul_o3_3x3_fwd_primitive")(x, y)
     return z

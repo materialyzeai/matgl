@@ -37,7 +37,7 @@ from matgl.kernels import get_module, get_stream
 
 
 @torch.library.custom_op(
-    "nvtensornet::compose_tensor_fwd_primitive",
+    "tensornet::compose_tensor_fwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -66,13 +66,13 @@ def _(x: Tensor, y: Tensor, z: Tensor) -> Tensor:
     return output
 
 
-@torch.library.register_fake("nvtensornet::compose_tensor_fwd_primitive")
+@torch.library.register_fake("tensornet::compose_tensor_fwd_primitive")
 def _(x: Tensor, y: Tensor, z: Tensor) -> Tensor:
     return torch.empty((z.shape[0], 3, 3, z.shape[-1]), dtype=x.dtype, device=x.device)
 
 
 @torch.library.custom_op(
-    "nvtensornet::compose_tensor_bwd_primitive",
+    "tensornet::compose_tensor_bwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -101,13 +101,13 @@ def _(grad_output: Tensor, x: Tensor, y: Tensor, z: Tensor) -> List[Tensor]:
     return [grad_x, grad_y, grad_z]
 
 
-@torch.library.register_fake("nvtensornet::compose_tensor_bwd_primitive")
+@torch.library.register_fake("tensornet::compose_tensor_bwd_primitive")
 def _(grad_output: List[Tensor], x: Tensor, y: Tensor, z: Tensor) -> List[Tensor]:
     return [torch.empty_like(x), torch.empty_like(y), torch.empty_like(z)]
 
 
 @torch.library.custom_op(
-    "nvtensornet::compose_tensor_bwd_bwd_primitive",
+    "tensornet::compose_tensor_bwd_bwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -146,7 +146,7 @@ def _(
     return [grad_grad_output, grad_x, grad_y, grad_z]
 
 
-@torch.library.register_fake("nvtensornet::compose_tensor_bwd_bwd_primitive")
+@torch.library.register_fake("tensornet::compose_tensor_bwd_bwd_primitive")
 def _(
     grad_output: Tensor,
     grad_grad_x: Tensor,
@@ -176,13 +176,13 @@ def compose_tensor_setup_bwd_context(ctx, inputs, output):
 
 @torch.compiler.allow_in_graph
 def compose_tensor_fwd(*args):
-    return torch.ops.nvtensornet.compose_tensor_fwd_primitive(*args)
+    return torch.ops.tensornet.compose_tensor_fwd_primitive(*args)
 
 
 @torch.compiler.allow_in_graph
 def compose_tensor_bwd(ctx, grad_output):
     x, y, z = ctx.saved_tensors
-    dx, dy, dz = torch.ops.nvtensornet.compose_tensor_bwd_primitive(
+    dx, dy, dz = torch.ops.tensornet.compose_tensor_bwd_primitive(
         grad_output, x, y, z
     )
     return dx, dy, dz
@@ -203,7 +203,7 @@ def compose_tensor_bwd_bwd(ctx, *grad_outputs):
     if grad_grad_z is None:
         grad_grad_z = torch.zeros_like(z)
 
-    outputs = torch.ops.nvtensornet.compose_tensor_bwd_bwd_primitive(
+    outputs = torch.ops.tensornet.compose_tensor_bwd_bwd_primitive(
         grad_output_saved, grad_grad_x, grad_grad_y, grad_grad_z, x, y, z
     )
 
@@ -211,18 +211,18 @@ def compose_tensor_bwd_bwd(ctx, *grad_outputs):
 
 
 torch.library.register_autograd(
-    "nvtensornet::compose_tensor_fwd_primitive",
+    "tensornet::compose_tensor_fwd_primitive",
     compose_tensor_bwd,
     setup_context=compose_tensor_setup_fwd_context,
 )
 
 torch.library.register_autograd(
-    "nvtensornet::compose_tensor_bwd_primitive",
+    "tensornet::compose_tensor_bwd_primitive",
     compose_tensor_bwd_bwd,
     setup_context=compose_tensor_setup_bwd_context,
 )
 
 
 def fn_compose_tensor(x: Tensor, y: Tensor, z: Tensor) -> Tensor:
-    output = torch.ops.nvtensornet.compose_tensor_fwd_primitive(x, y, z)
+    output = torch.ops.tensornet.compose_tensor_fwd_primitive(x, y, z)
     return output

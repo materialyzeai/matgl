@@ -47,6 +47,7 @@ def generate_tensor_norm3(dtype: str, h_last: bool = True, use_irmem: bool = Tru
         X: wp.array(ndim=4, dtype=dtype_wp),
         output: wp.array(ndim=2, dtype=dtype_wp),
     ):
+        """Computes I, A, S norms of 3x3 tensor: trace², antisym², sym_traceless²."""
         b, h = wp.tid()
 
         x00 = X[b, 0, 0, h]
@@ -81,6 +82,7 @@ def generate_tensor_norm3(dtype: str, h_last: bool = True, use_irmem: bool = Tru
         X: wp.array(ndim=4, dtype=dtype_wp),
         grad_X: wp.array(ndim=4, dtype=dtype_wp),
     ):
+        """Backward: grad_X = d(I,A,S norms)/dX · grad_output."""
         b, h = wp.tid()
 
         grad_i = grad_output[b, h]
@@ -134,8 +136,12 @@ def generate_tensor_norm3(dtype: str, h_last: bool = True, use_irmem: bool = Tru
 
     def tensor_norm3_bwd_bwd(
         grad_grad_X: wp.array(ndim=4, dtype=dtype_wp),
+        X: wp.array(ndim=4, dtype=dtype_wp),
+        grad_output: wp.array(ndim=2, dtype=dtype_wp),
         grad_grad_output: wp.array(ndim=2, dtype=dtype_wp),
+        grad_x: wp.array(ndim=4, dtype=dtype_wp),
     ):
+        """Computes d(grad_X)/d(grad_output) and d(grad_X)/d(X) contracted with grad_grad_X."""
         b, h = wp.tid()
 
         gg00 = grad_grad_X[b, 0, 0, h]
@@ -148,32 +154,87 @@ def generate_tensor_norm3(dtype: str, h_last: bool = True, use_irmem: bool = Tru
         gg21 = grad_grad_X[b, 2, 1, h]
         gg22 = grad_grad_X[b, 2, 2, h]
 
+        x00 = X[b, 0, 0, h]
+        x01 = X[b, 0, 1, h]
+        x02 = X[b, 0, 2, h]
+        x10 = X[b, 1, 0, h]
+        x11 = X[b, 1, 1, h]
+        x12 = X[b, 1, 2, h]
+        x20 = X[b, 2, 0, h]
+        x21 = X[b, 2, 1, h]
+        x22 = X[b, 2, 2, h]
+
+        grad_i = grad_output[b, h]
+        grad_a = grad_output[b, h + X.shape[3]]
+        grad_s = grad_output[b, h + 2 * X.shape[3]]
+
+        trace_X = x00 + x11 + x22
         trace_gg = gg00 + gg11 + gg22
-        trace_third_gg = trace_gg / grad_grad_X.dtype(3.0)
+        c2_3 = X.dtype(2.0 / 3.0)
+        c4_3 = X.dtype(4.0 / 3.0)
 
-        one_half = grad_grad_X.dtype(0.5)
-        one_third = grad_grad_X.dtype(1.0 / 3.0)
-        
-        norm2_i_gg = one_third * trace_gg * trace_gg
-        grad_grad_output[b, h] = norm2_i_gg
+        # Part 1: grad_grad_output = d(grad_X)/d(grad_output) · grad_grad_X
+        # I channel: (2/3) * trace(X) * trace(gg)
+        grad_grad_output[b, h] = c2_3 * trace_X * trace_gg
 
-        diff01 = gg01 - gg10
-        diff02 = gg02 - gg20
-        diff12 = gg12 - gg21
-        norm2_a_gg = one_half * (diff01 * diff01 + diff02 * diff02 + diff12 * diff12)
-        grad_grad_output[b, h + grad_grad_X.shape[3]] = norm2_a_gg
+        # A channel: diff_X · diff_gg
+        diff01_X = x01 - x10
+        diff02_X = x02 - x20
+        diff12_X = x12 - x21
+        diff01_gg = gg01 - gg10
+        diff02_gg = gg02 - gg20
+        diff12_gg = gg12 - gg21
+        grad_grad_output[b, h + X.shape[3]] = diff01_X * diff01_gg + diff02_X * diff02_gg + diff12_X * diff12_gg
 
-        sum01 = gg01 + gg10
-        sum02 = gg02 + gg20
-        sum12 = gg12 + gg21
-        
-        dev00 = gg00 - trace_third_gg
-        dev11 = gg11 - trace_third_gg
-        dev22 = gg22 - trace_third_gg
-        
-        norm2_s_gg = one_half * (sum01 * sum01 + sum02 * sum02 + sum12 * sum12)
-        norm2_s_gg += dev00 * dev00 + dev11 * dev11 + dev22 * dev22
-        grad_grad_output[b, h + 2 * grad_grad_X.shape[3]] = norm2_s_gg
+        # S channel: sum_X · sum_gg + dev_terms · diag_gg
+        trace_third_X = trace_X / X.dtype(3.0)
+        dev00 = x00 - trace_third_X
+        dev11 = x11 - trace_third_X
+        dev22 = x22 - trace_third_X
+        grad_s_term_00 = c4_3 * dev00 - c2_3 * dev11 - c2_3 * dev22
+        grad_s_term_11 = c4_3 * dev11 - c2_3 * dev00 - c2_3 * dev22
+        grad_s_term_22 = c4_3 * dev22 - c2_3 * dev00 - c2_3 * dev11
+        sum01_X = x01 + x10
+        sum02_X = x02 + x20
+        sum12_X = x12 + x21
+        sum01_gg = gg01 + gg10
+        sum02_gg = gg02 + gg20
+        sum12_gg = gg12 + gg21
+        grad_grad_output_s = sum01_X * sum01_gg + sum02_X * sum02_gg + sum12_X * sum12_gg
+        grad_grad_output_s += grad_s_term_00 * gg00 + grad_s_term_11 * gg11 + grad_s_term_22 * gg22
+        grad_grad_output[b, h + 2 * X.shape[3]] = grad_grad_output_s
+
+        # Part 2: grad_x = d(grad_X)/d(X) · grad_grad_X
+        # I channel: (2/3) * grad_i * trace(gg) on diagonals
+        scalar_diag = c2_3 * grad_i * trace_gg
+
+        # A channel: grad_a * diff_gg (antisymmetric)
+        antisym_01 = grad_a * diff01_gg
+        antisym_02 = grad_a * diff02_gg
+        antisym_12 = grad_a * diff12_gg
+
+        # S channel off-diag: grad_s * sum_gg
+        sym_offdiag_01 = grad_s * sum01_gg
+        sym_offdiag_02 = grad_s * sum02_gg
+        sym_offdiag_12 = grad_s * sum12_gg
+
+        # S channel diag: grad_s * (4/3 on self, -2/3 on others)
+        sym_diag_00 = grad_s * (c4_3 * gg00 - c2_3 * gg11 - c2_3 * gg22)
+        sym_diag_11 = grad_s * (c4_3 * gg11 - c2_3 * gg00 - c2_3 * gg22)
+        sym_diag_22 = grad_s * (c4_3 * gg22 - c2_3 * gg00 - c2_3 * gg11)
+
+        # Diagonals
+        grad_x[b, 0, 0, h] = scalar_diag + sym_diag_00
+        grad_x[b, 1, 1, h] = scalar_diag + sym_diag_11
+        grad_x[b, 2, 2, h] = scalar_diag + sym_diag_22
+
+        # Off-diagonals
+        grad_x[b, 0, 1, h] = antisym_01 + sym_offdiag_01
+        grad_x[b, 1, 0, h] = -antisym_01 + sym_offdiag_01
+        grad_x[b, 0, 2, h] = antisym_02 + sym_offdiag_02
+        grad_x[b, 2, 0, h] = -antisym_02 + sym_offdiag_02
+        grad_x[b, 1, 2, h] = antisym_12 + sym_offdiag_12
+        grad_x[b, 2, 1, h] = -antisym_12 + sym_offdiag_12
 
     return (
         wp.Kernel(

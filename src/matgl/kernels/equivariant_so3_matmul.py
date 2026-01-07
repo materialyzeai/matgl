@@ -158,7 +158,7 @@ def generate_tensor_matmul_so3_3x3(dtype: str):
         wp.Kernel(
             tensor_matmul_so3_3x3_bwd,
             key=f"tensor_matmul_so3_3x3_bwd_{dtype}",
-            module=wp.get_module(f"tensor_matmul_o3_3x3_bwd_{dtype}"),
+            module=wp.get_module(f"tensor_matmul_so3_3x3_bwd_{dtype}"),
         ),
         wp.Kernel(
             tensor_matmul_so3_3x3_bwd_bwd,

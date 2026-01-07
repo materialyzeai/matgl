@@ -37,7 +37,7 @@ from matgl.kernels import get_module, get_stream
 
 
 @torch.library.custom_op(
-    "nvtensornet::decompose_tensor_fwd_primitive",
+    "tensornet::decompose_tensor_fwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -66,7 +66,7 @@ def _(x: Tensor) -> List[Tensor]:
     return [output_i, output_a, output_s]
 
 
-@torch.library.register_fake("nvtensornet::decompose_tensor_fwd_primitive")
+@torch.library.register_fake("tensornet::decompose_tensor_fwd_primitive")
 def _(x: Tensor) -> List[Tensor]:
     return [
         torch.empty((x.shape[0], 1, x.shape[-1]), dtype=x.dtype, device=x.device),
@@ -76,7 +76,7 @@ def _(x: Tensor) -> List[Tensor]:
 
 
 @torch.library.custom_op(
-    "nvtensornet::decompose_tensor_bwd_primitive",
+    "tensornet::decompose_tensor_bwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -106,7 +106,7 @@ def _(
     return [grad_x]
 
 
-@torch.library.register_fake("nvtensornet::decompose_tensor_bwd_primitive")
+@torch.library.register_fake("tensornet::decompose_tensor_bwd_primitive")
 def _(
     grad_output_i: Tensor, grad_output_a: Tensor, grad_output_s: Tensor, x: Tensor
 ) -> List[Tensor]:
@@ -114,7 +114,7 @@ def _(
 
 
 @torch.library.custom_op(
-    "nvtensornet::decompose_tensor_bwd_bwd_primitive",
+    "tensornet::decompose_tensor_bwd_bwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -162,7 +162,7 @@ def _(
     return [grad_grad_output_i, grad_grad_output_a, grad_grad_output_s, grad_x]
 
 
-@torch.library.register_fake("nvtensornet::decompose_tensor_bwd_bwd_primitive")
+@torch.library.register_fake("tensornet::decompose_tensor_bwd_bwd_primitive")
 def _(
     grad_output_i: Tensor,
     grad_output_a: Tensor,
@@ -190,14 +190,14 @@ def decompose_tensor_setup_bwd_context(ctx, inputs, output):
 
 @torch.compiler.allow_in_graph
 def decompose_tensor_fwd(*args):
-    return torch.ops.nvtensornet.decompose_tensor_fwd_primitive(*args)
+    return torch.ops.tensornet.decompose_tensor_fwd_primitive(*args)
 
 
 @torch.compiler.allow_in_graph
 def decompose_tensor_bwd(ctx, *grad_outputs):
     (x,) = ctx.saved_tensors
     grad_output_i, grad_output_a, grad_output_s = grad_outputs[0]
-    dx = torch.ops.nvtensornet.decompose_tensor_bwd_primitive(
+    dx = torch.ops.tensornet.decompose_tensor_bwd_primitive(
         grad_output_i, grad_output_a, grad_output_s, x
     )
     return dx[0]
@@ -212,7 +212,7 @@ def decompose_tensor_bwd_bwd(ctx, *grad_outputs):
     if grad_grad_x is None:
         grad_grad_x = torch.zeros_like(x)
 
-    outputs = torch.ops.nvtensornet.decompose_tensor_bwd_bwd_primitive(
+    outputs = torch.ops.tensornet.decompose_tensor_bwd_bwd_primitive(
         grad_output_i, grad_output_a, grad_output_s, grad_grad_x, x
     )
 
@@ -220,18 +220,18 @@ def decompose_tensor_bwd_bwd(ctx, *grad_outputs):
 
 
 torch.library.register_autograd(
-    "nvtensornet::decompose_tensor_fwd_primitive",
+    "tensornet::decompose_tensor_fwd_primitive",
     decompose_tensor_bwd,
     setup_context=decompose_tensor_setup_fwd_context,
 )
 
 torch.library.register_autograd(
-    "nvtensornet::decompose_tensor_bwd_primitive",
+    "tensornet::decompose_tensor_bwd_primitive",
     decompose_tensor_bwd_bwd,
     setup_context=decompose_tensor_setup_bwd_context,
 )
 
 
 def fn_decompose_tensor(x: Tensor) -> List[Tensor]:
-    output = torch.ops.nvtensornet.decompose_tensor_fwd_primitive(x)
+    output = torch.ops.tensornet.decompose_tensor_fwd_primitive(x)
     return output

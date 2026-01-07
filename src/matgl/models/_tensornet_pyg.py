@@ -101,7 +101,9 @@ class TensorEmbedding(nn.Module):
         self.units = units
         self.cutoff = cutoff
 
-        self.distance_proj = nn.Linear(degree_rbf, 3 * units, dtype=dtype)
+        # Create unified distance_proj from 3 temp layers (matches reference RNG pattern).
+        self.distance_proj = self._create_distance_proj(degree_rbf, units, dtype=dtype)
+
         self.emb = nn.Embedding(ntypes_node, units, dtype=dtype)
         self.emb2 = nn.Linear(2 * units, units, dtype=dtype)
         self.act = activation
@@ -116,25 +118,77 @@ class TensorEmbedding(nn.Module):
 
         self.reset_parameters()
 
+    def _create_distance_proj(
+        self,
+        in_features: int,
+        units: int,
+        dtype: torch.dtype = matgl.float_th,
+    ) -> nn.Linear:
+        """Create unified distance_proj from 3 separate layers to match reference RNG pattern."""
+        d_proj1 = nn.Linear(in_features, units, bias=True, dtype=dtype)
+        d_proj2 = nn.Linear(in_features, units, bias=True, dtype=dtype)
+        d_proj3 = nn.Linear(in_features, units, bias=True, dtype=dtype)
+
+        layer = torch.nn.utils.skip_init(
+            nn.Linear,
+            in_features,
+            3 * units,
+            bias=True,
+            dtype=dtype
+        )
+        with torch.no_grad():
+            layer.weight.copy_(torch.cat([d_proj1.weight, d_proj2.weight, d_proj3.weight], dim=0))
+            layer.bias.copy_(torch.cat([d_proj1.bias, d_proj2.bias, d_proj3.bias], dim=0))
+        return layer
+
+    def _reset_distance_proj(self) -> None:
+        """Reset distance_proj weights using 3 temp layers to match reference RNG pattern."""
+        dtype = self.distance_proj.weight.dtype
+        d_proj1 = torch.nn.utils.skip_init(
+            nn.Linear,
+            self.distance_proj.in_features,
+            self.units,
+            bias=True,
+            dtype=dtype
+        )
+        d_proj2 = torch.nn.utils.skip_init(
+            nn.Linear,
+            self.distance_proj.in_features,
+            self.units,
+            bias=True,
+            dtype=dtype
+        )   
+        d_proj3 = torch.nn.utils.skip_init(
+            nn.Linear,
+            self.distance_proj.in_features,
+            self.units,
+            bias=True,
+            dtype=dtype
+        )
+        d_proj1.reset_parameters()
+        d_proj2.reset_parameters()
+        d_proj3.reset_parameters()
+        with torch.no_grad():
+            self.distance_proj.weight.copy_(torch.cat([d_proj1.weight, d_proj2.weight, d_proj3.weight], dim=0))
+            self.distance_proj.bias.copy_(torch.cat([d_proj1.bias, d_proj2.bias, d_proj3.bias], dim=0))
+
     def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
-        # since the we changed distance_proj to be a single linear layer,
-        # we need to concatenate the weights and biases of the three distance_proj layers
-        # into a single weight and bias tensor
+        """Handle legacy checkpoints with separate distance_proj1/2/3 layers."""
         w_keys = [f"{prefix}distance_proj{i}.weight" for i in (1, 2, 3)]
-        b_keys = [f"{prefix}distance_proj{i}.bias"   for i in (1, 2, 3)]
-        new_w  = f"{prefix}distance_proj.weight"
-        new_b  = f"{prefix}distance_proj.bias"
+        b_keys = [f"{prefix}distance_proj{i}.bias" for i in (1, 2, 3)]
+        new_w = f"{prefix}distance_proj.weight"
+        new_b = f"{prefix}distance_proj.bias"
 
-        if all(k in state_dict for k in (w_keys + b_keys)):
+        if all(k in state_dict for k in w_keys + b_keys):
             state_dict = dict(state_dict)
-
             state_dict[new_w] = torch.cat([state_dict.pop(k) for k in w_keys], dim=0)
             state_dict[new_b] = torch.cat([state_dict.pop(k) for k in b_keys], dim=0)
 
-        return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)        
+        return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
     def reset_parameters(self):
-        self.distance_proj.reset_parameters()
+        """Reinitialize parameters with RNG pattern matching reference implementation."""
+        self._reset_distance_proj()
         self.emb.reset_parameters()
         self.emb2.reset_parameters()
         for linear in self.linears_tensor:
@@ -150,8 +204,8 @@ class TensorEmbedding(nn.Module):
         edge_weight: torch.Tensor,
         edge_vec: torch.Tensor,
         edge_attr: torch.Tensor,
-        row_data: torch.Tensor,
-        row_indptr: torch.Tensor,
+        col_data: torch.Tensor,
+        col_indptr: torch.Tensor,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -161,6 +215,8 @@ class TensorEmbedding(nn.Module):
             edge_weight: Edge weights (distances), shape (num_edges,)
             edge_vec: Edge vectors, shape (num_edges, 3)
             edge_attr: Edge attributes (RBF), shape (num_edges, num_rbf)
+            col_data: CSR col data for destination aggregation, shape (num_edges,)
+            col_indptr: CSR col indptr for destination aggregation, shape (num_nodes+1,)
 
         Returns:
             X: Tensor representation, shape (num_nodes, 3, 3, units)
@@ -173,7 +229,7 @@ class TensorEmbedding(nn.Module):
         edge_attr = self.distance_proj(edge_attr).view(-1, 3, self.units)
 
         # Get atomic number messages
-        zij = x.index_select(0, edge_index.t().flip(-1).reshape(-1)).view(
+        zij = x.index_select(0, edge_index.t().reshape(-1)).view(
                 -1, self.units * 2
             )
         Zij = self.emb2(zij)  # (num_edges, units)
@@ -187,7 +243,7 @@ class TensorEmbedding(nn.Module):
         # Radial message passing
         edge_vec_norm = edge_vec / torch.norm(edge_vec, dim=1, keepdim=True).clamp(min=1e-6)
         I, A, S = fn_radial_message_passing(
-            edge_vec_norm, edge_attr_processed, row_data, row_indptr
+            edge_vec_norm, edge_attr_processed, col_data, col_indptr
         )
 
         # Compose initial tensor to get proper shape for norm computation
@@ -284,8 +340,8 @@ class TensorNetInteraction(nn.Module):
         for linear_scalar in self.linears_scalar:
             edge_attr_processed = self.act(linear_scalar(edge_attr_processed))
         edge_attr_processed = (edge_attr_processed * C.view(-1, 1)).view(
-            edge_attr.shape[0], 3, self.units
-        ).mT.contiguous()  # (num_edges, units, 3)
+            edge_attr.shape[0], self.units, 3
+        ).mT.contiguous()  # (num_edges, 3, units)
 
         # Normalize input tensor
         # For X with shape (num_nodes, 3, 3, units), we need to sum over (-3, -2)
@@ -309,7 +365,7 @@ class TensorNetInteraction(nn.Module):
             I,
             A,
             S,
-            edge_attr,
+            edge_attr_processed,
             row_data,
             row_indices,
             row_indptr,
@@ -323,8 +379,7 @@ class TensorNetInteraction(nn.Module):
         if self.equivariance_invariance_group == "O(3)":
             C = fn_tensor_matmul_o3_3x3(Y, msg)
         else:  # SO(3)
-            C = fn_tensor_matmul_so3_3x3(Y, msg)
-            C = C = C
+            C = 2 * fn_tensor_matmul_so3_3x3(Y, msg)
         I, A, S = fn_decompose_tensor(C)
 
         # Normalize
@@ -560,8 +615,8 @@ class TensorNet(MatGLModel):
             bond_dist,
             bond_vec,
             edge_attr,
-            row_data,
-            row_indptr
+            col_data,
+            col_indptr
         )
 
         # Interaction layers

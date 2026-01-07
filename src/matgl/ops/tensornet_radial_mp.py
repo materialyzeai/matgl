@@ -37,7 +37,7 @@ from matgl.kernels import get_module, get_stream
 
 
 @torch.library.custom_op(
-    "nvtensornet::radial_message_passing_fwd_primitive",
+    "tensornet::radial_message_passing_fwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -96,7 +96,7 @@ def _(
     return [output_I, output_A, output_S]
 
 
-@torch.library.register_fake("nvtensornet::radial_message_passing_fwd_primitive")
+@torch.library.register_fake("tensornet::radial_message_passing_fwd_primitive")
 def _(
     edge_vec_norm: Tensor, edge_attr: Tensor, row_data: Tensor, row_indptr: Tensor
 ) -> List[Tensor]:
@@ -121,7 +121,7 @@ def _(
 
 
 @torch.library.custom_op(
-    "nvtensornet::radial_message_passing_bwd_primitive",
+    "tensornet::radial_message_passing_bwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -180,7 +180,7 @@ def _(
     return [grad_edge_vec_norm, grad_edge_attr]
 
 
-@torch.library.register_fake("nvtensornet::radial_message_passing_bwd_primitive")
+@torch.library.register_fake("tensornet::radial_message_passing_bwd_primitive")
 def _(
     grad_output_I: Tensor,
     grad_output_A: Tensor,
@@ -194,7 +194,7 @@ def _(
 
 
 @torch.library.custom_op(
-    "nvtensornet::radial_message_passing_bwd_bwd_primitive",
+    "tensornet::radial_message_passing_bwd_bwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -282,7 +282,7 @@ def _(
 
 
 @torch.library.register_fake(
-    "nvtensornet::radial_message_passing_bwd_bwd_primitive"
+    "tensornet::radial_message_passing_bwd_bwd_primitive"
 )
 def _(
     grad_output_I: Tensor,
@@ -330,14 +330,14 @@ def radial_message_passing_setup_bwd_context(ctx, inputs, output):
 
 @torch.compiler.allow_in_graph
 def radial_message_passing_fwd(*args):
-    return torch.ops.nvtensornet.radial_message_passing_fwd_primitive(*args)
+    return torch.ops.tensornet.radial_message_passing_fwd_primitive(*args)
 
 
 @torch.compiler.allow_in_graph
 def radial_message_passing_bwd(ctx, grad_outputs):
     edge_vec_norm, edge_attr, row_data, row_indptr = ctx.saved_tensors
 
-    result = torch.ops.nvtensornet.radial_message_passing_bwd_primitive(
+    result = torch.ops.tensornet.radial_message_passing_bwd_primitive(
         grad_outputs[0],
         grad_outputs[1],
         grad_outputs[2],
@@ -366,7 +366,7 @@ def radial_message_passing_bwd_bwd(ctx, *grad_outputs):
         row_indptr,
     ) = ctx.saved_tensors
 
-    result = torch.ops.nvtensornet.radial_message_passing_bwd_bwd_primitive(
+    result = torch.ops.tensornet.radial_message_passing_bwd_bwd_primitive(
         grad_output_I,
         grad_output_A,
         grad_output_S,
@@ -398,13 +398,13 @@ def radial_message_passing_bwd_bwd(ctx, *grad_outputs):
 
 
 torch.library.register_autograd(
-    "nvtensornet::radial_message_passing_fwd_primitive",
+    "tensornet::radial_message_passing_fwd_primitive",
     radial_message_passing_bwd,
     setup_context=radial_message_passing_setup_fwd_context,
 )
 
 torch.library.register_autograd(
-    "nvtensornet::radial_message_passing_bwd_primitive",
+    "tensornet::radial_message_passing_bwd_primitive",
     radial_message_passing_bwd_bwd,
     setup_context=radial_message_passing_setup_bwd_context,
 )
@@ -413,6 +413,6 @@ torch.library.register_autograd(
 def fn_radial_message_passing(
     edge_vec_norm: Tensor, edge_attr: Tensor, row_data: Tensor, row_indptr: Tensor
 ) -> List[Tensor]:
-    return torch.ops.nvtensornet.radial_message_passing_fwd_primitive(
+    return torch.ops.tensornet.radial_message_passing_fwd_primitive(
         edge_vec_norm, edge_attr, row_data, row_indptr
     )

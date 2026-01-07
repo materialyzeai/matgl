@@ -37,7 +37,7 @@ from matgl.kernels import get_module, get_stream
 
 
 @torch.library.custom_op(
-    "nvtensornet::tensor_norm3_fwd_primitive",
+    "tensornet::tensor_norm3_fwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -62,13 +62,13 @@ def _(x: Tensor) -> Tensor:
     return output
 
 
-@torch.library.register_fake("nvtensornet::tensor_norm3_fwd_primitive")
+@torch.library.register_fake("tensornet::tensor_norm3_fwd_primitive")
 def _(x: Tensor) -> Tensor:
     return torch.empty((x.shape[0], 3 * x.shape[-1]), dtype=x.dtype, device=x.device)
 
 
 @torch.library.custom_op(
-    "nvtensornet::tensor_norm3_bwd_primitive",
+    "tensornet::tensor_norm3_bwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
@@ -96,7 +96,7 @@ def _(
     return [grad_x]
 
 
-@torch.library.register_fake("nvtensornet::tensor_norm3_bwd_primitive")
+@torch.library.register_fake("tensornet::tensor_norm3_bwd_primitive")
 def _(
     grad_output: Tensor, x: Tensor
 ) -> List[Tensor]:
@@ -104,19 +104,29 @@ def _(
 
 
 @torch.library.custom_op(
-    "nvtensornet::tensor_norm3_bwd_bwd_primitive",
+    "tensornet::tensor_norm3_bwd_bwd_primitive",
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
 def _(
     grad_grad_x: Tensor,
-) -> Tensor:
+    x: Tensor,
+    grad_output: Tensor,
+) -> List[Tensor]:
     stream = get_stream(grad_grad_x.device)
     device = wp.device_from_torch(grad_grad_x.device)
-    grad_grad_output = torch.empty((grad_grad_x.shape[0], 3 * grad_grad_x.shape[-1]), dtype=grad_grad_x.dtype, device=grad_grad_x.device)
+    grad_grad_output = torch.empty(
+        (grad_grad_x.shape[0], 3 * grad_grad_x.shape[-1]),
+        dtype=grad_grad_x.dtype,
+        device=grad_grad_x.device,
+    )
+    grad_x = torch.empty_like(x)
 
     grad_grad_x_wp = wp.from_torch(grad_grad_x.detach(), return_ctype=True)
+    x_wp = wp.from_torch(x.detach(), return_ctype=True)
+    grad_output_wp = wp.from_torch(grad_output.detach(), return_ctype=True)
     grad_grad_output_wp = wp.from_torch(grad_grad_output.detach(), return_ctype=True)
+    grad_x_wp = wp.from_torch(grad_x.detach(), return_ctype=True)
 
     tensor_norm3_bwd_bwd = get_module("tensor_norm3_bwd_bwd", [str(grad_grad_x.dtype)])
     wp.launch(
@@ -126,70 +136,82 @@ def _(
         device=device,
         inputs=(
             grad_grad_x_wp,
+            x_wp,
+            grad_output_wp,
             grad_grad_output_wp,
+            grad_x_wp,
         ),
     )
 
-    return grad_grad_output
+    return [grad_grad_output, grad_x]
 
 
-@torch.library.register_fake("nvtensornet::tensor_norm3_bwd_bwd_primitive")
+@torch.library.register_fake("tensornet::tensor_norm3_bwd_bwd_primitive")
 def _(
     grad_grad_x: Tensor,
-) -> Tensor:
-    return torch.empty((grad_grad_x.shape[0], 3 * grad_grad_x.shape[-1]), dtype=grad_grad_x.dtype, device=grad_grad_x.device)
+    x: Tensor,
+    grad_output: Tensor,
+) -> List[Tensor]:
+    return [
+        torch.empty(
+            (grad_grad_x.shape[0], 3 * grad_grad_x.shape[-1]),
+            dtype=grad_grad_x.dtype,
+            device=grad_grad_x.device,
+        ),
+        torch.empty_like(x),
+    ]
 
 
 def tensor_norm3_fwd_setup_context(ctx, inputs, output):
-    (x,) = inputs  # Unpack the single input tensor
+    (x,) = inputs
     ctx.save_for_backward(x)
 
 
 def tensor_norm3_bwd_setup_context(ctx, inputs, output):
     (grad_output, x) = inputs
-    ctx.save_for_backward(x)
+    ctx.save_for_backward(grad_output, x)
 
 
 @torch.compiler.allow_in_graph
 def tensor_norm3_fwd(*args):
-    return torch.ops.nvtensornet.tensor_norm3_fwd_primitive(*args)
+    """Forward: computes I, A, S norms of 3x3 tensor."""
+    return torch.ops.tensornet.tensor_norm3_fwd_primitive(*args)
 
 
 @torch.compiler.allow_in_graph
 def tensor_norm3_bwd(ctx, grad_output):
+    """Backward: returns grad for x."""
     (x,) = ctx.saved_tensors
-    dx = torch.ops.nvtensornet.tensor_norm3_bwd_primitive(
-        grad_output, x
-    )
-    return dx[0]
+    return torch.ops.tensornet.tensor_norm3_bwd_primitive(grad_output, x)[0]
 
 
 @torch.compiler.allow_in_graph
-def tensor_norm3_bwd_bwd(ctx, grad_grad_x):
-    (x,) = ctx.saved_tensors
+def tensor_norm3_bwd_bwd(ctx, *grad_outputs):
+    """Double backward: returns (grad for grad_output, grad for x)."""
+    (grad_grad_x,) = grad_outputs[0]
+    grad_output, x = ctx.saved_tensors
 
     if grad_grad_x is None:
         grad_grad_x = torch.zeros_like(x)
 
-    grad_grad_output = torch.ops.nvtensornet.tensor_norm3_bwd_bwd_primitive(
-        grad_grad_x
+    outputs = torch.ops.tensornet.tensor_norm3_bwd_bwd_primitive(
+        grad_grad_x, x, grad_output
     )
-
-    return grad_grad_output
+    return outputs[0], outputs[1]
 
 
 torch.library.register_autograd(
-    "nvtensornet::tensor_norm3_fwd_primitive",
+    "tensornet::tensor_norm3_fwd_primitive",
     tensor_norm3_bwd,
     setup_context=tensor_norm3_fwd_setup_context,
 )
 
 torch.library.register_autograd(
-    "nvtensornet::tensor_norm3_bwd_primitive",
+    "tensornet::tensor_norm3_bwd_primitive",
     tensor_norm3_bwd_bwd,
     setup_context=tensor_norm3_bwd_setup_context,
 )
 
 
 def fn_tensor_norm3(x: Tensor) -> Tensor:
-    return torch.ops.nvtensornet.tensor_norm3_fwd_primitive(x)
+    return torch.ops.tensornet.tensor_norm3_fwd_primitive(x)
