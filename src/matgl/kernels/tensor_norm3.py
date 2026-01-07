@@ -67,12 +67,13 @@ def generate_tensor_norm3(dtype: str, h_last: bool = True, use_irmem: bool = Tru
         trace_third = trace / X.dtype(3.0)
         norm2_i = one_third * trace * trace
         norm2_a = one_half * ((x01 - x10) * (x01 - x10) + (x02 - x20) * (x02 - x20) + (x12 - x21) * (x12 - x21))
-        norm2_s = one_half * (
-            (x01 + x10) * (x01 + x10)
-            + (x02 + x20) * (x02 + x20)
-            + (x12 + x21) * (x12 + x21)
-            ) + (x00 - trace_third) * (x00 - trace_third) + (x11 - trace_third) * (x11 - trace_third) + (x22 - trace_third) * (x22 - trace_third)
-        
+        norm2_s = (
+            one_half * ((x01 + x10) * (x01 + x10) + (x02 + x20) * (x02 + x20) + (x12 + x21) * (x12 + x21))
+            + (x00 - trace_third) * (x00 - trace_third)
+            + (x11 - trace_third) * (x11 - trace_third)
+            + (x22 - trace_third) * (x22 - trace_third)
+        )
+
         output[b, h] = norm2_i
         output[b, h + X.shape[3]] = norm2_a
         output[b, h + 2 * X.shape[3]] = norm2_s
@@ -255,15 +256,9 @@ def generate_tensor_norm3(dtype: str, h_last: bool = True, use_irmem: bool = Tru
     )
 
 
-tensor_norm3_fwd_fp64, tensor_norm3_bwd_fp64, tensor_norm3_bwd_bwd_fp64 = (
-    generate_tensor_norm3("float64")
-)
-tensor_norm3_fwd_fp32, tensor_norm3_bwd_fp32, tensor_norm3_bwd_bwd_fp32 = (
-    generate_tensor_norm3("float32")
-)
-tensor_norm3_fwd_fp16, tensor_norm3_bwd_fp16, tensor_norm3_bwd_bwd_fp16 = (
-    generate_tensor_norm3("float16")
-)
+tensor_norm3_fwd_fp64, tensor_norm3_bwd_fp64, tensor_norm3_bwd_bwd_fp64 = generate_tensor_norm3("float64")
+tensor_norm3_fwd_fp32, tensor_norm3_bwd_fp32, tensor_norm3_bwd_bwd_fp32 = generate_tensor_norm3("float32")
+tensor_norm3_fwd_fp16, tensor_norm3_bwd_fp16, tensor_norm3_bwd_bwd_fp16 = generate_tensor_norm3("float16")
 
 add_module("tensor_norm3_fwd", ["float64"], tensor_norm3_fwd_fp64)
 add_module("tensor_norm3_bwd", ["float64"], tensor_norm3_bwd_fp64)

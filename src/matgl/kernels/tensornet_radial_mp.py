@@ -74,9 +74,7 @@ def generate_radial_message_passing(dtype: str):
             output_A_reg[2] += r_ij[0] * weight_A_reg
 
             S_reg = vec5()
-            mean_r2 = (
-                r_ij[0] * r_ij[0] + r_ij[1] * r_ij[1] + r_ij[2] * r_ij[2]
-            ) / output_I.dtype(3.0)
+            mean_r2 = (r_ij[0] * r_ij[0] + r_ij[1] * r_ij[1] + r_ij[2] * r_ij[2]) / output_I.dtype(3.0)
             S_reg[0] = r_ij[0] * r_ij[0] - mean_r2
             S_reg[1] = r_ij[0] * r_ij[1]
             S_reg[2] = r_ij[0] * r_ij[2]
@@ -140,16 +138,10 @@ def generate_radial_message_passing(dtype: str):
 
             dedge_attr_I = doutput_I_reg
 
-            dedge_attr_A = (
-                doutput_A_reg[0] * r_ij[2]
-                - doutput_A_reg[1] * r_ij[1]
-                + doutput_A_reg[2] * r_ij[0]
-            )
+            dedge_attr_A = doutput_A_reg[0] * r_ij[2] - doutput_A_reg[1] * r_ij[1] + doutput_A_reg[2] * r_ij[0]
 
             S_reg = vec5()
-            mean_r2 = (
-                r_ij[0] * r_ij[0] + r_ij[1] * r_ij[1] + r_ij[2] * r_ij[2]
-            ) / doutput_I.dtype(3.0)
+            mean_r2 = (r_ij[0] * r_ij[0] + r_ij[1] * r_ij[1] + r_ij[2] * r_ij[2]) / doutput_I.dtype(3.0)
             S_reg[0] = r_ij[0] * r_ij[0] - mean_r2
             S_reg[1] = r_ij[0] * r_ij[1]
             S_reg[2] = r_ij[0] * r_ij[2]
@@ -248,11 +240,7 @@ def generate_radial_message_passing(dtype: str):
             d2output_A_reg[1] += -dedge_attr_A * r_ij[1]
             d2output_A_reg[2] += dedge_attr_A * r_ij[0]
 
-            dweight_A = (
-                doutput_A[b, 0, h] * dr_ij[2]
-                - doutput_A[b, 1, h] * dr_ij[1]
-                + doutput_A[b, 2, h] * dr_ij[0]
-            )
+            dweight_A = doutput_A[b, 0, h] * dr_ij[2] - doutput_A[b, 1, h] * dr_ij[1] + doutput_A[b, 2, h] * dr_ij[0]
 
             d2r_ij[2] += dedge_attr_A * doutput_A[b, 0, h]
             d2r_ij[1] += -dedge_attr_A * doutput_A[b, 1, h]
@@ -299,60 +287,36 @@ def generate_radial_message_passing(dtype: str):
             )
             d2output_S_reg[4] += dedge_attr_S * (r_ij[2] * r_ij[1])
 
-            d2r_ij[0] += (
-                doutput_S[b, 0, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 0] * c0)
-            )
-            d2r_ij[1] += (
-                doutput_S[b, 0, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 1] * c1)
-            )
-            d2r_ij[2] += (
-                doutput_S[b, 0, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 2] * c1)
-            )
+            d2r_ij[0] += doutput_S[b, 0, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 0] * c0)
+            d2r_ij[1] += doutput_S[b, 0, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 1] * c1)
+            d2r_ij[2] += doutput_S[b, 0, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 2] * c1)
 
             d2r_ij[0] += doutput_S[b, 0, h] * dedge_attr_S * (c0 * r_ij[0])
             d2r_ij[1] += doutput_S[b, 0, h] * dedge_attr_S * (c1 * r_ij[1])
             d2r_ij[2] += doutput_S[b, 0, h] * dedge_attr_S * (c1 * r_ij[2])
 
-            d2r_ij[0] += (
-                doutput_S[b, 1, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 1])
-            )
-            d2r_ij[1] += (
-                doutput_S[b, 1, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 0])
-            )
+            d2r_ij[0] += doutput_S[b, 1, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 1])
+            d2r_ij[1] += doutput_S[b, 1, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 0])
 
             d2r_ij[0] += doutput_S[b, 1, h] * dedge_attr_S * (r_ij[1])
             d2r_ij[1] += doutput_S[b, 1, h] * dedge_attr_S * (r_ij[0])
 
-            d2r_ij[0] += (
-                doutput_S[b, 2, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 2])
-            )
-            d2r_ij[2] += (
-                doutput_S[b, 2, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 0])
-            )
+            d2r_ij[0] += doutput_S[b, 2, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 2])
+            d2r_ij[2] += doutput_S[b, 2, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 0])
 
             d2r_ij[0] += doutput_S[b, 2, h] * dedge_attr_S * (r_ij[2])
             d2r_ij[2] += doutput_S[b, 2, h] * dedge_attr_S * (r_ij[0])
 
-            d2r_ij[0] += (
-                doutput_S[b, 3, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 0] * c1)
-            )
-            d2r_ij[1] += (
-                doutput_S[b, 3, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 1] * c0)
-            )
-            d2r_ij[2] += (
-                doutput_S[b, 3, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 2] * c1)
-            )
+            d2r_ij[0] += doutput_S[b, 3, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 0] * c1)
+            d2r_ij[1] += doutput_S[b, 3, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 1] * c0)
+            d2r_ij[2] += doutput_S[b, 3, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 2] * c1)
 
             d2r_ij[0] += doutput_S[b, 3, h] * dedge_attr_S * (c1 * r_ij[0])
             d2r_ij[1] += doutput_S[b, 3, h] * dedge_attr_S * (c0 * r_ij[1])
             d2r_ij[2] += doutput_S[b, 3, h] * dedge_attr_S * (c1 * r_ij[2])
 
-            d2r_ij[1] += (
-                doutput_S[b, 4, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 2])
-            )
-            d2r_ij[2] += (
-                doutput_S[b, 4, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 1])
-            )
+            d2r_ij[1] += doutput_S[b, 4, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 2])
+            d2r_ij[2] += doutput_S[b, 4, h] * edge_attr_S_reg * (dedge_vec_norm[idx_w, 1])
 
             d2r_ij[1] += doutput_S[b, 4, h] * dedge_attr_S * (r_ij[2])
             d2r_ij[2] += doutput_S[b, 4, h] * dedge_attr_S * (r_ij[1])
@@ -364,13 +328,9 @@ def generate_radial_message_passing(dtype: str):
                 + c1 * r_ij[2] * dedge_vec_norm[idx_w, 2]
             )
 
-            d2weight_S += doutput_S[b, 1, h] * (
-                r_ij[1] * dedge_vec_norm[idx_w, 0] + r_ij[0] * dedge_vec_norm[idx_w, 1]
-            )
+            d2weight_S += doutput_S[b, 1, h] * (r_ij[1] * dedge_vec_norm[idx_w, 0] + r_ij[0] * dedge_vec_norm[idx_w, 1])
 
-            d2weight_S += doutput_S[b, 2, h] * (
-                r_ij[2] * dedge_vec_norm[idx_w, 0] + r_ij[0] * dedge_vec_norm[idx_w, 2]
-            )
+            d2weight_S += doutput_S[b, 2, h] * (r_ij[2] * dedge_vec_norm[idx_w, 0] + r_ij[0] * dedge_vec_norm[idx_w, 2])
 
             d2weight_S += doutput_S[b, 3, h] * (
                 c1 * r_ij[0] * dedge_vec_norm[idx_w, 0]
@@ -378,9 +338,7 @@ def generate_radial_message_passing(dtype: str):
                 + c1 * r_ij[2] * dedge_vec_norm[idx_w, 2]
             )
 
-            d2weight_S += doutput_S[b, 4, h] * (
-                r_ij[2] * dedge_vec_norm[idx_w, 1] + r_ij[1] * dedge_vec_norm[idx_w, 2]
-            )
+            d2weight_S += doutput_S[b, 4, h] * (r_ij[2] * dedge_vec_norm[idx_w, 1] + r_ij[1] * dedge_vec_norm[idx_w, 2])
 
             wp.atomic_add(d2edge_attr, idx_w, 2, h, d2weight_S)
 
@@ -433,18 +391,12 @@ def generate_radial_message_passing(dtype: str):
 
 add_module("radial_message_passing_fwd", ["float64"], radial_message_passing_fwd_fp64)
 add_module("radial_message_passing_bwd", ["float64"], radial_message_passing_bwd_fp64)
-add_module(
-    "radial_message_passing_bwd_bwd", ["float64"], radial_message_passing_bwd_bwd_fp64
-)
+add_module("radial_message_passing_bwd_bwd", ["float64"], radial_message_passing_bwd_bwd_fp64)
 
 add_module("radial_message_passing_fwd", ["float32"], radial_message_passing_fwd_fp32)
 add_module("radial_message_passing_bwd", ["float32"], radial_message_passing_bwd_fp32)
-add_module(
-    "radial_message_passing_bwd_bwd", ["float32"], radial_message_passing_bwd_bwd_fp32
-)
+add_module("radial_message_passing_bwd_bwd", ["float32"], radial_message_passing_bwd_bwd_fp32)
 
 add_module("radial_message_passing_fwd", ["float16"], radial_message_passing_fwd_fp16)
 add_module("radial_message_passing_bwd", ["float16"], radial_message_passing_bwd_fp16)
-add_module(
-    "radial_message_passing_bwd_bwd", ["float16"], radial_message_passing_bwd_bwd_fp16
-)
+add_module("radial_message_passing_bwd_bwd", ["float16"], radial_message_passing_bwd_bwd_fp16)

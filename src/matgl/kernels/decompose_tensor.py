@@ -209,14 +209,14 @@ def generate_decompose_tensor(dtype: str, h_last: bool = True, use_irmem: bool =
     )
 
 
-decompose_tensor_fwd_fp64, decompose_tensor_bwd_fp64, decompose_tensor_bwd_bwd_fp64 = (
-    generate_decompose_tensor("float64")
+decompose_tensor_fwd_fp64, decompose_tensor_bwd_fp64, decompose_tensor_bwd_bwd_fp64 = generate_decompose_tensor(
+    "float64"
 )
-decompose_tensor_fwd_fp32, decompose_tensor_bwd_fp32, decompose_tensor_bwd_bwd_fp32 = (
-    generate_decompose_tensor("float32")
+decompose_tensor_fwd_fp32, decompose_tensor_bwd_fp32, decompose_tensor_bwd_bwd_fp32 = generate_decompose_tensor(
+    "float32"
 )
-decompose_tensor_fwd_fp16, decompose_tensor_bwd_fp16, decompose_tensor_bwd_bwd_fp16 = (
-    generate_decompose_tensor("float16")
+decompose_tensor_fwd_fp16, decompose_tensor_bwd_fp16, decompose_tensor_bwd_bwd_fp16 = generate_decompose_tensor(
+    "float16"
 )
 
 add_module("decompose_tensor_fwd", ["float64"], decompose_tensor_fwd_fp64)

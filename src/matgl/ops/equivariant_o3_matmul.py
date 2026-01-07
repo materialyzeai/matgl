@@ -114,9 +114,7 @@ def _(grad_output: List[Tensor], x: Tensor, y: Tensor) -> List[Tensor]:
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
-def _(
-    grad_output: Tensor, grad_grad_x: Tensor, grad_grad_y: Tensor, x: Tensor, y: Tensor
-) -> List[Tensor]:
+def _(grad_output: Tensor, grad_grad_x: Tensor, grad_grad_y: Tensor, x: Tensor, y: Tensor) -> List[Tensor]:
     if x.shape[1] != 3 or x.shape[2] != 3 or y.shape[1] != 3 or y.shape[2] != 3:
         raise ValueError("x and y must be 3x3 matrices")
     if x.ndim != 4 or y.ndim != 4:
@@ -139,9 +137,7 @@ def _(
     grad_y_wp = wp.from_torch(grad_y.detach(), return_ctype=True)
     grad_grad_output_wp = wp.from_torch(grad_grad_output.detach(), return_ctype=True)
 
-    tensor_matmul_o3_3x3_bwd_bwd = get_module(
-        "tensor_matmul_o3_3x3_bwd_bwd", [str(grad_output.dtype)]
-    )
+    tensor_matmul_o3_3x3_bwd_bwd = get_module("tensor_matmul_o3_3x3_bwd_bwd", [str(grad_output.dtype)])
     wp.launch(
         tensor_matmul_o3_3x3_bwd_bwd,
         dim=(grad_output.shape[0], grad_output.shape[-1]),
@@ -163,9 +159,7 @@ def _(
 
 
 @torch.library.register_fake("tensornet::tensor_matmul_o3_3x3_bwd_bwd_primitive")
-def _(
-    grad_output: Tensor, grad_grad_x: Tensor, grad_grad_y: Tensor, x: Tensor, y: Tensor
-) -> List[Tensor]:
+def _(grad_output: Tensor, grad_grad_x: Tensor, grad_grad_y: Tensor, x: Tensor, y: Tensor) -> List[Tensor]:
     return [
         torch.empty_like(grad_output),
         torch.empty_like(grad_output),
@@ -185,17 +179,13 @@ def tensor_matmul_o3_3x3_setup_bwd_context(ctx, inputs, output):
 
 @torch.compiler.allow_in_graph
 def tensor_matmul_o3_3x3_fwd(*args):
-    return getattr(torch.ops.tensornet, "tensor_matmul_o3_3x3_fwd_primitive")(
-        *args
-    )
+    return getattr(torch.ops.tensornet, "tensor_matmul_o3_3x3_fwd_primitive")(*args)
 
 
 @torch.compiler.allow_in_graph
 def tensor_matmul_o3_3x3_bwd(ctx, grad_output):
     x, y = ctx.saved_tensors
-    dx, dy = getattr(torch.ops.tensornet, "tensor_matmul_o3_3x3_bwd_primitive")(
-        grad_output, x, y
-    )
+    dx, dy = getattr(torch.ops.tensornet, "tensor_matmul_o3_3x3_bwd_primitive")(grad_output, x, y)
     return dx, dy
 
 
@@ -206,9 +196,9 @@ def tensor_matmul_o3_3x3_bwd_bwd(ctx, *grad_outputs):
 
     grad_output_saved, x, y = ctx.saved_tensors
 
-    outputs = getattr(
-        torch.ops.tensornet, "tensor_matmul_o3_3x3_bwd_bwd_primitive"
-    )(grad_output_saved, grad_grad_x, grad_grad_y, x, y)
+    outputs = getattr(torch.ops.tensornet, "tensor_matmul_o3_3x3_bwd_bwd_primitive")(
+        grad_output_saved, grad_grad_x, grad_grad_y, x, y
+    )
     return outputs[0], outputs[1], outputs[2]
 
 

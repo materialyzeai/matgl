@@ -247,9 +247,7 @@ def _(
     grad_grad_x_wp = wp.from_torch(grad_grad_x.detach(), return_ctype=True)
     grad_grad_y_wp = wp.from_torch(grad_grad_y.detach(), return_ctype=True)
     grad_grad_z_wp = wp.from_torch(grad_grad_z.detach(), return_ctype=True)
-    grad_grad_edge_attr_wp = wp.from_torch(
-        grad_grad_edge_attr.detach(), return_ctype=True
-    )
+    grad_grad_edge_attr_wp = wp.from_torch(grad_grad_edge_attr.detach(), return_ctype=True)
 
     grad_output_x_wp = wp.from_torch(grad_output_x.detach(), return_ctype=True)
     grad_output_y_wp = wp.from_torch(grad_output_y.detach(), return_ctype=True)
@@ -281,9 +279,7 @@ def _(
     dgrad_output_z_wp = wp.from_torch(dgrad_output_z.detach(), return_ctype=True)
 
     # Kernel 1: col-based - computes d2I, d2A, d2S, d2edge_attr
-    message_passing_edge_bwd_bwd = get_module(
-        "message_passing_edge_bwd_bwd", [str(x.dtype)]
-    )
+    message_passing_edge_bwd_bwd = get_module("message_passing_edge_bwd_bwd", [str(x.dtype)])
     wp.launch(
         message_passing_edge_bwd_bwd,
         dim=(x.shape[0], x.shape[-1]),
@@ -311,9 +307,7 @@ def _(
     )
 
     # Kernel 2: row-based - computes d2output_I, d2output_A, d2output_S
-    message_passing_output_bwd_bwd = get_module(
-        "message_passing_output_bwd_bwd", [str(x.dtype)]
-    )
+    message_passing_output_bwd_bwd = get_module("message_passing_output_bwd_bwd", [str(x.dtype)])
     wp.launch(
         message_passing_output_bwd_bwd,
         dim=(x.shape[0], x.shape[-1]),

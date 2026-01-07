@@ -41,10 +41,7 @@ from matgl.kernels import get_module, get_stream
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
-def _(
-    edge_vec_norm: Tensor, edge_attr: Tensor, row_data: Tensor, row_indptr: Tensor
-) -> List[Tensor]:
-
+def _(edge_vec_norm: Tensor, edge_attr: Tensor, row_data: Tensor, row_indptr: Tensor) -> List[Tensor]:
     num_atoms = row_indptr.shape[0] - 1
     stream = get_stream(edge_vec_norm.device)
     device = wp.device_from_torch(edge_vec_norm.device)
@@ -74,9 +71,7 @@ def _(
     row_data_wp = wp.from_torch(row_data.detach(), return_ctype=True)
     row_indptr_wp = wp.from_torch(row_indptr.detach(), return_ctype=True)
 
-    message_passing_fwd = get_module(
-        "radial_message_passing_fwd", [str(edge_vec_norm.dtype)]
-    )
+    message_passing_fwd = get_module("radial_message_passing_fwd", [str(edge_vec_norm.dtype)])
     wp.launch(
         message_passing_fwd,
         dim=(num_atoms, edge_attr.shape[-1]),
@@ -97,9 +92,7 @@ def _(
 
 
 @torch.library.register_fake("tensornet::radial_message_passing_fwd_primitive")
-def _(
-    edge_vec_norm: Tensor, edge_attr: Tensor, row_data: Tensor, row_indptr: Tensor
-) -> List[Tensor]:
+def _(edge_vec_norm: Tensor, edge_attr: Tensor, row_data: Tensor, row_indptr: Tensor) -> List[Tensor]:
     num_atoms = row_indptr.shape[0] - 1
     return [
         torch.empty(
@@ -143,9 +136,7 @@ def _(
     grad_output_S_wp = wp.from_torch(grad_output_S.detach(), return_ctype=True)
 
     grad_edge_vec_norm = torch.zeros_like(edge_vec_norm)
-    grad_edge_vec_norm_wp = wp.from_torch(
-        grad_edge_vec_norm.detach(), return_ctype=True
-    )
+    grad_edge_vec_norm_wp = wp.from_torch(grad_edge_vec_norm.detach(), return_ctype=True)
 
     grad_edge_attr = torch.zeros_like(edge_attr)
     grad_edge_attr_wp = wp.from_torch(grad_edge_attr.detach(), return_ctype=True)
@@ -156,9 +147,7 @@ def _(
     row_data_wp = wp.from_torch(row_data.detach(), return_ctype=True)
     row_indptr_wp = wp.from_torch(row_indptr.detach(), return_ctype=True)
 
-    message_passing_bwd = get_module(
-        "radial_message_passing_bwd", [str(edge_vec_norm.dtype)]
-    )
+    message_passing_bwd = get_module("radial_message_passing_bwd", [str(edge_vec_norm.dtype)])
     wp.launch(
         message_passing_bwd,
         dim=(num_atoms, edge_attr.shape[-1]),
@@ -219,12 +208,8 @@ def _(
     row_data_wp = wp.from_torch(row_data.detach(), return_ctype=True)
     row_indptr_wp = wp.from_torch(row_indptr.detach(), return_ctype=True)
 
-    grad_grad_edge_vec_norm_wp = wp.from_torch(
-        grad_grad_edge_vec_norm.detach(), return_ctype=True
-    )
-    grad_grad_edge_attr_wp = wp.from_torch(
-        grad_grad_edge_attr.detach(), return_ctype=True
-    )
+    grad_grad_edge_vec_norm_wp = wp.from_torch(grad_grad_edge_vec_norm.detach(), return_ctype=True)
+    grad_grad_edge_attr_wp = wp.from_torch(grad_grad_edge_attr.detach(), return_ctype=True)
 
     grad_output_I_wp = wp.from_torch(grad_output_I.detach(), return_ctype=True)
     grad_output_A_wp = wp.from_torch(grad_output_A.detach(), return_ctype=True)
@@ -237,18 +222,12 @@ def _(
     dgrad_output_S_wp = wp.from_torch(dgrad_output_S.detach(), return_ctype=True)
 
     dgrad_grad_edge_vec_norm = torch.zeros_like(grad_grad_edge_vec_norm)
-    dgrad_grad_edge_vec_norm_wp = wp.from_torch(
-        dgrad_grad_edge_vec_norm.detach(), return_ctype=True
-    )
+    dgrad_grad_edge_vec_norm_wp = wp.from_torch(dgrad_grad_edge_vec_norm.detach(), return_ctype=True)
 
     dgrad_grad_edge_attr = torch.zeros_like(grad_grad_edge_attr)
-    dgrad_grad_edge_attr_wp = wp.from_torch(
-        dgrad_grad_edge_attr.detach(), return_ctype=True
-    )
+    dgrad_grad_edge_attr_wp = wp.from_torch(dgrad_grad_edge_attr.detach(), return_ctype=True)
 
-    message_passing_bwd_bwd = get_module(
-        "radial_message_passing_bwd_bwd", [str(edge_vec_norm.dtype)]
-    )
+    message_passing_bwd_bwd = get_module("radial_message_passing_bwd_bwd", [str(edge_vec_norm.dtype)])
     wp.launch(
         message_passing_bwd_bwd,
         dim=(num_atoms, edge_attr.shape[-1]),
@@ -281,9 +260,7 @@ def _(
     ]
 
 
-@torch.library.register_fake(
-    "tensornet::radial_message_passing_bwd_bwd_primitive"
-)
+@torch.library.register_fake("tensornet::radial_message_passing_bwd_bwd_primitive")
 def _(
     grad_output_I: Tensor,
     grad_output_A: Tensor,
@@ -354,7 +331,6 @@ def radial_message_passing_bwd(ctx, grad_outputs):
 
 @torch.compiler.allow_in_graph
 def radial_message_passing_bwd_bwd(ctx, *grad_outputs):
-
     grad_grad_edge_vec_norm, grad_grad_edge_attr = grad_outputs[0]
     (
         grad_output_I,
@@ -413,6 +389,4 @@ torch.library.register_autograd(
 def fn_radial_message_passing(
     edge_vec_norm: Tensor, edge_attr: Tensor, row_data: Tensor, row_indptr: Tensor
 ) -> List[Tensor]:
-    return torch.ops.tensornet.radial_message_passing_fwd_primitive(
-        edge_vec_norm, edge_attr, row_data, row_indptr
-    )
+    return torch.ops.tensornet.radial_message_passing_fwd_primitive(edge_vec_norm, edge_attr, row_data, row_indptr)

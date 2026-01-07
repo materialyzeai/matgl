@@ -37,6 +37,7 @@ from .tensornet_radial_mp import generate_radial_message_passing
 from .utils import add_module, get_module, get_stream
 
 import warp as wp
+
 wp.init()
 
 

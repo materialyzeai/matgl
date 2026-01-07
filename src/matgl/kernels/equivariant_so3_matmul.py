@@ -186,18 +186,12 @@ def generate_tensor_matmul_so3_3x3(dtype: str):
 
 add_module("tensor_matmul_so3_3x3_fwd", ["float64"], tensor_matmul_so3_3x3_fwd_fp64)
 add_module("tensor_matmul_so3_3x3_bwd", ["float64"], tensor_matmul_so3_3x3_bwd_fp64)
-add_module(
-    "tensor_matmul_so3_3x3_bwd_bwd", ["float64"], tensor_matmul_so3_3x3_bwd_bwd_fp64
-)
+add_module("tensor_matmul_so3_3x3_bwd_bwd", ["float64"], tensor_matmul_so3_3x3_bwd_bwd_fp64)
 
 add_module("tensor_matmul_so3_3x3_fwd", ["float32"], tensor_matmul_so3_3x3_fwd_fp32)
 add_module("tensor_matmul_so3_3x3_bwd", ["float32"], tensor_matmul_so3_3x3_bwd_fp32)
-add_module(
-    "tensor_matmul_so3_3x3_bwd_bwd", ["float32"], tensor_matmul_so3_3x3_bwd_bwd_fp32
-)
+add_module("tensor_matmul_so3_3x3_bwd_bwd", ["float32"], tensor_matmul_so3_3x3_bwd_bwd_fp32)
 
 add_module("tensor_matmul_so3_3x3_fwd", ["float16"], tensor_matmul_so3_3x3_fwd_fp16)
 add_module("tensor_matmul_so3_3x3_bwd", ["float16"], tensor_matmul_so3_3x3_bwd_fp16)
-add_module(
-    "tensor_matmul_so3_3x3_bwd_bwd", ["float16"], tensor_matmul_so3_3x3_bwd_bwd_fp16
-)
+add_module("tensor_matmul_so3_3x3_bwd_bwd", ["float16"], tensor_matmul_so3_3x3_bwd_bwd_fp16)

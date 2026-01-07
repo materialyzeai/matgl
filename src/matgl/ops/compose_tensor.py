@@ -44,9 +44,7 @@ from matgl.kernels import get_module, get_stream
 def _(x: Tensor, y: Tensor, z: Tensor) -> Tensor:
     stream = get_stream(x.device)
     device = wp.device_from_torch(x.device)
-    output = torch.empty(
-        (x.shape[0], 3, 3, x.shape[-1]), dtype=x.dtype, device=x.device
-    )
+    output = torch.empty((x.shape[0], 3, 3, x.shape[-1]), dtype=x.dtype, device=x.device)
 
     x_wp = wp.from_torch(x.detach(), return_ctype=True)
     y_wp = wp.from_torch(y.detach(), return_ctype=True)
@@ -182,9 +180,7 @@ def compose_tensor_fwd(*args):
 @torch.compiler.allow_in_graph
 def compose_tensor_bwd(ctx, grad_output):
     x, y, z = ctx.saved_tensors
-    dx, dy, dz = torch.ops.tensornet.compose_tensor_bwd_primitive(
-        grad_output, x, y, z
-    )
+    dx, dy, dz = torch.ops.tensornet.compose_tensor_bwd_primitive(grad_output, x, y, z)
     return dx, dy, dz
 
 

@@ -42,7 +42,6 @@ from matgl.kernels import get_module, get_stream
     device_types=["cpu", "cuda"],
 )
 def _(x: Tensor) -> Tensor:
-
     stream = get_stream(x.device)
     device = wp.device_from_torch(x.device)
     output = torch.empty((x.shape[0], 3 * x.shape[-1]), dtype=x.dtype, device=x.device)
@@ -72,10 +71,7 @@ def _(x: Tensor) -> Tensor:
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
-def _(
-    grad_output: Tensor, x: Tensor
-) -> List[Tensor]:
-
+def _(grad_output: Tensor, x: Tensor) -> List[Tensor]:
     stream = get_stream(x.device)
     device = wp.device_from_torch(x.device)
     grad_x = torch.empty_like(x)
@@ -97,9 +93,7 @@ def _(
 
 
 @torch.library.register_fake("tensornet::tensor_norm3_bwd_primitive")
-def _(
-    grad_output: Tensor, x: Tensor
-) -> List[Tensor]:
+def _(grad_output: Tensor, x: Tensor) -> List[Tensor]:
     return [torch.empty_like(x)]
 
 
@@ -194,9 +188,7 @@ def tensor_norm3_bwd_bwd(ctx, *grad_outputs):
     if grad_grad_x is None:
         grad_grad_x = torch.zeros_like(x)
 
-    outputs = torch.ops.tensornet.tensor_norm3_bwd_bwd_primitive(
-        grad_grad_x, x, grad_output
-    )
+    outputs = torch.ops.tensornet.tensor_norm3_bwd_bwd_primitive(grad_grad_x, x, grad_output)
     return outputs[0], outputs[1]
 
 

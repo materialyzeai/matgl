@@ -82,7 +82,7 @@ def compute_pair_vector_and_distance(
 
 def tensor_norm(tensor):
     """Computes Frobenius norm."""
-    return (tensor*tensor).sum((-3, -2))    
+    return (tensor * tensor).sum((-3, -2))
 
 
 class TensorEmbedding(nn.Module):
@@ -129,13 +129,7 @@ class TensorEmbedding(nn.Module):
         d_proj2 = nn.Linear(in_features, units, bias=True, dtype=dtype)
         d_proj3 = nn.Linear(in_features, units, bias=True, dtype=dtype)
 
-        layer = torch.nn.utils.skip_init(
-            nn.Linear,
-            in_features,
-            3 * units,
-            bias=True,
-            dtype=dtype
-        )
+        layer = torch.nn.utils.skip_init(nn.Linear, in_features, 3 * units, bias=True, dtype=dtype)
         with torch.no_grad():
             layer.weight.copy_(torch.cat([d_proj1.weight, d_proj2.weight, d_proj3.weight], dim=0))
             layer.bias.copy_(torch.cat([d_proj1.bias, d_proj2.bias, d_proj3.bias], dim=0))
@@ -145,25 +139,13 @@ class TensorEmbedding(nn.Module):
         """Reset distance_proj weights using 3 temp layers to match reference RNG pattern."""
         dtype = self.distance_proj.weight.dtype
         d_proj1 = torch.nn.utils.skip_init(
-            nn.Linear,
-            self.distance_proj.in_features,
-            self.units,
-            bias=True,
-            dtype=dtype
+            nn.Linear, self.distance_proj.in_features, self.units, bias=True, dtype=dtype
         )
         d_proj2 = torch.nn.utils.skip_init(
-            nn.Linear,
-            self.distance_proj.in_features,
-            self.units,
-            bias=True,
-            dtype=dtype
-        )   
+            nn.Linear, self.distance_proj.in_features, self.units, bias=True, dtype=dtype
+        )
         d_proj3 = torch.nn.utils.skip_init(
-            nn.Linear,
-            self.distance_proj.in_features,
-            self.units,
-            bias=True,
-            dtype=dtype
+            nn.Linear, self.distance_proj.in_features, self.units, bias=True, dtype=dtype
         )
         d_proj1.reset_parameters()
         d_proj2.reset_parameters()
@@ -229,22 +211,15 @@ class TensorEmbedding(nn.Module):
         edge_attr = self.distance_proj(edge_attr).view(-1, 3, self.units)
 
         # Get atomic number messages
-        zij = x.index_select(0, edge_index.t().reshape(-1)).view(
-                -1, self.units * 2
-            )
+        zij = x.index_select(0, edge_index.t().reshape(-1)).view(-1, self.units * 2)
         Zij = self.emb2(zij)  # (num_edges, units)
 
         # Create edge attributes with Zij
-        edge_attr_processed = \
-            edge_attr.view(-1, 3, self.units) \
-            * C.view(-1, 1, 1) \
-            * Zij.view(-1, 1, self.units)
+        edge_attr_processed = edge_attr.view(-1, 3, self.units) * C.view(-1, 1, 1) * Zij.view(-1, 1, self.units)
 
         # Radial message passing
         edge_vec_norm = edge_vec / torch.norm(edge_vec, dim=1, keepdim=True).clamp(min=1e-6)
-        I, A, S = fn_radial_message_passing(
-            edge_vec_norm, edge_attr_processed, col_data, col_indptr
-        )
+        I, A, S = fn_radial_message_passing(edge_vec_norm, edge_attr_processed, col_data, col_indptr)
 
         # Compose initial tensor to get proper shape for norm computation
         X = fn_compose_tensor(I, A, S)  # (num_nodes, 3, 3, units)
@@ -321,7 +296,7 @@ class TensorNetInteraction(nn.Module):
         row_indptr: torch.Tensor,
         col_data: torch.Tensor,
         col_indices: torch.Tensor,
-        col_indptr: torch.Tensor,        
+        col_indptr: torch.Tensor,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -339,14 +314,14 @@ class TensorNetInteraction(nn.Module):
         edge_attr_processed = edge_attr
         for linear_scalar in self.linears_scalar:
             edge_attr_processed = self.act(linear_scalar(edge_attr_processed))
-        edge_attr_processed = (edge_attr_processed * C.view(-1, 1)).view(
-            edge_attr.shape[0], self.units, 3
-        ).mT.contiguous()  # (num_edges, 3, units)
+        edge_attr_processed = (
+            (edge_attr_processed * C.view(-1, 1)).view(edge_attr.shape[0], self.units, 3).mT.contiguous()
+        )  # (num_edges, 3, units)
 
         # Normalize input tensor
         # For X with shape (num_nodes, 3, 3, units), we need to sum over (-3, -2)
         # which are the (3, 3) spatial dimensions to get (num_nodes, units)
-        norm_X = (X*X).sum((-3, -2)) + 1  # (num_nodes, units)
+        norm_X = (X * X).sum((-3, -2)) + 1  # (num_nodes, units)
         X = X / norm_X.view(-1, 1, 1, X.shape[-1])
 
         # Decompose input tensor
@@ -601,23 +576,15 @@ class TensorNet(MatGLModel):
         bond_vec, bond_dist = compute_pair_vector_and_distance(pos, edge_index, pbc_offshift)
 
         # perpare graph indices for message passing
-        row_data, row_indices, row_indptr, col_data, col_indices, col_indptr = (
-                graph_transform(edge_index.int(), z.shape[0])
+        row_data, row_indices, row_indptr, col_data, col_indices, col_indptr = graph_transform(
+            edge_index.int(), z.shape[0]
         )
 
         # Expand distances with radial basis functions
         edge_attr = self.bond_expansion(bond_dist)
 
         # Embedding layer
-        X = self.tensor_embedding(
-            z,
-            edge_index,
-            bond_dist,
-            bond_vec,
-            edge_attr,
-            col_data,
-            col_indptr
-        )
+        X = self.tensor_embedding(z, edge_index, bond_dist, bond_vec, edge_attr, col_data, col_indptr)
 
         # Interaction layers
         for layer in self.layers:

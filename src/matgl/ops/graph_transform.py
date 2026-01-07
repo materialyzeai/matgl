@@ -91,19 +91,11 @@ def _(
     row_indptr_wp = wp.from_torch(row_indptr, return_ctype=True)
     col_indptr_wp = wp.from_torch(col_indptr, return_ctype=True)
 
-    row_indices = torch.empty(
-        edge_index.shape[1], dtype=torch.int32, device=edge_index.device
-    )
-    col_indices = torch.empty(
-        edge_index.shape[1], dtype=torch.int32, device=edge_index.device
-    )
+    row_indices = torch.empty(edge_index.shape[1], dtype=torch.int32, device=edge_index.device)
+    col_indices = torch.empty(edge_index.shape[1], dtype=torch.int32, device=edge_index.device)
 
-    row_data = torch.empty(
-        edge_index.shape[1], dtype=torch.int32, device=edge_index.device
-    )
-    col_data = torch.empty(
-        edge_index.shape[1], dtype=torch.int32, device=edge_index.device
-    )
+    row_data = torch.empty(edge_index.shape[1], dtype=torch.int32, device=edge_index.device)
+    col_data = torch.empty(edge_index.shape[1], dtype=torch.int32, device=edge_index.device)
 
     row_indices_wp = wp.from_torch(row_indices, return_ctype=True)
     col_indices_wp = wp.from_torch(col_indices, return_ctype=True)
@@ -140,37 +132,24 @@ def _(
     row_indptr: Tensor,
     col_indptr: Tensor,
 ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-    output = torch.empty(
-        edge_index.shape[1], dtype=torch.int32, device=edge_index.device
-    )
-    output2 = torch.empty(
-        edge_index.shape[1], dtype=torch.int32, device=edge_index.device
-    )
-    output3 = torch.empty(
-        edge_index.shape[1], dtype=torch.int32, device=edge_index.device
-    )
-    output4 = torch.empty(
-        edge_index.shape[1], dtype=torch.int32, device=edge_index.device
-    )
+    output = torch.empty(edge_index.shape[1], dtype=torch.int32, device=edge_index.device)
+    output2 = torch.empty(edge_index.shape[1], dtype=torch.int32, device=edge_index.device)
+    output3 = torch.empty(edge_index.shape[1], dtype=torch.int32, device=edge_index.device)
+    output4 = torch.empty(edge_index.shape[1], dtype=torch.int32, device=edge_index.device)
     return output, output2, output3, output4
 
 
 @torch.compiler.allow_in_graph
-def graph_transform(
-    edge_index: Tensor, num_nodes: int
-) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
-    row_count, col_count = torch.ops.nvtnet.count_row_col_primitive(
-        edge_index, num_nodes
+def graph_transform(edge_index: Tensor, num_nodes: int) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    row_count, col_count = torch.ops.nvtnet.count_row_col_primitive(edge_index, num_nodes)
+    row_indptr, col_indptr = (
+        torch.cumsum(row_count, dim=0, dtype=torch.int32),
+        torch.cumsum(col_count, dim=0, dtype=torch.int32),
     )
-    row_indptr, col_indptr = torch.cumsum(
-        row_count, dim=0, dtype=torch.int32
-    ), torch.cumsum(col_count, dim=0, dtype=torch.int32)
     (
         row_indices,
         col_indices,
         row_data,
         col_data,
-    ) = torch.ops.nvtnet.convert_to_sparse_primitive(
-        edge_index, row_count, col_count, row_indptr, col_indptr
-    )
+    ) = torch.ops.nvtnet.convert_to_sparse_primitive(edge_index, row_count, col_count, row_indptr, col_indptr)
     return row_data, row_indices, row_indptr, col_data, col_indices, col_indptr

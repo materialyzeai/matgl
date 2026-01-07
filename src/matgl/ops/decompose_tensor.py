@@ -42,7 +42,6 @@ from matgl.kernels import get_module, get_stream
     device_types=["cpu", "cuda"],
 )
 def _(x: Tensor) -> List[Tensor]:
-
     stream = get_stream(x.device)
     device = wp.device_from_torch(x.device)
     output_i = torch.empty((x.shape[0], 1, x.shape[-1]), dtype=x.dtype, device=x.device)
@@ -80,10 +79,7 @@ def _(x: Tensor) -> List[Tensor]:
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
-def _(
-    grad_output_i: Tensor, grad_output_a: Tensor, grad_output_s: Tensor, x: Tensor
-) -> List[Tensor]:
-
+def _(grad_output_i: Tensor, grad_output_a: Tensor, grad_output_s: Tensor, x: Tensor) -> List[Tensor]:
     stream = get_stream(x.device)
     device = wp.device_from_torch(x.device)
     grad_x = torch.empty_like(x)
@@ -107,9 +103,7 @@ def _(
 
 
 @torch.library.register_fake("tensornet::decompose_tensor_bwd_primitive")
-def _(
-    grad_output_i: Tensor, grad_output_a: Tensor, grad_output_s: Tensor, x: Tensor
-) -> List[Tensor]:
+def _(grad_output_i: Tensor, grad_output_a: Tensor, grad_output_s: Tensor, x: Tensor) -> List[Tensor]:
     return [torch.empty_like(x)]
 
 
@@ -133,15 +127,9 @@ def _(
     grad_grad_output_a = torch.empty_like(grad_output_a)
     grad_grad_output_s = torch.empty_like(grad_output_s)
 
-    grad_grad_output_i_wp = wp.from_torch(
-        grad_grad_output_i.detach(), return_ctype=True
-    )
-    grad_grad_output_a_wp = wp.from_torch(
-        grad_grad_output_a.detach(), return_ctype=True
-    )
-    grad_grad_output_s_wp = wp.from_torch(
-        grad_grad_output_s.detach(), return_ctype=True
-    )
+    grad_grad_output_i_wp = wp.from_torch(grad_grad_output_i.detach(), return_ctype=True)
+    grad_grad_output_a_wp = wp.from_torch(grad_grad_output_a.detach(), return_ctype=True)
+    grad_grad_output_s_wp = wp.from_torch(grad_grad_output_s.detach(), return_ctype=True)
 
     grad_grad_x_wp = wp.from_torch(grad_grad_x.detach(), return_ctype=True)
 
@@ -197,9 +185,7 @@ def decompose_tensor_fwd(*args):
 def decompose_tensor_bwd(ctx, *grad_outputs):
     (x,) = ctx.saved_tensors
     grad_output_i, grad_output_a, grad_output_s = grad_outputs[0]
-    dx = torch.ops.tensornet.decompose_tensor_bwd_primitive(
-        grad_output_i, grad_output_a, grad_output_s, x
-    )
+    dx = torch.ops.tensornet.decompose_tensor_bwd_primitive(grad_output_i, grad_output_a, grad_output_s, x)
     return dx[0]
 
 

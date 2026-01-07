@@ -37,6 +37,7 @@ from .tensornet_radial_mp import fn_radial_message_passing
 from .graph_transform import graph_transform
 
 import warp as wp
+
 wp.init()
 
 __all__ = [
