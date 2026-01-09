@@ -33,7 +33,7 @@ import warp as wp
 
 
 @wp.kernel
-def count_row_col(  # noqa: D103
+def count_row_col(
     edge_index: wp.array(ndim=2, dtype=wp.int32),
     row_count: wp.array(ndim=1, dtype=wp.int32),
     col_count: wp.array(ndim=1, dtype=wp.int32),
@@ -46,7 +46,7 @@ def count_row_col(  # noqa: D103
 
 
 @wp.kernel
-def convert_to_sparse(  # noqa: D103
+def convert_to_sparse(
     edge_index: wp.array(ndim=2, dtype=wp.int32),
     row_count: wp.array(ndim=1, dtype=wp.int32),
     col_count: wp.array(ndim=1, dtype=wp.int32),

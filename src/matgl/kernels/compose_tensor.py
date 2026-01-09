@@ -54,7 +54,7 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
     dim = 3 if use_irmem else 4
 
     def compose_tensor_fwd(
-        I: wp.array(ndim=dim, dtype=dtype_wp),  # noqa: E741
+        I: wp.array(ndim=dim, dtype=dtype_wp),
         A: wp.array(ndim=dim, dtype=dtype_wp),
         S: wp.array(ndim=dim, dtype=dtype_wp),
         X: wp.array(ndim=4, dtype=dtype_wp),

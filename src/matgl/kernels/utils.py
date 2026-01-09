@@ -34,9 +34,7 @@ MODULES = {}
 
 
 def get_module(name: str, dtype: list[str]):
-    """
-    Get the module for the given name and dtype
-    """
+    """Get the module for the given name and dtype."""
     full_name = name + "_" + "_".join(get_dtype(d) for d in dtype)
     if full_name not in MODULES:
         print(f"Module {full_name} not found in MODULES dictionary")
@@ -46,9 +44,7 @@ def get_module(name: str, dtype: list[str]):
 
 
 def add_module(name: str, dtype: list[str], kernel: wp.Kernel):
-    """
-    Add the module for the given name and dtype
-    """
+    """Add the module for the given name and dtype."""
     full_name = name + "_" + "_".join(get_dtype(d) for d in dtype)
     if full_name not in MODULES:
         MODULES[full_name] = kernel
@@ -56,10 +52,7 @@ def add_module(name: str, dtype: list[str], kernel: wp.Kernel):
 
 
 def get_dtype(dtype: str):
-    """
-    Get the dtype for the given dtype
-    WIP
-    """
+    """Get the dtype string representation for the given dtype (WIP)."""
     if dtype.endswith("16"):
         return "fp16"
     if dtype.endswith("32"):
@@ -70,10 +63,7 @@ def get_dtype(dtype: str):
 
 
 def get_wp_fp_dtype(dtype: str):
-    """
-    Get the warp dtype for the given dtype
-    WIP
-    """
+    """Get the warp dtype for the given dtype (WIP)."""
     if dtype.endswith("16"):
         return wp.float16
     if dtype.endswith("32"):
@@ -84,9 +74,7 @@ def get_wp_fp_dtype(dtype: str):
 
 
 def list_modules():
-    """
-    List all modules in the MODULES dictionary
-    """
+    """List all modules in the MODULES dictionary."""
     print("Available modules:")
     for name in MODULES:
         print(f"  - {name}")
@@ -94,9 +82,7 @@ def list_modules():
 
 
 def get_stream(device: torch.device):
-    """
-    Get the stream for the given device
-    """
+    """Get the stream for the given device."""
     if device.type == "cuda":
         return wp.stream_from_torch(torch.cuda.current_stream(device))
     return None

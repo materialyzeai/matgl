@@ -57,7 +57,7 @@ def generate_decompose_tensor(dtype: str, h_last: bool = True, use_irmem: bool =
 
     def decompose_tensor_fwd(
         X: wp.array(ndim=4, dtype=dtype_wp),
-        I: wp.array(ndim=dim, dtype=dtype_wp),  # noqa: E741
+        I: wp.array(ndim=dim, dtype=dtype_wp),
         A: wp.array(ndim=dim, dtype=dtype_wp),
         S: wp.array(ndim=dim, dtype=dtype_wp),
     ):
