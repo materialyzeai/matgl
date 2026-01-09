@@ -16,7 +16,7 @@ from matgl.models._tensornet_pyg import TensorNet
 class TestTensorNet:
     def test_model(self, graph_MoS_pyg):
         torch.manual_seed(0)
-        #torch.use_deterministic_algorithms(True)
+        # torch.use_deterministic_algorithms(True)
 
         # Optional regression-check values
         EXPECTED = {

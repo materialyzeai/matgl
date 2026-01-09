@@ -26,6 +26,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """This module implements the interface to the neighbor list in the nvalchemi-toolkit-ops package."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -44,8 +45,8 @@ _default_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 def neighbor_list_from_structure(
     structure: Structure,
     cutoff: float,
-    compute_distances: bool=True,
-    density_guess: float=0.3,
+    compute_distances: bool = True,
+    density_guess: float = 0.3,
     device: str | torch.device | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor]:
     """Get the neighbor list from the PyMatGen Structure using the nvalchemi-toolkit-ops package."""
@@ -67,27 +68,21 @@ def neighbor_list_from_structure(
     if compute_distances:
         distances = _compute_distances(
             src_id=src_id,
-                dst_id=dst_id,
-                positions=positions,
-                cell=cell,
-                unit_shifts=unit_shifts,
-            )
+            dst_id=dst_id,
+            positions=positions,
+            cell=cell,
+            unit_shifts=unit_shifts,
+        )
     else:
         distances = None
-    return (
-        src_id,
-        dst_id,
-        distances,
-        unit_shifts,
-        positions
-    )
+    return (src_id, dst_id, distances, unit_shifts, positions)
 
 
 def neighbor_list_from_molecule(
     molecule: Molecule,
     cutoff: float,
-    compute_distances: bool=True,
-    density_guess: float=0.3,
+    compute_distances: bool = True,
+    density_guess: float = 0.3,
     device: str | torch.device | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor]:
     """Get the neighbor list from the PyMatGen Structure using the nvalchemi-toolkit-ops package."""
@@ -114,18 +109,14 @@ def neighbor_list_from_molecule(
     else:
         distances = None
 
-    return (
-        src_id,
-        dst_id,
-        distances,
-        positions
-    )
+    return (src_id, dst_id, distances, positions)
+
 
 def neighbor_list_from_ase(
     atoms: Atoms,
     cutoff: float,
-    compute_distances: bool=True,
-    density_guess: float=0.3,
+    compute_distances: bool = True,
+    density_guess: float = 0.3,
     device: str | torch.device | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor]:
     """Get the neighbor list from the ASE Atoms using the nvalchemi-toolkit-ops package."""
@@ -160,13 +151,7 @@ def neighbor_list_from_ase(
         distances = None
     if unit_shifts is None:
         unit_shifts = torch.zeros(src_id.shape[0], 3, dtype=torch.float32, device=device)
-    return (
-        src_id,
-        dst_id,
-        distances,
-        unit_shifts,
-        positions
-    )
+    return (src_id, dst_id, distances, unit_shifts, positions)
 
 
 def _safe_nl(
@@ -174,7 +159,7 @@ def _safe_nl(
     cutoff: float,
     cell: torch.Tensor | None = None,
     pbc: torch.Tensor | None = None,
-    density_guess: float=0.3,
+    density_guess: float = 0.3,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, float]:
     """Get the neighbor list from the structure using the nvalchemi-toolkit-ops package."""
     max_neighbors = estimate_max_neighbors(cutoff, density_guess, safety_factor=1.0)
@@ -201,7 +186,9 @@ def _safe_nl(
             else:
                 raise e
     if ret is None:
-        raise ValueError(f"Unable to get neighbor list. Structure is too dense. Maximum density reached: {max_density} atoms/Å^3.")
+        raise ValueError(
+            f"Unable to get neighbor list. Structure is too dense. Maximum density reached: {max_density} atoms/Å^3."
+        )
 
     if pbc is not None:
         nblist, neighbor_ptr, unit_shifts = ret

@@ -246,8 +246,8 @@ class MGLDataset(Dataset):
                 # Converter returns (Data, lattice, state_attr)
                 assert self.converter is not None, "converter must be provided"
                 data, lattice, state_attr = self.converter.get_graph(structure)
-                data = data.to(device='cpu')
-                lattice = lattice.to(device='cpu')
+                data = data.to(device="cpu")
+                lattice = lattice.to(device="cpu")
 
                 graphs.append(data)
                 lattices.append(lattice)

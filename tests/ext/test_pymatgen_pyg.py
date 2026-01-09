@@ -24,9 +24,15 @@ class TestPmg2Graph:
         # check the number of edges
         assert np.allclose(graph.num_edges, 20)
         # check the src_ids
-        assert np.allclose(graph.edge_index[0].sort().values.cpu().numpy(), [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4])
+        assert np.allclose(
+            graph.edge_index[0].sort().values.cpu().numpy(),
+            [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4],
+        )
         # check the dst_ids
-        assert np.allclose(graph.edge_index[1].sort().values.cpu().numpy(), [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4])
+        assert np.allclose(
+            graph.edge_index[1].sort().values.cpu().numpy(),
+            [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4],
+        )
         # check the atomic features of atom C
         assert np.allclose(graph.node_type.detach().cpu().numpy()[0], 1)
         # check the atomic features of atom H
