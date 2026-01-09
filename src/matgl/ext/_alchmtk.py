@@ -187,8 +187,7 @@ def _safe_nl(
                 raise e
     if ret is None:
         raise ValueError(
-            "Unable to get neighbor list. Structure is too dense. "
-            f"Maximum density reached: {max_density} atoms/Å^3."
+            f"Unable to get neighbor list. Structure is too dense. Maximum density reached: {max_density} atoms/Å^3."
         )
 
     if pbc is not None:
