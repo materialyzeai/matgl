@@ -106,3 +106,56 @@ class TestTensorNet:
         )
         output = model(g=graph)
         assert torch.numel(output) == 1
+
+    def test_backward(self, graph_MoS_pyg):
+        """Test cell gradient (dE/dcell)."""
+        torch.manual_seed(0)
+        torch.use_deterministic_algorithms(True)
+
+        EXPECTED_CELL_GRAD = torch.tensor([
+            [-0.000967, 0.000000, 0.000000],
+            [0.000000, -0.000967, 0.000000],
+            [0.000000, 0.000000, -0.000967],
+        ])
+
+        structure, graph, _ = graph_MoS_pyg
+        cell = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th).requires_grad_(True)
+
+        graph.pbc_offshift = torch.matmul(graph.pbc_offset, cell)
+        graph.pos = graph.frac_coords @ cell
+
+        model = TensorNet(is_intensive=False, activation_type="swish")
+        model.train()
+
+        energy = model(g=graph)
+        cell_grad = torch.autograd.grad(energy, cell, create_graph=True)[0]
+
+        assert torch.allclose(cell_grad, EXPECTED_CELL_GRAD, atol=1e-6)
+
+    def test_double_backward(self, graph_MoS_pyg):
+        """Test double backward: loss = sum(cell_grad^2), compare cell.grad."""
+        torch.manual_seed(0)
+        torch.use_deterministic_algorithms(True)
+
+        EXPECTED_CELL_GRAD2 = torch.tensor([
+            [-0.000010, -0.000000, -0.000000],
+            [-0.000000, -0.000010, -0.000000],
+            [-0.000000, -0.000000, -0.000010],
+        ])
+
+        structure, graph, _ = graph_MoS_pyg
+        cell = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th).requires_grad_(True)
+        cell.retain_grad()
+
+        graph.pbc_offshift = torch.matmul(graph.pbc_offset, cell)
+        graph.pos = graph.frac_coords @ cell
+
+        model = TensorNet(is_intensive=False, activation_type="swish")
+        model.train()
+
+        energy = model(g=graph)
+        cell_grad = torch.autograd.grad(energy, cell, create_graph=True)[0]
+        loss = (cell_grad * cell_grad).sum()
+        loss.backward()
+
+        assert torch.allclose(cell.grad, EXPECTED_CELL_GRAD2, atol=1e-6)

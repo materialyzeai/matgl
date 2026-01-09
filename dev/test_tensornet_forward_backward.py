@@ -25,7 +25,6 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
 """Compare forward/backward/double-backward between matgl-main and current TensorNet."""
 
 from __future__ import annotations
@@ -37,11 +36,6 @@ from typing import Any
 
 import torch
 from pymatgen.core import Structure
-
-
-# =============================================================================
-# Configuration
-# =============================================================================
 
 DEFAULT_MATGL_MAIN_PATH = str(Path(__file__).parent.parent / "matgl-main" / "src")
 
@@ -58,10 +52,6 @@ MODEL_CONFIG = {
 }
 
 
-# =============================================================================
-# Utilities
-# =============================================================================
-
 def clear_matgl_modules() -> None:
     """Remove all matgl modules from sys.modules."""
     for mod in [k for k in sys.modules if k.startswith("matgl")]:
@@ -69,17 +59,17 @@ def clear_matgl_modules() -> None:
 
 
 def print_section(title: str) -> None:
-    """Print a section header."""
+    """Print a formatted section header."""
     print(f"\n{'=' * 70}\n{title}\n{'=' * 70}")
 
 
 def load_structure(path: str) -> Structure:
-    """Load structure from file using pymatgen."""
+    """Load structure from file."""
     return Structure.from_file(path)
 
 
 def get_element_types(structure: Structure) -> tuple[str, ...]:
-    """Extract sorted unique element symbols from structure."""
+    """Extract sorted unique element symbols."""
     return tuple(sorted({site.specie.symbol for site in structure}))
 
 
@@ -90,7 +80,7 @@ def build_graph(
     compute_bond: Any = None,
     requires_grad: bool = False,
 ) -> Any:
-    """Build graph from structure."""
+    """Build graph from structure with optional gradient tracking."""
     graph, lat, _ = converter.get_graph(structure)
     pos = graph.frac_coords @ lat[0]
     graph.pos = pos.clone().detach().requires_grad_(requires_grad) if requires_grad else pos
@@ -104,12 +94,8 @@ def build_graph(
     return graph.to(device)
 
 
-# =============================================================================
-# Comparison Functions
-# =============================================================================
-
 def compare_tensors(name: str, t1: torch.Tensor, t2: torch.Tensor, atol: float = 1e-6) -> bool:
-    """Compare two tensors, return True if matching."""
+    """Compare two tensors element-wise."""
     if t1.shape != t2.shape:
         print(f"  {name}: SHAPE MISMATCH {t1.shape} vs {t2.shape}")
         return False
@@ -124,13 +110,13 @@ def compare_tensors(name: str, t1: torch.Tensor, t2: torch.Tensor, atol: float =
 
 
 def compare_weights(ref_model: Any, cur_model: Any) -> bool:
-    """Compare model weights, handling distance_proj1/2/3 -> distance_proj mapping."""
+    """Compare model weights with distance_proj layer remapping."""
     print_section("Weight Comparison")
 
     ref_sd, cur_sd = ref_model.state_dict(), cur_model.state_dict()
     all_match = True
 
-    # Handle merged distance_proj layers
+    # Handle merged distance_proj layers (distance_proj1/2/3 -> distance_proj)
     dp_keys = [f"tensor_embedding.distance_proj{i}" for i in range(1, 4)]
     if f"{dp_keys[0]}.weight" in ref_sd:
         ref_w = torch.cat([ref_sd[f"{k}.weight"] for k in dp_keys], dim=0)
@@ -140,7 +126,6 @@ def compare_weights(ref_model: Any, cur_model: Any) -> bool:
         all_match &= compare_tensors("weight", ref_w, cur_sd["tensor_embedding.distance_proj.weight"])
         all_match &= compare_tensors("bias", ref_b, cur_sd["tensor_embedding.distance_proj.bias"])
 
-    # Compare remaining parameters
     skip = {f"{k}.{p}" for k in dp_keys for p in ("weight", "bias")}
     print("\n--- Other Parameters ---")
 
@@ -164,7 +149,7 @@ def compare_weights(ref_model: Any, cur_model: Any) -> bool:
 def compare_forward(
     ref_model: Any, cur_model: Any, ref_graph: Any, cur_graph: Any, device: torch.device
 ) -> bool:
-    """Compare forward pass outputs."""
+    """Compare forward pass energy predictions."""
     print_section("Forward Pass")
 
     ref_model.eval()
@@ -186,8 +171,8 @@ def compare_forward(
 
 def compare_backward(
     ref_model: Any, cur_model: Any, ref_graph: Any, cur_graph: Any, device: torch.device
-) -> tuple[bool, torch.Tensor, torch.Tensor, Any, Any]:
-    """Compare backward pass (forces = -dE/dpos)."""
+) -> bool:
+    """Compare forces (F = -dE/dpos)."""
     print_section("Backward Pass (Forces)")
 
     ref_model.train()
@@ -196,7 +181,7 @@ def compare_backward(
 
     def get_forces(model, graph):
         energy = model(g=graph, state_attr=state_attr)
-        return -torch.autograd.grad(energy, graph.pos, create_graph=True, retain_graph=True)[0]
+        return -torch.autograd.grad(energy, graph.pos, create_graph=True)[0]
 
     ref_f = get_forces(ref_model, ref_graph)
     cur_f = get_forces(cur_model, cur_graph)
@@ -209,28 +194,46 @@ def compare_backward(
 
     match = diff.max().item() < 1e-5
     print(f"Result:    {'PASS' if match else 'FAIL'}")
-    return match, ref_f, cur_f, ref_graph, cur_graph
+    return match
 
 
 def compare_double_backward(
-    ref_forces: torch.Tensor, cur_forces: torch.Tensor, ref_graph: Any, cur_graph: Any
+    ref_model: Any, cur_model: Any, ref_graph: Any, cur_graph: Any, device: torch.device
 ) -> bool:
-    """Compare Hessian-vector product: d(F·v)/dpos."""
-    print_section("Double Backward (Hessian-Vector Product)")
+    """Compare position gradients via loss = sum(forces^2)."""
+    print_section("Double Backward (Position Gradients)")
 
-    torch.manual_seed(123)
-    v = torch.randn_like(ref_forces)
+    ref_model.train()
+    cur_model.train()
+    state_attr = torch.tensor([0.0, 0.0], device=device)
 
-    ref_Hv = torch.autograd.grad((ref_forces * v).sum(), ref_graph.pos, retain_graph=True)[0]
-    cur_Hv = torch.autograd.grad((cur_forces * v).sum(), cur_graph.pos, retain_graph=True)[0]
+    ref_graph.pos.retain_grad()
+    cur_graph.pos.retain_grad()
 
-    print(f"Reference: mean={ref_Hv.mean():.6f}, std={ref_Hv.std():.6f}")
-    print(f"Current:   mean={cur_Hv.mean():.6f}, std={cur_Hv.std():.6f}")
+    # Reference
+    ref_energy = ref_model(g=ref_graph, state_attr=state_attr)
+    ref_forces = torch.autograd.grad(ref_energy, ref_graph.pos, create_graph=True)[0]
+    ref_loss = (ref_forces * ref_forces).sum()
+    ref_loss.backward()
+    ref_pos_grad = ref_graph.pos.grad.clone()
 
-    if ref_Hv.abs().max() < 1e-10 or cur_Hv.abs().max() < 1e-10:
-        print("WARNING: Hessian-vector product is nearly zero")
+    # Current
+    cur_energy = cur_model(g=cur_graph, state_attr=state_attr)
+    cur_forces = torch.autograd.grad(cur_energy, cur_graph.pos, create_graph=True)[0]
+    cur_loss = (cur_forces * cur_forces).sum()
+    cur_loss.backward()
+    cur_pos_grad = cur_graph.pos.grad.clone()
 
-    diff = (ref_Hv - cur_Hv).abs()
+    forces_diff = (ref_forces - cur_forces).abs()
+    print(f"Forces:    max_diff={forces_diff.max():.2e}, mean_diff={forces_diff.mean():.2e}")
+
+    print(f"Reference pos.grad: mean={ref_pos_grad.mean():.6f}, std={ref_pos_grad.std():.6f}")
+    print(f"Current pos.grad:   mean={cur_pos_grad.mean():.6f}, std={cur_pos_grad.std():.6f}")
+
+    if ref_pos_grad.abs().max() < 1e-10 or cur_pos_grad.abs().max() < 1e-10:
+        print("WARNING: Position gradient is nearly zero")
+
+    diff = (ref_pos_grad - cur_pos_grad).abs()
     print(f"Diff:      max={diff.max():.2e}, mean={diff.mean():.2e}")
 
     match = diff.max().item() < 1e-4
@@ -238,12 +241,8 @@ def compare_double_backward(
     return match
 
 
-# =============================================================================
-# Main
-# =============================================================================
-
 def main(structure_path: str, matgl_main_path: str, seed: int = 42) -> bool:
-    """Run all comparison tests."""
+    """Run all comparison tests between reference and current implementations."""
     print_section("TensorNet Comparison: matgl-main vs Current")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -256,7 +255,7 @@ def main(structure_path: str, matgl_main_path: str, seed: int = 42) -> bool:
 
     model_config = {**MODEL_CONFIG, "element_types": element_types}
 
-    # Load reference model (matgl-main)
+    # Reference model (matgl-main)
     clear_matgl_modules()
     sys.path.insert(0, matgl_main_path)
 
@@ -270,10 +269,11 @@ def main(structure_path: str, matgl_main_path: str, seed: int = 42) -> bool:
 
     ref_graph = build_graph(ref_converter, structure, device, ref_compute_bond)
     ref_graph_grad = build_graph(ref_converter, structure, device, ref_compute_bond, requires_grad=True)
+    ref_graph_grad2 = build_graph(ref_converter, structure, device, ref_compute_bond, requires_grad=True)
 
     sys.path.pop(0)
 
-    # Load current model (src)
+    # Current model (src)
     clear_matgl_modules()
 
     from matgl.models._tensornet_pyg import TensorNet as CurTensorNet
@@ -285,6 +285,7 @@ def main(structure_path: str, matgl_main_path: str, seed: int = 42) -> bool:
 
     cur_graph = build_graph(cur_converter, structure, device)
     cur_graph_grad = build_graph(cur_converter, structure, device, requires_grad=True)
+    cur_graph_grad2 = build_graph(cur_converter, structure, device, requires_grad=True)
 
     print(f"Models: {sum(p.numel() for p in ref_model.parameters())} params each")
 
@@ -292,13 +293,11 @@ def main(structure_path: str, matgl_main_path: str, seed: int = 42) -> bool:
     results = {
         "Weights": compare_weights(ref_model, cur_model),
         "Forward": compare_forward(ref_model, cur_model, ref_graph, cur_graph, device),
+        "Backward": compare_backward(ref_model, cur_model, ref_graph_grad, cur_graph_grad, device),
+        "Double Backward": compare_double_backward(
+            ref_model, cur_model, ref_graph_grad2, cur_graph_grad2, device
+        ),
     }
-
-    back_ok, ref_f, cur_f, ref_g, cur_g = compare_backward(
-        ref_model, cur_model, ref_graph_grad, cur_graph_grad, device
-    )
-    results["Backward"] = back_ok
-    results["Double Backward"] = compare_double_backward(ref_f, cur_f, ref_g, cur_g)
 
     # Summary
     print_section("SUMMARY")
