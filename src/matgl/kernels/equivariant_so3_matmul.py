@@ -26,6 +26,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """Warp kernels for SO(3)-equivariant 3x3 tensor matrix multiplication."""
+
 from __future__ import annotations
 
 import warp as wp
