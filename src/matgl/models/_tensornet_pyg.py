@@ -217,7 +217,7 @@ class TensorEmbedding(nn.Module):
 
         # Radial message passing
         edge_vec_norm = edge_vec / torch.norm(edge_vec, dim=1, keepdim=True).clamp(min=1e-6)
-        I, A, S = fn_radial_message_passing(edge_vec_norm, edge_attr_processed, col_data, col_indptr)
+        I, A, S = fn_radial_message_passing(edge_vec_norm, edge_attr_processed, col_data, col_indptr)  # noqa: E741
 
         # Compose initial tensor to get proper shape for norm computation
         X = fn_compose_tensor(I, A, S)  # (num_nodes, 3, 3, units)
@@ -235,7 +235,7 @@ class TensorEmbedding(nn.Module):
         norm_I, norm_A, norm_S = norm.unbind(dim=-1)
 
         # Apply norm to tensors
-        I = self.linears_tensor[0](I) * norm_I.unsqueeze(-2)
+        I = self.linears_tensor[0](I) * norm_I.unsqueeze(-2)  # noqa: E741
         A = self.linears_tensor[1](A) * norm_A.unsqueeze(-2)
         S = self.linears_tensor[2](S) * norm_S.unsqueeze(-2)
 
@@ -303,6 +303,12 @@ class TensorNetInteraction(nn.Module):
             edge_index: Edge indices, shape (2, num_edges)
             edge_weight: Edge weights (distances), shape (num_edges,)
             edge_attr: Edge attributes (RBF), shape (num_edges, num_rbf)
+            row_data: CSR row data indices for message passing.
+            row_indices: CSR row indices for message passing.
+            row_indptr: CSR row pointers for message passing.
+            col_data: CSC column data indices for message passing.
+            col_indices: CSC column indices for message passing.
+            col_indptr: CSC column pointers for message passing.
 
         Returns:
             X: Updated tensor representations, shape (num_nodes, 3, 3, units)
@@ -323,10 +329,10 @@ class TensorNetInteraction(nn.Module):
         X = X / norm_X.view(-1, 1, 1, X.shape[-1])
 
         # Decompose input tensor
-        I, A, S = fn_decompose_tensor(X)
+        I, A, S = fn_decompose_tensor(X)  # noqa: E741
 
         # Apply tensor linear transformations
-        I = self.linears_tensor[0](I)
+        I = self.linears_tensor[0](I)  # noqa: E741
         A = self.linears_tensor[1](A)
         S = self.linears_tensor[2](S)
 
@@ -353,14 +359,14 @@ class TensorNetInteraction(nn.Module):
             C = fn_tensor_matmul_o3_3x3(Y, msg)
         else:  # SO(3)
             C = 2 * fn_tensor_matmul_so3_3x3(Y, msg)
-        I, A, S = fn_decompose_tensor(C)
+        I, A, S = fn_decompose_tensor(C)  # noqa: E741
 
         # Normalize
         normp1 = (tensor_norm(C) + 1).unsqueeze(-2)
-        I, A, S = I / normp1, A / normp1, S / normp1
+        I, A, S = I / normp1, A / normp1, S / normp1  # noqa: E741
 
         # Final tensor transformations
-        I = self.linears_tensor[3](I)
+        I = self.linears_tensor[3](I)  # noqa: E741
         A = self.linears_tensor[4](A)
         S = self.linears_tensor[5](S)
         dX = fn_compose_tensor(I, A, S)

@@ -25,6 +25,7 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+"""Warp kernels for composing 3x3 tensors from I, A, S components."""
 from __future__ import annotations
 
 import warp as wp
@@ -33,6 +34,7 @@ from .utils import add_module, get_wp_fp_dtype
 
 
 def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = True):
+    """Generate Warp kernels for composing a 3x3 tensor from I, A, S components."""
     dtype_wp = get_wp_fp_dtype(dtype)
     if not use_irmem:
         raise ValueError(f"only supporting use_irmem True, but got {use_irmem}")
@@ -48,13 +50,10 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
     class vec5(wp.types.vector(length=5, dtype=dtype_wp)):
         pass
 
-    if use_irmem:
-        dim = 3
-    else:
-        dim = 4
+    dim = 3 if use_irmem else 4
 
     def compose_tensor_fwd(
-        I: wp.array(ndim=dim, dtype=dtype_wp),
+        I: wp.array(ndim=dim, dtype=dtype_wp),  # noqa: E741
         A: wp.array(ndim=dim, dtype=dtype_wp),
         S: wp.array(ndim=dim, dtype=dtype_wp),
         X: wp.array(ndim=4, dtype=dtype_wp),
@@ -77,6 +76,7 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
             X_reg[i, i] += I_reg
 
         cnt = 0
+        cnt = 0
         for i in range(3):
             for j in range(i + 1, 3):
                 X_reg[i, j] += A_reg[cnt]
@@ -84,6 +84,7 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
                 cnt += 1
 
         trace_S = -(S_reg[0] + S_reg[3])
+        cnt = 0
         cnt = 0
         for i in range(2):
             X_reg[i, i] += S_reg[cnt]
@@ -120,10 +121,12 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
             dI_reg += dX_reg[i, i]
 
         cnt = 0
+        cnt = 0
         for i in range(3):
             for j in range(i + 1, 3):
                 dA_reg[cnt] += dX_reg[i, j]
                 dA_reg[cnt] -= dX_reg[j, i]
+                cnt += 1
                 cnt += 1
 
         dS_reg[0] += dX_reg[0, 0]
@@ -172,20 +175,25 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
             d2X_reg[i, i] += dI_reg
 
         cnt = 0
+        cnt = 0
         for i in range(3):
             for j in range(i + 1, 3):
                 d2X_reg[i, j] += dA_reg[cnt]
                 d2X_reg[j, i] -= dA_reg[cnt]
                 cnt += 1
+                cnt += 1
 
+        cnt = 0
         cnt = 0
         for i in range(2):
             d2X_reg[i, i] += dS_reg[cnt]
+            cnt += 1
             cnt += 1
 
             for j in range(i + 1, 3):
                 d2X_reg[i, j] += dS_reg[cnt]
                 d2X_reg[j, i] += dS_reg[cnt]
+                cnt += 1
                 cnt += 1
 
         d2X_reg[2, 2] -= dS_reg[0]

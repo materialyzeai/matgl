@@ -25,6 +25,7 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+"""Warp kernels for decomposing 3x3 tensors into I, A, S components."""
 from __future__ import annotations
 
 import warp as wp
@@ -33,6 +34,7 @@ from .utils import add_module, get_wp_fp_dtype
 
 
 def generate_decompose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = True):
+    """Generate Warp kernels for decomposing a 3x3 tensor into I, A, S components."""
     dtype_wp = get_wp_fp_dtype(dtype)
 
     if not use_irmem:
@@ -50,14 +52,11 @@ def generate_decompose_tensor(dtype: str, h_last: bool = True, use_irmem: bool =
     class vec5(wp.types.vector(length=5, dtype=dtype_wp)):
         pass
 
-    if use_irmem:
-        dim = 3
-    else:
-        dim = 4
+    dim = 3 if use_irmem else 4
 
     def decompose_tensor_fwd(
         X: wp.array(ndim=4, dtype=dtype_wp),
-        I: wp.array(ndim=dim, dtype=dtype_wp),
+        I: wp.array(ndim=dim, dtype=dtype_wp),  # noqa: E741
         A: wp.array(ndim=dim, dtype=dtype_wp),
         S: wp.array(ndim=dim, dtype=dtype_wp),
     ):
@@ -77,18 +76,23 @@ def generate_decompose_tensor(dtype: str, h_last: bool = True, use_irmem: bool =
 
         denom = X.dtype(2.0)
         cnt = 0
+        cnt = 0
         for i in range(2):
             for j in range(i + 1, 3):
                 A[b, cnt, h] = (X_reg[i, j] - X_reg[j, i]) / denom
                 cnt += 1
+                cnt += 1
 
+        cnt = 0
         cnt = 0
         for i in range(2):
             S[b, cnt, h] = X_reg[i, i] - res
             cnt += 1
+            cnt += 1
 
             for j in range(i + 1, 3):
                 S[b, cnt, h] = (X_reg[i, j] + X_reg[j, i]) / denom
+                cnt += 1
                 cnt += 1
 
     def decompose_tensor_bwd(
@@ -117,6 +121,7 @@ def generate_decompose_tensor(dtype: str, h_last: bool = True, use_irmem: bool =
         denom = dX.dtype(2.0)
 
         cnt = 0
+        cnt = 0
 
         for i in range(3):
             for j in range(i + 1, 3):
@@ -124,7 +129,9 @@ def generate_decompose_tensor(dtype: str, h_last: bool = True, use_irmem: bool =
                 dX_reg[j, i] -= dA_reg[cnt] / denom
 
                 cnt += 1
+                cnt += 1
 
+        cnt = 0
         cnt = 0
         for i in range(2):
             dX_reg[i, i] += dS_reg[cnt]
@@ -132,10 +139,12 @@ def generate_decompose_tensor(dtype: str, h_last: bool = True, use_irmem: bool =
                 dX_reg[j, j] -= dS_reg[cnt] / dI.dtype(3.0)
 
             cnt += 1
+            cnt += 1
 
             for j in range(i + 1, 3):
                 dX_reg[i, j] += dS_reg[cnt] / denom
                 dX_reg[j, i] += dS_reg[cnt] / denom
+                cnt += 1
                 cnt += 1
 
         for i in range(3):
@@ -165,23 +174,28 @@ def generate_decompose_tensor(dtype: str, h_last: bool = True, use_irmem: bool =
         denom = dX.dtype(2.0)
 
         cnt = 0
+        cnt = 0
 
         for i in range(3):
             for j in range(i + 1, 3):
                 d2A_reg[cnt] += dX_reg[i, j] / denom
                 d2A_reg[cnt] -= dX_reg[j, i] / denom
                 cnt += 1
+                cnt += 1
 
+        cnt = 0
         cnt = 0
         for i in range(2):
             d2S_reg[cnt] += dX_reg[i, i]
             for j in range(3):
                 d2S_reg[cnt] -= dX_reg[j, j] / d2I.dtype(3.0)
             cnt += 1
+            cnt += 1
 
             for j in range(i + 1, 3):
                 d2S_reg[cnt] += dX_reg[i, j] / denom
                 d2S_reg[cnt] += dX_reg[j, i] / denom
+                cnt += 1
                 cnt += 1
 
         d2I[b, 0, h] = d2I_reg

@@ -25,13 +25,14 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+"""Warp kernels for graph edge index transformation to sparse CSR format."""
 from __future__ import annotations
 
 import warp as wp
 
 
 @wp.kernel
-def count_row_col(
+def count_row_col(  # noqa: D103
     edge_index: wp.array(ndim=2, dtype=wp.int32),
     row_count: wp.array(ndim=1, dtype=wp.int32),
     col_count: wp.array(ndim=1, dtype=wp.int32),
@@ -44,7 +45,7 @@ def count_row_col(
 
 
 @wp.kernel
-def convert_to_sparse(
+def convert_to_sparse(  # noqa: D103
     edge_index: wp.array(ndim=2, dtype=wp.int32),
     row_count: wp.array(ndim=1, dtype=wp.int32),
     col_count: wp.array(ndim=1, dtype=wp.int32),

@@ -25,6 +25,7 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+"""Warp kernels for computing 3x3 tensor norms (I, A, S components)."""
 from __future__ import annotations
 
 import warp as wp
@@ -33,6 +34,7 @@ from .utils import add_module, get_wp_fp_dtype
 
 
 def generate_tensor_norm3(dtype: str, h_last: bool = True, use_irmem: bool = True):
+    """Generate Warp kernels for computing squared norms of 3x3 tensor I, A, S components."""
     dtype_wp = get_wp_fp_dtype(dtype)
 
     if not use_irmem:
