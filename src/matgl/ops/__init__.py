@@ -25,29 +25,29 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+from __future__ import annotations
 
-from .tensornet_radial_mp import fn_radial_message_passing
+import warp as wp
+
 from .compose_tensor import fn_compose_tensor
 from .decompose_tensor import fn_decompose_tensor
 from .equivariant_o3_matmul import fn_tensor_matmul_o3_3x3
 from .equivariant_so3_matmul import fn_tensor_matmul_so3_3x3
+from .graph_transform import graph_transform
 from .tensor_norm3 import fn_tensor_norm3
 from .tensornet_mp import fn_message_passing
 from .tensornet_radial_mp import fn_radial_message_passing
-from .graph_transform import graph_transform
-
-import warp as wp
 
 wp.init()
 
 __all__ = [
-    "fn_radial_message_passing",
     "fn_compose_tensor",
     "fn_decompose_tensor",
+    "fn_message_passing",
+    "fn_radial_message_passing",
+    "fn_radial_message_passing",
     "fn_tensor_matmul_o3_3x3",
     "fn_tensor_matmul_so3_3x3",
     "fn_tensor_norm3",
-    "fn_message_passing",
-    "fn_radial_message_passing",
     "graph_transform",
 ]

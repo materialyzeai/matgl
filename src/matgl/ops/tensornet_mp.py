@@ -25,13 +25,11 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-from typing import List
+from __future__ import annotations
 
 import torch
-from torch import Tensor
-
 import warp as wp
+from torch import Tensor
 
 from matgl.kernels import get_module, get_stream
 
@@ -52,7 +50,7 @@ def _(
     col_data: Tensor,
     col_indices: Tensor,
     col_indptr: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     stream = get_stream(x.device)
     device = wp.device_from_torch(x.device)
     output_x = torch.empty_like(x)
@@ -108,7 +106,7 @@ def _(
     col_data: Tensor,
     col_indices: Tensor,
     col_indptr: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     return [torch.empty_like(x), torch.empty_like(y), torch.empty_like(z)]
 
 
@@ -131,7 +129,7 @@ def _(
     col_data: Tensor,
     col_indices: Tensor,
     col_indptr: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     stream = get_stream(x.device)
     device = wp.device_from_torch(x.device)
     grad_x = torch.empty_like(x)
@@ -202,7 +200,7 @@ def _(
     col_data: Tensor,
     col_indices: Tensor,
     col_indptr: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     return [
         torch.empty_like(x),
         torch.empty_like(y),
@@ -234,7 +232,7 @@ def _(
     col_data: Tensor,
     col_indices: Tensor,
     col_indptr: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     stream = get_stream(x.device)
     device = wp.device_from_torch(x.device)
 
@@ -361,7 +359,7 @@ def _(
     col_data: Tensor,
     col_indices: Tensor,
     col_indptr: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     return [
         torch.empty_like(grad_output_x),
         torch.empty_like(grad_output_y),
@@ -555,7 +553,7 @@ def fn_message_passing(
     col_data: Tensor,
     col_indices: Tensor,
     col_indptr: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     return torch.ops.tensornet.message_passing_fwd_primitive(
         x,
         y,

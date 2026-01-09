@@ -25,15 +25,13 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-from typing import Tuple
+from __future__ import annotations
 
 import torch
+import warp as wp
 from torch import Tensor
 
-import warp as wp
-
-from matgl.kernels import count_row_col, convert_to_sparse, get_stream
+from matgl.kernels import convert_to_sparse, count_row_col, get_stream
 
 
 @torch.library.custom_op(
@@ -41,7 +39,7 @@ from matgl.kernels import count_row_col, convert_to_sparse, get_stream
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
-def _(edge_index: Tensor, num_nodes: int) -> Tuple[Tensor, Tensor]:
+def _(edge_index: Tensor, num_nodes: int) -> tuple[Tensor, Tensor]:
     stream = get_stream(edge_index.device)
     device = wp.device_from_torch(edge_index.device)
     row_count = torch.zeros(num_nodes + 1, dtype=torch.int32, device=edge_index.device)
@@ -63,7 +61,7 @@ def _(edge_index: Tensor, num_nodes: int) -> Tuple[Tensor, Tensor]:
 
 
 @torch.library.register_fake("nvtnet::count_row_col_primitive")
-def _(edge_index: Tensor, num_nodes: int) -> Tuple[Tensor, Tensor]:
+def _(edge_index: Tensor, num_nodes: int) -> tuple[Tensor, Tensor]:
     output = torch.zeros(num_nodes + 1, dtype=torch.int32, device=edge_index.device)
     output2 = torch.zeros(num_nodes + 1, dtype=torch.int32, device=edge_index.device)
     return output, output2
@@ -80,7 +78,7 @@ def _(
     col_count: Tensor,
     row_indptr: Tensor,
     col_indptr: Tensor,
-) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     stream = get_stream(edge_index.device)
     device = wp.device_from_torch(edge_index.device)
     edge_index_wp = wp.from_torch(edge_index, return_ctype=True)
@@ -131,7 +129,7 @@ def _(
     col_count: Tensor,
     row_indptr: Tensor,
     col_indptr: Tensor,
-) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     output = torch.empty(edge_index.shape[1], dtype=torch.int32, device=edge_index.device)
     output2 = torch.empty(edge_index.shape[1], dtype=torch.int32, device=edge_index.device)
     output3 = torch.empty(edge_index.shape[1], dtype=torch.int32, device=edge_index.device)
@@ -140,7 +138,7 @@ def _(
 
 
 @torch.compiler.allow_in_graph
-def graph_transform(edge_index: Tensor, num_nodes: int) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+def graph_transform(edge_index: Tensor, num_nodes: int) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     row_count, col_count = torch.ops.nvtnet.count_row_col_primitive(edge_index, num_nodes)
     row_indptr, col_indptr = (
         torch.cumsum(row_count, dim=0, dtype=torch.int32),

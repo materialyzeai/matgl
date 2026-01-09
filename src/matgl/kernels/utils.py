@@ -25,16 +25,15 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+from __future__ import annotations
 
-
-from typing import List
-import warp as wp
 import torch
+import warp as wp
 
 MODULES = {}
 
 
-def get_module(name: str, dtype: List[str]):
+def get_module(name: str, dtype: list[str]):
     """
     Get the module for the given name and dtype
     """
@@ -46,7 +45,7 @@ def get_module(name: str, dtype: List[str]):
     return MODULES[full_name]
 
 
-def add_module(name: str, dtype: List[str], kernel: wp.Kernel):
+def add_module(name: str, dtype: list[str], kernel: wp.Kernel):
     """
     Add the module for the given name and dtype
     """
@@ -63,12 +62,11 @@ def get_dtype(dtype: str):
     """
     if dtype.endswith("16"):
         return "fp16"
-    elif dtype.endswith("32"):
+    if dtype.endswith("32"):
         return "fp32"
-    elif dtype.endswith("64"):
+    if dtype.endswith("64"):
         return "fp64"
-    else:
-        raise ValueError(f"Unsupported dtype: {dtype}")
+    raise ValueError(f"Unsupported dtype: {dtype}")
 
 
 def get_wp_fp_dtype(dtype: str):
@@ -78,12 +76,11 @@ def get_wp_fp_dtype(dtype: str):
     """
     if dtype.endswith("16"):
         return wp.float16
-    elif dtype.endswith("32"):
+    if dtype.endswith("32"):
         return wp.float32
-    elif dtype.endswith("64"):
+    if dtype.endswith("64"):
         return wp.float64
-    else:
-        raise ValueError(f"Unsupported dtype: {dtype}")
+    raise ValueError(f"Unsupported dtype: {dtype}")
 
 
 def list_modules():
@@ -91,7 +88,7 @@ def list_modules():
     List all modules in the MODULES dictionary
     """
     print("Available modules:")
-    for name in MODULES.keys():
+    for name in MODULES:
         print(f"  - {name}")
     return list(MODULES.keys())
 
@@ -102,5 +99,4 @@ def get_stream(device: torch.device):
     """
     if device.type == "cuda":
         return wp.stream_from_torch(torch.cuda.current_stream(device))
-    else:
-        return None
+    return None

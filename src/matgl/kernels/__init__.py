@@ -25,33 +25,34 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+from __future__ import annotations
+
+import warp as wp
 
 from .compose_tensor import generate_compose_tensor
 from .decompose_tensor import generate_decompose_tensor
 from .equivariant_o3_matmul import generate_tensor_matmul_o3_3x3
 from .equivariant_so3_matmul import generate_tensor_matmul_so3_3x3
-from .graph_transform import count_row_col, convert_to_sparse
+from .graph_transform import convert_to_sparse, count_row_col
 from .tensor_norm3 import generate_tensor_norm3
 from .tensornet_mp import generate_message_passing
 from .tensornet_radial_mp import generate_radial_message_passing
 from .utils import add_module, get_module, get_stream
 
-import warp as wp
-
 wp.init()
 
 
 __all__ = [
+    "add_module",
+    "convert_to_sparse",
+    "count_row_col",
     "generate_compose_tensor",
     "generate_decompose_tensor",
+    "generate_message_passing",
+    "generate_radial_message_passing",
     "generate_tensor_matmul_o3_3x3",
     "generate_tensor_matmul_so3_3x3",
-    "generate_radial_message_passing",
-    "generate_message_passing",
     "generate_tensor_norm3",
-    "count_row_col",
-    "convert_to_sparse",
-    "add_module",
     "get_module",
     "get_stream",
 ]

@@ -25,13 +25,11 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-from typing import List
+from __future__ import annotations
 
 import torch
-from torch import Tensor
-
 import warp as wp
+from torch import Tensor
 
 from matgl.kernels import get_module, get_stream
 
@@ -71,7 +69,7 @@ def _(x: Tensor) -> Tensor:
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
-def _(grad_output: Tensor, x: Tensor) -> List[Tensor]:
+def _(grad_output: Tensor, x: Tensor) -> list[Tensor]:
     stream = get_stream(x.device)
     device = wp.device_from_torch(x.device)
     grad_x = torch.empty_like(x)
@@ -93,7 +91,7 @@ def _(grad_output: Tensor, x: Tensor) -> List[Tensor]:
 
 
 @torch.library.register_fake("tensornet::tensor_norm3_bwd_primitive")
-def _(grad_output: Tensor, x: Tensor) -> List[Tensor]:
+def _(grad_output: Tensor, x: Tensor) -> list[Tensor]:
     return [torch.empty_like(x)]
 
 
@@ -106,7 +104,7 @@ def _(
     grad_grad_x: Tensor,
     x: Tensor,
     grad_output: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     stream = get_stream(grad_grad_x.device)
     device = wp.device_from_torch(grad_grad_x.device)
     grad_grad_output = torch.empty(
@@ -145,7 +143,7 @@ def _(
     grad_grad_x: Tensor,
     x: Tensor,
     grad_output: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     return [
         torch.empty(
             (grad_grad_x.shape[0], 3 * grad_grad_x.shape[-1]),

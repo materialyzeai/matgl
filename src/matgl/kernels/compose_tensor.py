@@ -25,6 +25,7 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+from __future__ import annotations
 
 import warp as wp
 
@@ -75,7 +76,7 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
         for i in range(3):
             X_reg[i, i] += I_reg
 
-        cnt = int(0)
+        cnt = 0
         for i in range(3):
             for j in range(i + 1, 3):
                 X_reg[i, j] += A_reg[cnt]
@@ -83,7 +84,7 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
                 cnt += 1
 
         trace_S = -(S_reg[0] + S_reg[3])
-        cnt = int(0)
+        cnt = 0
         for i in range(2):
             X_reg[i, i] += S_reg[cnt]
             cnt += 1
@@ -118,12 +119,12 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
         for i in range(3):
             dI_reg += dX_reg[i, i]
 
-        cnt = int(0)
+        cnt = 0
         for i in range(3):
             for j in range(i + 1, 3):
                 dA_reg[cnt] += dX_reg[i, j]
                 dA_reg[cnt] -= dX_reg[j, i]
-                cnt += int(1)
+                cnt += 1
 
         dS_reg[0] += dX_reg[0, 0]
         dS_reg[0] -= dX_reg[2, 2]
@@ -170,22 +171,22 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
         for i in range(3):
             d2X_reg[i, i] += dI_reg
 
-        cnt = int(0)
+        cnt = 0
         for i in range(3):
             for j in range(i + 1, 3):
                 d2X_reg[i, j] += dA_reg[cnt]
                 d2X_reg[j, i] -= dA_reg[cnt]
-                cnt += int(1)
+                cnt += 1
 
-        cnt = int(0)
+        cnt = 0
         for i in range(2):
             d2X_reg[i, i] += dS_reg[cnt]
-            cnt += int(1)
+            cnt += 1
 
             for j in range(i + 1, 3):
                 d2X_reg[i, j] += dS_reg[cnt]
                 d2X_reg[j, i] += dS_reg[cnt]
-                cnt += int(1)
+                cnt += 1
 
         d2X_reg[2, 2] -= dS_reg[0]
         d2X_reg[2, 2] -= dS_reg[3]

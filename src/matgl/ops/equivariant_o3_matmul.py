@@ -25,12 +25,11 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-from typing import List
+from __future__ import annotations
 
 import torch
-from torch import Tensor
 import warp as wp
+from torch import Tensor
 
 from matgl.kernels import get_module, get_stream
 
@@ -76,7 +75,7 @@ def _(x: Tensor, y: Tensor) -> Tensor:
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
-def _(grad_output: Tensor, x: Tensor, y: Tensor) -> List[Tensor]:
+def _(grad_output: Tensor, x: Tensor, y: Tensor) -> list[Tensor]:
     if x.shape[1] != 3 or x.shape[2] != 3 or y.shape[1] != 3 or y.shape[2] != 3:
         raise ValueError("x and y must be 3x3 matrices")
     if x.ndim != 4 or y.ndim != 4:
@@ -105,7 +104,7 @@ def _(grad_output: Tensor, x: Tensor, y: Tensor) -> List[Tensor]:
 
 
 @torch.library.register_fake("tensornet::tensor_matmul_o3_3x3_bwd_primitive")
-def _(grad_output: List[Tensor], x: Tensor, y: Tensor) -> List[Tensor]:
+def _(grad_output: list[Tensor], x: Tensor, y: Tensor) -> list[Tensor]:
     return [torch.empty_like(x), torch.empty_like(y)]
 
 
@@ -114,7 +113,7 @@ def _(grad_output: List[Tensor], x: Tensor, y: Tensor) -> List[Tensor]:
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
-def _(grad_output: Tensor, grad_grad_x: Tensor, grad_grad_y: Tensor, x: Tensor, y: Tensor) -> List[Tensor]:
+def _(grad_output: Tensor, grad_grad_x: Tensor, grad_grad_y: Tensor, x: Tensor, y: Tensor) -> list[Tensor]:
     if x.shape[1] != 3 or x.shape[2] != 3 or y.shape[1] != 3 or y.shape[2] != 3:
         raise ValueError("x and y must be 3x3 matrices")
     if x.ndim != 4 or y.ndim != 4:
@@ -159,7 +158,7 @@ def _(grad_output: Tensor, grad_grad_x: Tensor, grad_grad_y: Tensor, x: Tensor, 
 
 
 @torch.library.register_fake("tensornet::tensor_matmul_o3_3x3_bwd_bwd_primitive")
-def _(grad_output: Tensor, grad_grad_x: Tensor, grad_grad_y: Tensor, x: Tensor, y: Tensor) -> List[Tensor]:
+def _(grad_output: Tensor, grad_grad_x: Tensor, grad_grad_y: Tensor, x: Tensor, y: Tensor) -> list[Tensor]:
     return [
         torch.empty_like(grad_output),
         torch.empty_like(grad_output),
@@ -179,13 +178,13 @@ def tensor_matmul_o3_3x3_setup_bwd_context(ctx, inputs, output):
 
 @torch.compiler.allow_in_graph
 def tensor_matmul_o3_3x3_fwd(*args):
-    return getattr(torch.ops.tensornet, "tensor_matmul_o3_3x3_fwd_primitive")(*args)
+    return torch.ops.tensornet.tensor_matmul_o3_3x3_fwd_primitive(*args)
 
 
 @torch.compiler.allow_in_graph
 def tensor_matmul_o3_3x3_bwd(ctx, grad_output):
     x, y = ctx.saved_tensors
-    dx, dy = getattr(torch.ops.tensornet, "tensor_matmul_o3_3x3_bwd_primitive")(grad_output, x, y)
+    dx, dy = torch.ops.tensornet.tensor_matmul_o3_3x3_bwd_primitive(grad_output, x, y)
     return dx, dy
 
 
@@ -196,7 +195,7 @@ def tensor_matmul_o3_3x3_bwd_bwd(ctx, *grad_outputs):
 
     grad_output_saved, x, y = ctx.saved_tensors
 
-    outputs = getattr(torch.ops.tensornet, "tensor_matmul_o3_3x3_bwd_bwd_primitive")(
+    outputs = torch.ops.tensornet.tensor_matmul_o3_3x3_bwd_bwd_primitive(
         grad_output_saved, grad_grad_x, grad_grad_y, x, y
     )
     return outputs[0], outputs[1], outputs[2]
@@ -216,5 +215,5 @@ torch.library.register_autograd(
 
 
 def fn_tensor_matmul_o3_3x3(x: Tensor, y: Tensor) -> Tensor:
-    z = getattr(torch.ops.tensornet, "tensor_matmul_o3_3x3_fwd_primitive")(x, y)
+    z = torch.ops.tensornet.tensor_matmul_o3_3x3_fwd_primitive(x, y)
     return z

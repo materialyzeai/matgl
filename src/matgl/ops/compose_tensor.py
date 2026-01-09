@@ -25,13 +25,11 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-from typing import List
+from __future__ import annotations
 
 import torch
-from torch import Tensor
-
 import warp as wp
+from torch import Tensor
 
 from matgl.kernels import get_module, get_stream
 
@@ -74,7 +72,7 @@ def _(x: Tensor, y: Tensor, z: Tensor) -> Tensor:
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
-def _(grad_output: Tensor, x: Tensor, y: Tensor, z: Tensor) -> List[Tensor]:
+def _(grad_output: Tensor, x: Tensor, y: Tensor, z: Tensor) -> list[Tensor]:
     stream = get_stream(x.device)
     device = wp.device_from_torch(x.device)
     grad_x = torch.zeros_like(x)
@@ -100,7 +98,7 @@ def _(grad_output: Tensor, x: Tensor, y: Tensor, z: Tensor) -> List[Tensor]:
 
 
 @torch.library.register_fake("tensornet::compose_tensor_bwd_primitive")
-def _(grad_output: List[Tensor], x: Tensor, y: Tensor, z: Tensor) -> List[Tensor]:
+def _(grad_output: list[Tensor], x: Tensor, y: Tensor, z: Tensor) -> list[Tensor]:
     return [torch.empty_like(x), torch.empty_like(y), torch.empty_like(z)]
 
 
@@ -117,7 +115,7 @@ def _(
     x: Tensor,
     y: Tensor,
     z: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     stream = get_stream(grad_output.device)
     device = wp.device_from_torch(grad_output.device)
     grad_x = torch.zeros_like(grad_grad_x)
@@ -153,7 +151,7 @@ def _(
     x: Tensor,
     y: Tensor,
     z: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     return [
         torch.empty_like(grad_output),
         torch.empty_like(x),

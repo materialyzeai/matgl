@@ -25,13 +25,11 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-from typing import List
+from __future__ import annotations
 
 import torch
-from torch import Tensor
-
 import warp as wp
+from torch import Tensor
 
 from matgl.kernels import get_module, get_stream
 
@@ -41,7 +39,7 @@ from matgl.kernels import get_module, get_stream
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
-def _(x: Tensor) -> List[Tensor]:
+def _(x: Tensor) -> list[Tensor]:
     stream = get_stream(x.device)
     device = wp.device_from_torch(x.device)
     output_i = torch.empty((x.shape[0], 1, x.shape[-1]), dtype=x.dtype, device=x.device)
@@ -66,7 +64,7 @@ def _(x: Tensor) -> List[Tensor]:
 
 
 @torch.library.register_fake("tensornet::decompose_tensor_fwd_primitive")
-def _(x: Tensor) -> List[Tensor]:
+def _(x: Tensor) -> list[Tensor]:
     return [
         torch.empty((x.shape[0], 1, x.shape[-1]), dtype=x.dtype, device=x.device),
         torch.empty((x.shape[0], 3, x.shape[-1]), dtype=x.dtype, device=x.device),
@@ -79,7 +77,7 @@ def _(x: Tensor) -> List[Tensor]:
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
-def _(grad_output_i: Tensor, grad_output_a: Tensor, grad_output_s: Tensor, x: Tensor) -> List[Tensor]:
+def _(grad_output_i: Tensor, grad_output_a: Tensor, grad_output_s: Tensor, x: Tensor) -> list[Tensor]:
     stream = get_stream(x.device)
     device = wp.device_from_torch(x.device)
     grad_x = torch.empty_like(x)
@@ -103,7 +101,7 @@ def _(grad_output_i: Tensor, grad_output_a: Tensor, grad_output_s: Tensor, x: Te
 
 
 @torch.library.register_fake("tensornet::decompose_tensor_bwd_primitive")
-def _(grad_output_i: Tensor, grad_output_a: Tensor, grad_output_s: Tensor, x: Tensor) -> List[Tensor]:
+def _(grad_output_i: Tensor, grad_output_a: Tensor, grad_output_s: Tensor, x: Tensor) -> list[Tensor]:
     return [torch.empty_like(x)]
 
 
@@ -118,7 +116,7 @@ def _(
     grad_output_s: Tensor,
     grad_grad_x: Tensor,
     x: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     stream = get_stream(grad_output_i.device)
     device = wp.device_from_torch(grad_output_i.device)
     grad_x = torch.zeros_like(grad_grad_x)
@@ -157,7 +155,7 @@ def _(
     grad_output_s: Tensor,
     grad_grad_x: Tensor,
     x: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     return [
         torch.empty_like(grad_output_i),
         torch.empty_like(grad_output_a),
@@ -218,6 +216,6 @@ torch.library.register_autograd(
 )
 
 
-def fn_decompose_tensor(x: Tensor) -> List[Tensor]:
+def fn_decompose_tensor(x: Tensor) -> list[Tensor]:
     output = torch.ops.tensornet.decompose_tensor_fwd_primitive(x)
     return output

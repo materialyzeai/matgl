@@ -112,11 +112,13 @@ class TestTensorNet:
         torch.manual_seed(0)
         torch.use_deterministic_algorithms(True)
 
-        EXPECTED_CELL_GRAD = torch.tensor([
-            [-0.000967, 0.000000, 0.000000],
-            [0.000000, -0.000967, 0.000000],
-            [0.000000, 0.000000, -0.000967],
-        ])
+        EXPECTED_CELL_GRAD = torch.tensor(
+            [
+                [-0.000967, 0.000000, 0.000000],
+                [0.000000, -0.000967, 0.000000],
+                [0.000000, 0.000000, -0.000967],
+            ]
+        )
 
         structure, graph, _ = graph_MoS_pyg
         cell = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th).requires_grad_(True)
@@ -137,11 +139,13 @@ class TestTensorNet:
         torch.manual_seed(0)
         torch.use_deterministic_algorithms(True)
 
-        EXPECTED_CELL_GRAD2 = torch.tensor([
-            [-0.000010, -0.000000, -0.000000],
-            [-0.000000, -0.000010, -0.000000],
-            [-0.000000, -0.000000, -0.000010],
-        ])
+        EXPECTED_CELL_GRAD2 = torch.tensor(
+            [
+                [-0.000010, -0.000000, -0.000000],
+                [-0.000000, -0.000010, -0.000000],
+                [-0.000000, -0.000000, -0.000010],
+            ]
+        )
 
         structure, graph, _ = graph_MoS_pyg
         cell = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th).requires_grad_(True)

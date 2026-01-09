@@ -146,9 +146,7 @@ def compare_weights(ref_model: Any, cur_model: Any) -> bool:
     return all_match
 
 
-def compare_forward(
-    ref_model: Any, cur_model: Any, ref_graph: Any, cur_graph: Any, device: torch.device
-) -> bool:
+def compare_forward(ref_model: Any, cur_model: Any, ref_graph: Any, cur_graph: Any, device: torch.device) -> bool:
     """Compare forward pass energy predictions."""
     print_section("Forward Pass")
 
@@ -169,9 +167,7 @@ def compare_forward(
     return match
 
 
-def compare_backward(
-    ref_model: Any, cur_model: Any, ref_graph: Any, cur_graph: Any, device: torch.device
-) -> bool:
+def compare_backward(ref_model: Any, cur_model: Any, ref_graph: Any, cur_graph: Any, device: torch.device) -> bool:
     """Compare forces (F = -dE/dpos)."""
     print_section("Backward Pass (Forces)")
 
@@ -259,9 +255,9 @@ def main(structure_path: str, matgl_main_path: str, seed: int = 42) -> bool:
     clear_matgl_modules()
     sys.path.insert(0, matgl_main_path)
 
-    from matgl.models._tensornet_pyg import TensorNet as RefTensorNet
     from matgl.ext._pymatgen_pyg import Structure2Graph as RefConverter
     from matgl.graph._compute_pyg import compute_pair_vector_and_distance as ref_compute_bond
+    from matgl.models._tensornet_pyg import TensorNet as RefTensorNet
 
     torch.manual_seed(seed)
     ref_model = RefTensorNet(**model_config).to(device)
@@ -276,8 +272,8 @@ def main(structure_path: str, matgl_main_path: str, seed: int = 42) -> bool:
     # Current model (src)
     clear_matgl_modules()
 
-    from matgl.models._tensornet_pyg import TensorNet as CurTensorNet
     from matgl.ext._pymatgen_pyg import Structure2Graph as CurConverter
+    from matgl.models._tensornet_pyg import TensorNet as CurTensorNet
 
     torch.manual_seed(seed)
     cur_model = CurTensorNet(**model_config).to(device)
@@ -294,9 +290,7 @@ def main(structure_path: str, matgl_main_path: str, seed: int = 42) -> bool:
         "Weights": compare_weights(ref_model, cur_model),
         "Forward": compare_forward(ref_model, cur_model, ref_graph, cur_graph, device),
         "Backward": compare_backward(ref_model, cur_model, ref_graph_grad, cur_graph_grad, device),
-        "Double Backward": compare_double_backward(
-            ref_model, cur_model, ref_graph_grad2, cur_graph_grad2, device
-        ),
+        "Double Backward": compare_double_backward(ref_model, cur_model, ref_graph_grad2, cur_graph_grad2, device),
     }
 
     # Summary
@@ -318,7 +312,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Compare TensorNet implementations")
     parser.add_argument(
-        "--structure", "-s",
+        "--structure",
+        "-s",
         required=True,
         help="Path to structure file (any format supported by pymatgen)",
     )

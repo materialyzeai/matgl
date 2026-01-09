@@ -25,13 +25,11 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-from typing import List
+from __future__ import annotations
 
 import torch
-from torch import Tensor
-
 import warp as wp
+from torch import Tensor
 
 from matgl.kernels import get_module, get_stream
 
@@ -41,7 +39,7 @@ from matgl.kernels import get_module, get_stream
     mutates_args=(),
     device_types=["cpu", "cuda"],
 )
-def _(edge_vec_norm: Tensor, edge_attr: Tensor, row_data: Tensor, row_indptr: Tensor) -> List[Tensor]:
+def _(edge_vec_norm: Tensor, edge_attr: Tensor, row_data: Tensor, row_indptr: Tensor) -> list[Tensor]:
     num_atoms = row_indptr.shape[0] - 1
     stream = get_stream(edge_vec_norm.device)
     device = wp.device_from_torch(edge_vec_norm.device)
@@ -92,7 +90,7 @@ def _(edge_vec_norm: Tensor, edge_attr: Tensor, row_data: Tensor, row_indptr: Te
 
 
 @torch.library.register_fake("tensornet::radial_message_passing_fwd_primitive")
-def _(edge_vec_norm: Tensor, edge_attr: Tensor, row_data: Tensor, row_indptr: Tensor) -> List[Tensor]:
+def _(edge_vec_norm: Tensor, edge_attr: Tensor, row_data: Tensor, row_indptr: Tensor) -> list[Tensor]:
     num_atoms = row_indptr.shape[0] - 1
     return [
         torch.empty(
@@ -126,7 +124,7 @@ def _(
     edge_attr: Tensor,
     row_data: Tensor,
     row_indptr: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     num_atoms = row_indptr.shape[0] - 1
     stream = get_stream(grad_output_I.device)
     device = wp.device_from_torch(grad_output_I.device)
@@ -178,7 +176,7 @@ def _(
     edge_attr: Tensor,
     row_data: Tensor,
     row_indptr: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     return [torch.empty_like(edge_vec_norm), torch.empty_like(edge_attr)]
 
 
@@ -197,7 +195,7 @@ def _(
     edge_attr: Tensor,
     row_data: Tensor,
     row_indptr: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     num_atoms = row_indptr.shape[0] - 1
     stream = get_stream(grad_output_I.device)
     device = wp.device_from_torch(grad_output_I.device)
@@ -270,7 +268,7 @@ def _(
     edge_attr: Tensor,
     row_data: Tensor,
     row_indptr: Tensor,
-) -> List[Tensor]:
+) -> list[Tensor]:
     return [
         torch.empty_like(grad_output_I),
         torch.empty_like(grad_output_A),
@@ -388,5 +386,5 @@ torch.library.register_autograd(
 
 def fn_radial_message_passing(
     edge_vec_norm: Tensor, edge_attr: Tensor, row_data: Tensor, row_indptr: Tensor
-) -> List[Tensor]:
+) -> list[Tensor]:
     return torch.ops.tensornet.radial_message_passing_fwd_primitive(edge_vec_norm, edge_attr, row_data, row_indptr)

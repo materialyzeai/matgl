@@ -11,10 +11,10 @@ please refer to::
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Literal, Mapping, Any
+from typing import TYPE_CHECKING, Literal
 
 import torch
-from torch import nn, Tensor
+from torch import nn
 
 import matgl
 from matgl.config import DEFAULT_ELEMENTS
@@ -28,20 +28,18 @@ from matgl.layers._readout_torch import (
     WeightedAtomReadOut,
     WeightedReadOut,
 )
-from matgl.utils.cutoff import cosine_cutoff
-from matgl.utils.maths import scatter_add
-
 from matgl.ops import (
-    fn_radial_message_passing,
     fn_compose_tensor,
     fn_decompose_tensor,
-    fn_tensor_norm3,
     fn_message_passing,
     fn_radial_message_passing,
     fn_tensor_matmul_o3_3x3,
     fn_tensor_matmul_so3_3x3,
+    fn_tensor_norm3,
     graph_transform,
 )
+from matgl.utils.cutoff import cosine_cutoff
+from matgl.utils.maths import scatter_add
 
 from ._core import MatGLModel
 
