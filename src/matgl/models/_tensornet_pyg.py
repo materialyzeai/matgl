@@ -160,7 +160,6 @@ class TensorEmbedding(nn.Module):
         new_b = f"{prefix}distance_proj.bias"
 
         if all(k in state_dict for k in w_keys + b_keys):
-            state_dict = dict(state_dict)
             state_dict[new_w] = torch.cat([state_dict.pop(k) for k in w_keys], dim=0)
             state_dict[new_b] = torch.cat([state_dict.pop(k) for k in b_keys], dim=0)
 
