@@ -27,8 +27,6 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """Warp kernels for composing 3x3 tensors from I, A, S components."""
 
-from __future__ import annotations
-
 import warp as wp
 
 from .utils import add_module, get_wp_fp_dtype
@@ -76,8 +74,7 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
         for i in range(3):
             X_reg[i, i] += I_reg
 
-        cnt = 0
-        cnt = 0
+        cnt = wp.int32(0)
         for i in range(3):
             for j in range(i + 1, 3):
                 X_reg[i, j] += A_reg[cnt]
@@ -85,8 +82,7 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
                 cnt += 1
 
         trace_S = -(S_reg[0] + S_reg[3])
-        cnt = 0
-        cnt = 0
+        cnt = wp.int32(0)
         for i in range(2):
             X_reg[i, i] += S_reg[cnt]
             cnt += 1
@@ -121,13 +117,11 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
         for i in range(3):
             dI_reg += dX_reg[i, i]
 
-        cnt = 0
-        cnt = 0
+        cnt = wp.int32(0)
         for i in range(3):
             for j in range(i + 1, 3):
                 dA_reg[cnt] += dX_reg[i, j]
                 dA_reg[cnt] -= dX_reg[j, i]
-                cnt += 1
                 cnt += 1
 
         dS_reg[0] += dX_reg[0, 0]
@@ -175,26 +169,21 @@ def generate_compose_tensor(dtype: str, h_last: bool = True, use_irmem: bool = T
         for i in range(3):
             d2X_reg[i, i] += dI_reg
 
-        cnt = 0
-        cnt = 0
+        cnt = wp.int32(0)
         for i in range(3):
             for j in range(i + 1, 3):
                 d2X_reg[i, j] += dA_reg[cnt]
                 d2X_reg[j, i] -= dA_reg[cnt]
                 cnt += 1
-                cnt += 1
 
-        cnt = 0
-        cnt = 0
+        cnt = wp.int32(0)
         for i in range(2):
             d2X_reg[i, i] += dS_reg[cnt]
-            cnt += 1
             cnt += 1
 
             for j in range(i + 1, 3):
                 d2X_reg[i, j] += dS_reg[cnt]
                 d2X_reg[j, i] += dS_reg[cnt]
-                cnt += 1
                 cnt += 1
 
         d2X_reg[2, 2] -= dS_reg[0]

@@ -27,8 +27,6 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """Warp kernels for computing 3x3 tensor norms (I, A, S components)."""
 
-from __future__ import annotations
-
 import warp as wp
 
 from .utils import add_module, get_wp_fp_dtype
