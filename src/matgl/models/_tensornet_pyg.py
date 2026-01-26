@@ -580,7 +580,8 @@ class TensorNet(MatGLModel):
 
         # perpare graph indices for message passing
         row_data, row_indices, row_indptr, col_data, col_indices, col_indptr = graph_transform(
-            edge_index.int(), z.shape[0]  # type: ignore[union-attr]
+            edge_index.int(),
+            z.shape[0],  # type: ignore[union-attr]
         )
 
         # Expand distances with radial basis functions
