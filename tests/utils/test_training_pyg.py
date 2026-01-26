@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # Required for deterministic CUDA operations
+
 import shutil
 
 # This function is used for M3GNet property dataset
