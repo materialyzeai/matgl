@@ -195,6 +195,11 @@ def tensor_matmul_o3_3x3_bwd_bwd(ctx, *grad_outputs):
 
     grad_output_saved, x, y = ctx.saved_tensors
 
+    if grad_grad_x is None:
+        grad_grad_x = torch.zeros_like(x)
+    if grad_grad_y is None:
+        grad_grad_y = torch.zeros_like(y)
+
     outputs = torch.ops.tensornet.tensor_matmul_o3_3x3_bwd_bwd_primitive(
         grad_output_saved, grad_grad_x, grad_grad_y, x, y
     )

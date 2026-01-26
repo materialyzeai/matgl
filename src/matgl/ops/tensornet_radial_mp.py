@@ -262,6 +262,7 @@ def _(
 def _(
     grad_output_I: Tensor,
     grad_output_A: Tensor,
+    grad_output_S: Tensor,
     grad_grad_edge_vec_norm: Tensor,
     grad_grad_edge_attr: Tensor,
     edge_vec_norm: Tensor,
@@ -272,6 +273,7 @@ def _(
     return [
         torch.empty_like(grad_output_I),
         torch.empty_like(grad_output_A),
+        torch.empty_like(grad_output_S),
         torch.empty_like(grad_grad_edge_vec_norm),
         torch.empty_like(grad_grad_edge_attr),
     ]
