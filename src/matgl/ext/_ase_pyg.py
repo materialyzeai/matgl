@@ -95,8 +95,13 @@ class Atoms2Graph(GraphConverter):
         )
         if atoms.get_pbc().any():
             lattice_matrix = torch.as_tensor(atoms.cell.array, dtype=torch.float32, device=src_id.device)
+            # Convert Cartesian positions to fractional coordinates
+            # The model expects fractional coords and computes: g.pos = g.frac_coords @ lattice
+            frac_coords = positions @ torch.linalg.inv(lattice_matrix)
         else:
             lattice_matrix = torch.eye(3, dtype=torch.float32, device=src_id.device).unsqueeze(0)
+            # For molecules (non-periodic), use Cartesian positions directly
+            frac_coords = positions
         element_types = self.element_types
 
         g, lat, state_attr = super().get_graph_from_processed_structure(
@@ -106,7 +111,7 @@ class Atoms2Graph(GraphConverter):
             images,
             lattice_matrix,
             element_types,
-            positions,
+            frac_coords,
             is_atoms=True,
         )
 
