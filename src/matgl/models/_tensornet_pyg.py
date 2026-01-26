@@ -569,8 +569,8 @@ class TensorNet(MatGLModel):
         else:
             # PyG Data object - extract tensors
             z = getattr(g, "node_type", getattr(g, "z", None))
-            pos = g.pos  # type: ignore[union-attr]
-            edge_index = g.edge_index  # type: ignore[union-attr]
+            pos = g.pos  # type: ignore[attr-defined]
+            edge_index = g.edge_index  # type: ignore[attr-defined]
             pbc_offshift = getattr(g, "pbc_offshift", None)
             batch = getattr(g, "batch", None)
             num_graphs = getattr(g, "num_graphs", None)
@@ -580,7 +580,7 @@ class TensorNet(MatGLModel):
 
         # perpare graph indices for message passing
         row_data, row_indices, row_indptr, col_data, col_indices, col_indptr = graph_transform(
-            edge_index.int(), z.shape[0]
+            edge_index.int(), z.shape[0]  # type: ignore[union-attr]
         )
 
         # Expand distances with radial basis functions
@@ -629,7 +629,7 @@ class TensorNet(MatGLModel):
             batch_long = batch.to(torch.long)
             if num_graphs is None:
                 num_graphs = int(batch_long.max().item()) + 1
-            return scatter_add(atomic_energies, batch_long, dim_size=num_graphs)
+            return scatter_add(atomic_energies, batch_long, dim_size=num_graphs)  # type: ignore[arg-type]
         # Single graph case: Sum all energies (equivalent to scatter_add with all nodes in one graph)
         return torch.sum(atomic_energies, dim=0, keepdim=True).squeeze()
 
