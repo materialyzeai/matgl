@@ -75,6 +75,8 @@ def neighbor_list_from_structure(
         )
     else:
         distances = None
+    # unit_shifts is always valid for periodic structures (pbc=True)
+    assert unit_shifts is not None
     return (src_id, dst_id, distances, unit_shifts, positions)
 
 
@@ -208,7 +210,7 @@ def _compute_distances(
 ) -> torch.Tensor:
     """Compute the distances between the source and destination atoms."""
     vectors = positions[dst_id] - positions[src_id]
-    if cell is not None:
+    if cell is not None and unit_shifts is not None:
         vectors += unit_shifts @ cell
     return torch.linalg.norm(vectors, dim=1)
 
