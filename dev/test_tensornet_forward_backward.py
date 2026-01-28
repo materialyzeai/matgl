@@ -417,11 +417,11 @@ def compare_param_gradients(
             if ref_param.grad is None and cur_param.grad is None:
                 print(f"  {cur_key}: NO GRAD (both)")
                 continue
-            elif ref_param.grad is None:
+            if ref_param.grad is None:
                 print(f"  {cur_key}: NO GRAD (reference)")
                 all_match = False
                 continue
-            elif cur_param.grad is None:
+            if cur_param.grad is None:
                 print(f"  {cur_key}: NO GRAD (current)")
                 all_match = False
                 continue
@@ -457,9 +457,7 @@ def compare_param_gradients(
     return all_match
 
 
-def main(
-    structure_path: str, matgl_main_path: str, seed: int = 42, pretrained_path: str | None = None
-) -> bool:
+def main(structure_path: str, matgl_main_path: str, seed: int = 42, pretrained_path: str | None = None) -> bool:
     """Run all comparison tests between reference and current implementations."""
     print_section("TensorNet Comparison: matgl-main vs Current")
 
