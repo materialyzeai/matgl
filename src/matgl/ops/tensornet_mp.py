@@ -148,9 +148,9 @@ def _(
 
     edge_attr_wp = wp.from_torch(edge_attr.detach(), return_ctype=True)
 
-    row_data_wp = wp.from_torch(row_data.detach(), return_ctype=True)
-    row_indices_wp = wp.from_torch(row_indices.detach(), return_ctype=True)
-    row_indptr_wp = wp.from_torch(row_indptr.detach(), return_ctype=True)
+    col_data_wp = wp.from_torch(col_data.detach(), return_ctype=True)
+    col_indices_wp = wp.from_torch(col_indices.detach(), return_ctype=True)
+    col_indptr_wp = wp.from_torch(col_indptr.detach(), return_ctype=True)
 
     grad_x_wp = wp.from_torch(grad_x.detach(), return_ctype=True)
     grad_y_wp = wp.from_torch(grad_y.detach(), return_ctype=True)
@@ -172,9 +172,9 @@ def _(
             grad_output_x_wp,
             grad_output_y_wp,
             grad_output_z_wp,
-            row_data_wp,
-            row_indices_wp,
-            row_indptr_wp,
+            col_data_wp,
+            col_indices_wp,
+            col_indptr_wp,
             grad_x_wp,
             grad_y_wp,
             grad_z_wp,
