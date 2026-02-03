@@ -55,7 +55,7 @@ jobs:
         run: |
           uv pip install "numpy<2"
           uv pip install "torchdata<=0.8.0"
-          uv pip install --no-deps -e '.[dgl]'
+          uv pip install -e '.[dgl]'
           uv pip install pytest pytest-cov
       - name: pytest
         run: |
