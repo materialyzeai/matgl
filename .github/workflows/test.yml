@@ -12,6 +12,7 @@ on:
     paths:
       - "src/**"
       - "tests/**"
+      - ".github/workflows/**"
   release:
     types: [published]
   workflow_dispatch:
@@ -54,15 +55,15 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install "numpy<2"
+          uv pip install "torchdata==0.8.0"
           uv pip install -e '.[dgl]'
-          uv pip install "torch<=2.4.0"
-          uv pip install "torchdata<=0.8.0"
           uv pip install pytest pytest-cov
       - name: pytest
         run: |
-          uv run python -c "import dgl; print(dgl.__version__)"
-          uv run python -c "import torch; print(torch.__version__)"
-          uv run pytest --cov=matgl --cov-report=xml --cov-report=term tests --color=yes
+          python -c "import dgl; print(dgl.__version__)"
+          python -c "import torch; print(torch.__version__)"
+          python -c "import torchdata; print(torchdata.__version__)"
+          pytest --cov=matgl --cov-report=xml --cov-report=term tests --color=yes
           mv .coverage coverage.dgl
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4
