@@ -59,9 +59,9 @@ jobs:
           uv pip install pytest pytest-cov
       - name: pytest
         run: |
-          uv run --active python -c "import dgl; print(dgl.__version__)"
-          uv run --active python -c "import torch; print(torch.__version__)"
-          uv run --active pytest --cov=matgl --cov-report=xml --cov-report=term tests --color=yes
+          python -c "import dgl; print(dgl.__version__)"
+          python -c "import torch; print(torch.__version__)"
+          pytest --cov=matgl --cov-report=xml --cov-report=term tests --color=yes
           mv .coverage coverage.dgl
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4
