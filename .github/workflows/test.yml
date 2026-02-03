@@ -12,6 +12,7 @@ on:
     paths:
       - "src/**"
       - "tests/**"
+      - ".github/workflows/**"
   release:
     types: [published]
   workflow_dispatch:
