@@ -61,6 +61,7 @@ jobs:
         run: |
           python -c "import dgl; print(dgl.__version__)"
           python -c "import torch; print(torch.__version__)"
+          python -c "import torchdata; print(torchdata.__version__)"
           pytest --cov=matgl --cov-report=xml --cov-report=term tests --color=yes
           mv .coverage coverage.dgl
       - name: Upload coverage artifacts
