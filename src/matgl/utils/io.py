@@ -105,7 +105,7 @@ class IOMixIn:
             "kwargs": self._init_args,
         }  # type: ignore
         with open(path / "model.json", "w") as f:
-            json.dump(d, f, default=lambda o: str(o), indent=4)
+            json.dump(d, f, default=str, indent=4)
 
     @classmethod
     def load(cls, path: str | Path | dict, **kwargs):
