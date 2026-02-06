@@ -119,7 +119,7 @@ def neighbor_list_from_ase(
     atoms: Atoms,
     cutoff: float,
     compute_distances: bool = True,
-    density_guess: float | int = 0.3,
+    density_guess: float = 0.3,
     device: str | torch.device | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor, int]:
     """Get the neighbor list from the ASE Atoms using the nvalchemi-toolkit-ops package."""
@@ -160,10 +160,9 @@ def _safe_nl(
     cutoff: float,
     cell: torch.Tensor | None = None,
     pbc: torch.Tensor | None = None,
-    density_guess: float | int = 0.3,
+    density_guess: float = 0.3,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, int]:
     """Get the neighbor list using nvalchemi-toolkit-ops with automatic buffer sizing."""
-
     method = "cell_list" if pbc is not None else "naive"
 
     # Accept either a density (float) or a pre-computed max_neighbors (int)
