@@ -188,7 +188,7 @@ def _safe_nl(
                 method=method,
             )
             break
-        except NeighborOverflowError:
+        except NeighborOverflowError as err:
             # Grow buffer by 1.5x, rounded up to multiple of 16 for alignment
             max_neighbors = ((int(max_neighbors * 1.5) + 15) // 16) * 16
             if max_neighbors > max_max_neighbors:
@@ -196,7 +196,7 @@ def _safe_nl(
                     f"Unable to get neighbor list. Structure is too dense. "
                     f"max_neighbors ({max_neighbors}) exceeds cap from "
                     f"density {max_density} atoms/A^3."
-                )
+                ) from err
 
     if pbc is not None:
         nblist, neighbor_ptr, unit_shifts = ret
