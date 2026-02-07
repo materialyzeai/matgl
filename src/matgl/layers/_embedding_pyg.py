@@ -118,7 +118,7 @@ class TensorEmbedding(nn.Module):
             Shape: (num_edges, num_edge_features).
 
         edge_weight (torch.Tensor):
-            Edge distance between sorce and target nodes.
+            Edge distance between source and target nodes.
             Shape: (num_edges,) or (num_edges, 1).
 
         edge_vec (torch.Tensor):
