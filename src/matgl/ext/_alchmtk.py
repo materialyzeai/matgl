@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from nvalchemiops.neighborlist import estimate_max_neighbors, neighbor_list
+from nvalchemiops.neighborlist.neighbor_utils import NeighborOverflowError
 
 if TYPE_CHECKING:
     from ase import Atoms
@@ -120,20 +121,18 @@ def neighbor_list_from_ase(
     compute_distances: bool = True,
     density_guess: float = 0.3,
     device: str | torch.device | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor, int]:
     """Get the neighbor list from the ASE Atoms using the nvalchemi-toolkit-ops package."""
     device = torch.device(device) if device is not None else _default_device
     positions = torch.as_tensor(atoms.get_positions(), dtype=torch.float32, device=device)
     if atoms.get_pbc().any():
         cell = torch.as_tensor(atoms.get_cell(), dtype=torch.float32, device=device)
         pbc = torch.as_tensor(atoms.get_pbc(), dtype=torch.bool, device=device)
-        positions = _wrap_positions(positions, cell, pbc)
-        atoms.set_positions(positions.cpu().numpy())
     else:
         cell = None
         pbc = None
 
-    nblist, _, unit_shifts, _ = _safe_nl(
+    nblist, _, unit_shifts, max_neighbors = _safe_nl(
         positions=positions,
         cutoff=cutoff,
         cell=cell,
@@ -153,7 +152,7 @@ def neighbor_list_from_ase(
         distances = None
     if unit_shifts is None:
         unit_shifts = torch.zeros(src_id.shape[0], 3, dtype=torch.float32, device=device)
-    return (src_id, dst_id, distances, unit_shifts, positions)
+    return (src_id, dst_id, distances, unit_shifts, positions, max_neighbors)
 
 
 def _safe_nl(
@@ -162,16 +161,22 @@ def _safe_nl(
     cell: torch.Tensor | None = None,
     pbc: torch.Tensor | None = None,
     density_guess: float = 0.3,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, float]:
-    """Get the neighbor list from the structure using the nvalchemi-toolkit-ops package."""
-    max_neighbors = estimate_max_neighbors(cutoff, density_guess, safety_factor=1.0)
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, int]:
+    """Get the neighbor list using nvalchemi-toolkit-ops with automatic buffer sizing."""
+    method = "cell_list" if pbc is not None else "naive"
 
-    density = density_guess
-    # safe upper bound for density
+    # Accept either a density (float) or a pre-computed max_neighbors (int)
+    if isinstance(density_guess, int):
+        max_neighbors = density_guess
+    else:
+        max_neighbors = estimate_max_neighbors(cutoff, density_guess, safety_factor=1.0)
+
+    # Safety cap based on density: max_neighbors at 5.0 atoms/A^3 is sufficiently
+    # high that exceeding it means the structure is genuinely collapsed.
     max_density = 5.0
-    ret = None
-    while density < max_density:
-        max_neighbors = estimate_max_neighbors(cutoff, density, safety_factor=1.0)
+    max_max_neighbors = estimate_max_neighbors(cutoff, max_density, safety_factor=1.0)
+
+    while True:
         try:
             ret = neighbor_list(
                 positions=positions,
@@ -180,17 +185,18 @@ def _safe_nl(
                 cutoff=cutoff,
                 max_neighbors=max_neighbors,
                 return_neighbor_list=True,
+                method=method,
             )
             break
-        except ValueError as e:
-            if str(e).startswith("The max number of neighbors is larger"):
-                density *= 2.0
-            else:
-                raise e
-    if ret is None:
-        raise ValueError(
-            f"Unable to get neighbor list. Structure is too dense. Maximum density reached: {max_density} atoms/Å^3."
-        )
+        except NeighborOverflowError as err:
+            # Grow buffer by 1.5x, rounded up to multiple of 16 for alignment
+            max_neighbors = ((int(max_neighbors * 1.5) + 15) // 16) * 16
+            if max_neighbors > max_max_neighbors:
+                raise ValueError(
+                    f"Unable to get neighbor list. Structure is too dense. "
+                    f"max_neighbors ({max_neighbors}) exceeds cap from "
+                    f"density {max_density} atoms/A^3."
+                ) from err
 
     if pbc is not None:
         nblist, neighbor_ptr, unit_shifts = ret
@@ -198,7 +204,7 @@ def _safe_nl(
         nblist, neighbor_ptr = ret
         unit_shifts = None
 
-    return nblist, neighbor_ptr, unit_shifts, density
+    return nblist, neighbor_ptr, unit_shifts, max_neighbors
 
 
 def _compute_distances(

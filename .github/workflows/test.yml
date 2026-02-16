@@ -48,7 +48,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
           python-version: ${{ matrix.config.python }}
       - name: Virtual env
-        run: uv venv --python ${{ matrix.config.python }}
+        run: uv venv --python ${{ matrix.config.python }} --clear
       - name: Install dependencies
         run: |
           uv pip install -e ".[dgl]" \
@@ -96,7 +96,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
           python-version: ${{ matrix.config.python }}
       - name: Virtual env
-        run: uv venv --python ${{ matrix.config.python }}
+        run: uv venv --python ${{ matrix.config.python }} --clear
       - name: Install dependencies
         run: |
           uv sync --upgrade

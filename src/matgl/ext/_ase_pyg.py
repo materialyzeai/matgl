@@ -77,6 +77,7 @@ class Atoms2Graph(GraphConverter):
         """
         self.element_types = tuple(element_types)
         self.cutoff = cutoff
+        self.max_neighbors = 0.3
 
     def get_graph(self, atoms: Atoms) -> tuple[Data, torch.Tensor, list | np.ndarray]:
         """Get a DGL graph from an input Atoms.
@@ -88,11 +89,13 @@ class Atoms2Graph(GraphConverter):
             g: DGL graph
             state_attr: state features
         """
-        src_id, dst_id, _, images, positions = neighbor_list_from_ase(
+        src_id, dst_id, _, images, positions, max_neighbors = neighbor_list_from_ase(
             atoms=atoms,
             cutoff=self.cutoff,
             compute_distances=False,
+            density_guess=self.max_neighbors,
         )
+        self.max_neighbors = max_neighbors
         if atoms.get_pbc().any():
             lattice_matrix = torch.as_tensor(atoms.cell.array, dtype=torch.float32, device=src_id.device)
             # Convert Cartesian positions to fractional coordinates
@@ -176,9 +179,10 @@ class PESCalculator(Calculator):
                 "stress_weight to 1.0."
             )
         self.state_attr = state_attr
-        self.element_types = potential.model.element_types  # type: ignore
-        self.cutoff = potential.model.cutoff
+        self.element_types: tuple[str, ...] = potential.model.element_types  # type: ignore[assignment,union-attr]
+        self.cutoff: float = potential.model.cutoff  # type: ignore[assignment,union-attr]
         self.use_voigt = use_voigt
+        self._atoms2graph = Atoms2Graph(self.element_types, self.cutoff)
 
     def calculate(  # type:ignore[override]
         self,
@@ -199,9 +203,7 @@ class PESCalculator(Calculator):
         properties = properties or ["energy"]
         system_changes = system_changes or all_changes
         super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
-        element_types: tuple[str, ...] = self.element_types  # type: ignore[assignment]
-        cutoff: float = self.cutoff  # type: ignore[assignment]
-        graph, lattice, state_attr_default = Atoms2Graph(element_types, cutoff).get_graph(atoms)
+        graph, lattice, state_attr_default = self._atoms2graph.get_graph(atoms)
         if self.state_attr is not None:
             calc_result = self.potential(graph, lattice, self.state_attr)
         else:
