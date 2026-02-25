@@ -27,6 +27,8 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """Warp kernels for graph edge index transformation to sparse CSR format."""
 
+from __future__ import annotations
+
 import warp as wp
 
 
