@@ -15,5 +15,5 @@ if BACKEND == "DGL":
 else:
     from ._tensornet_pyg import TensorNet  # type: ignore[assignment]
     from ._tensornetwarp_pyg import TensorNet as TensorNetWarp
-    
+
 from ._wrappers import TransformedTargetModel
