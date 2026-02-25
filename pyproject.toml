@@ -161,6 +161,8 @@ lint.isort.required-imports = ["from __future__ import annotations"]
 "tests/**/*" = ["D", "PERF"]
 "docs/**/*" = ["D"]
 "examples/**/*" = ["D"]
+"src/matgl/kernels/*" = ["D100", "D103", "E741", "I002"]
+"src/matgl/ops/*" = ["D100", "D103"]
 
 [tool.pytest.ini_options]
 addopts = "--durations=30 --quiet -rXs --color=yes -p no:warnings"
@@ -173,6 +175,10 @@ exclude = ['examples', 'tests']
 [[tool.mypy.overrides]]
 module = ["requests.*", "tabulate.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["matgl.kernels.*"]
+ignore_errors = true
 
 [tool.coverage.run]
 relative_files = true
