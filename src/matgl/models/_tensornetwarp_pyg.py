@@ -578,7 +578,7 @@ class TensorNet(MatGLModel):
         # Obtain graph, with distances and relative position vectors
         bond_vec, bond_dist = compute_pair_vector_and_distance(pos, edge_index, pbc_offshift)
 
-        # perpare graph indices for message passing
+        # prepare graph indices for message passing
         row_data, row_indices, row_indptr, col_data, col_indices, col_indptr = graph_transform(
             edge_index.int(),
             z.shape[0],  # type: ignore[union-attr]
