@@ -334,8 +334,8 @@ def compare_param_gradients(
     print(f"Current loss:   {cur_loss.item():.6f}")
 
     # Build mapping for distance_proj layers (merged in current, separate in reference)
-    ref_sd = {k: p for k, p in ref_model.named_parameters()}
-    cur_sd = {k: p for k, p in cur_model.named_parameters()}
+    ref_sd = dict(ref_model.named_parameters())
+    cur_sd = dict(cur_model.named_parameters())
 
     all_match = True
     max_diff_overall = 0.0
