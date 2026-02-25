@@ -27,7 +27,6 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """Warp kernels for decomposing 3x3 tensors into I, A, S components."""
 
-
 import warp as wp
 
 from .utils import add_module, get_wp_fp_dtype
