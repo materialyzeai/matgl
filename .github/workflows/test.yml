@@ -79,7 +79,7 @@ jobs:
       matrix:
         config:
           - os: ubuntu-latest
-            python: "3.13"
+            python: "3.12"
           - os: macos-latest
             python: "3.11"
 
