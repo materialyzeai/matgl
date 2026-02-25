@@ -52,7 +52,7 @@ dependencies = [
     "ase",
     "torch<=2.9.1",  # TODO: Remove this pin. For some reason, torch 2.9 gives different results.
     "torchdata",
-    "lightning<=2.6.0",
+    "lightning<=2.6.1",
     "pydantic",
     "boto3",
     "numpy<3.0",
