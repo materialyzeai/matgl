@@ -273,7 +273,7 @@ If you are using any of the pretrained models, please cite the relevant works be
 >**QET**
 >
 > Ko, T. W., Liu, R., Mishra, A. R., Yu, Z., Qi, J., Ong, S. P. *A Fast, Accurate, and Reactive Equivariant Foundation Potential.*
-> arXiv preprint arXiv:2511.07249 (2025).
+> arXiv preprint arXiv:2511.07249 (2025). DOI: [10.48550/arXiv.2511.07249][QET]
 
 ## FAQs
 
