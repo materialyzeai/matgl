@@ -270,6 +270,11 @@ If you are using any of the pretrained models, please cite the relevant works be
 > Schütt, K. T., Hessmann, S. S. P., Gebauer, N. W. A., Lederer, J., Gastegger, M. *SchNetPack 2.0: A neural network toolbox for atomistic machine learning.*
 > J. Chem. Phys. 158, 144801 (2023). DOI: [10.1063/5.0138367][so3net]
 
+>**QET**
+>
+> Ko, T. W., Liu, R., Mishra, A. R., Yu, Z., Qi, J., Ong, S. P. *A Fast, Accurate, and Reactive Equivariant Foundation Potential.*
+> arXiv preprint arXiv:2511.07249 (2025).
+
 ## FAQs
 
 1. **The `M3GNet-MP-2021.2.8-PES` differs from the original TensorFlow (TF) implementation!**
