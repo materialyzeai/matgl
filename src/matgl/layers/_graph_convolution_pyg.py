@@ -113,7 +113,7 @@ class TensorNetInteraction(nn.Module):
         x_S = traceless_tensors
 
         messages = self.message(edge_index, x_I, x_A, x_S, edge_attr_processed)
-        Im, Am, Sm = self.aggregate(messages, edge_index[0], X.size(0))
+        Im, Am, Sm = self.aggregate(messages, edge_index[1], X.size(0))
         # Combine messages
         msg = Im + Am + Sm
 
