@@ -47,7 +47,7 @@ classifiers = [
 ]
 dependencies = [
     "ase",
-    "torch",  
+    "torch",
     "torchdata",
     "lightning<=2.6.1",
     "pydantic",
