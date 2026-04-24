@@ -39,9 +39,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Chemistry",
     "Topic :: Scientific/Engineering :: Information Analysis",
@@ -50,14 +47,15 @@ classifiers = [
 ]
 dependencies = [
     "ase",
-    "torch<=2.10.0",  # TODO: Remove this pin. For some reason, torch 2.9 gives different results.
+    "torch",
     "torchdata",
     "lightning<=2.6.1",
     "pydantic",
     "boto3",
     "numpy<3.0",
     "torch-geometric",
-    "pymatgen-core>=2026.2.24",
+    "pymatgen-core>=2026.4.16",
+    "huggingface_hub>=0.24",
 ]
 version = "2.1.1"
 
@@ -76,6 +74,9 @@ dgl = [
 ]
 ops = [
   "nvalchemi-toolkit-ops",
+]
+alchmtk = [
+  "nvalchemi-toolkit",
 ]
 
 [tool.setuptools.packages.find]

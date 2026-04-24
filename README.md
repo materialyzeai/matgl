@@ -168,10 +168,45 @@ as other simple administrative tasks (e.g., clearing the cache). Some simple exa
 
 For a full range of options, use `mgl -h`.
 
-### Code
+## Obtaining Models
 
-Users who just want to use the models out of the box should use the newly implemented `matgl.load_model` convenience
-method. The following is an example of a prediction of the formation energy for CsCl.
+Pre-trained MatGL models can be loaded from (and published to) the [Hugging Face Hub]. Any repo that contains the standard matgl
+serialization artifacts (`model.pt`, `state.pt`, and `model.json`) can be loaded directly using `matgl.load_model` by
+passing the repo id in `"owner/name"` form. Pre-trained models released by the [Materialyze] lab can be found under the
+[Materialyze Hugging Face Organization](https://huggingface.co/Materialyze).
+
+```python
+import matgl
+
+# Load directly from a Hugging Face Hub repo id.
+model = matgl.load_model("Materialyze/TensorNet-PES-MatPES-2025.1")
+```
+
+Equivalently, any matgl model class exposes a `from_pretrained` classmethod:
+
+```python
+from matgl.models import M3GNet
+
+model = M3GNet.from_pretrained("Materialyze/TensorNet-PES-MatPES-2025.1")
+```
+
+To publish a trained model to the Hugging Face Hub, use `push_to_hub` (requires `huggingface-cli login` or a `token`):
+
+```python
+model.push_to_hub("your-username/your-matgl-model", private=False)
+```
+
+To list available matgl models, you can use the `HfApi`:
+
+```python
+from huggingface_hub import HfApi
+hf = HfApi()
+print(list(hf.list_models(filter="matgl")))
+```
+
+### Model Usage
+
+he following is an example of a prediction of the formation energy for CsCl.
 
 ```python
 from pymatgen.core import Lattice, Structure
@@ -185,27 +220,6 @@ eform = model.predict_structure(struct)
 print(f"The predicted formation energy for CsCl is {float(eform.numpy()):.3f} eV/atom.")
 ```
 
-To obtain a listing of available pre-trained models,
-
-```python
-import matgl
-print(matgl.get_available_pretrained_models())
-```
-
-## Pytorch Hub
-
-The pre-trained models are also available on Pytorch hub. To use these models, simply install matgl and use the
-following commands:
-
-```python
-import torch
-
-# To obtain a listing of models
-torch.hub.list("materialsvirtuallab/matgl", force_reload=True)
-
-# To load a model
-model = torch.hub.load("materialyzeai/matgl", 'm3gnet_universal_potential')
-```
 ## Model Training
 
 In the PES training, the unit of energies, forces and stresses (optional) in the training, validation and test sets is extremely important to be consistent with the unit used in MatGL.
@@ -357,3 +371,4 @@ for their contributions to warp-acceleration for TensorNet, which yielded ~2-3x 
 [MatPES]: https://matpes.ai
 [MatCalc]: https://matcalc.ai
 [Materials Virtual Lab Docker Repository]: https://hub.docker.com/orgs/materialsvirtuallab/repositories
+[Hugging Face Hub]: https://huggingface.co

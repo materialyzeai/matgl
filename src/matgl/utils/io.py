@@ -6,16 +6,25 @@ import inspect
 import json
 import logging
 import os
+import re
+import tempfile
 import warnings
 from pathlib import Path
 
 import requests
 import torch
+from huggingface_hub import HfApi, create_repo, hf_hub_download
 
 import matgl
 from matgl.config import MATGL_CACHE, PRETRAINED_MODELS_BASE_URL
 
 logger = logging.getLogger(__file__)
+
+# Files that comprise a serialized matgl model on disk and on Hugging Face Hub.
+_MODEL_FILES = ("model.pt", "state.pt", "model.json")
+
+# Loose validation pattern for a Hugging Face repo_id ("owner/name" or "owner/name/subfolder"-like).
+_HF_REPO_ID_RE = re.compile(r"^[A-Za-z0-9][\w\-.]*/[\w\-.]+$")
 
 
 class IOMixIn:
@@ -164,6 +173,105 @@ class IOMixIn:
 
         return model
 
+    def push_to_hub(
+        self,
+        repo_id: str,
+        *,
+        commit_message: str = "Upload matgl model",
+        private: bool = False,
+        token: str | None = None,
+        metadata: dict | None = None,
+        revision: str | None = None,
+        create_pr: bool = False,
+        repo_type: str = "model",
+        readme_text: str | None = None,
+    ) -> str:
+        """Serialize the model and upload it to the Hugging Face Hub.
+
+        The model is saved using the standard matgl serialization (``model.pt``, ``state.pt``
+        and ``model.json``) to a temporary directory, then uploaded to the specified
+        repository. A simple ``README.md`` model card is generated if one is not already
+        present in the serialized artifacts.
+
+        Args:
+            repo_id: Target repository in ``"owner/name"`` form. The repo will be created
+                if it does not already exist.
+            commit_message: Commit message to use for the upload.
+            private: Whether to create the repository as private when it does not yet
+                exist. Ignored for existing repos.
+            token: Optional Hugging Face authentication token. Falls back to the token
+                cached by ``huggingface_hub`` (e.g. via ``huggingface-cli login``).
+            metadata: Optional metadata dict forwarded to :meth:`IOMixIn.save`.
+            revision: Optional branch or revision to upload to.
+            create_pr: If True, a pull request will be opened instead of committing to
+                the branch directly.
+            repo_type: Repo type, typically ``"model"``.
+            readme_text: Optional README.md text to upload.
+
+        Returns:
+            The URL of the resulting commit on the Hugging Face Hub.
+        """
+        api = HfApi(token=token)
+        create_repo(repo_id, private=private, token=token, repo_type=repo_type, exist_ok=True)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            self.save(tmp_path, metadata=metadata, makedirs=True)  # type: ignore[attr-defined]
+
+            readme = tmp_path / "README.md"
+            if not readme.exists():
+                readme.write_text(_generate_hf_model_card(self, metadata=metadata, readme_text=readme_text))
+
+            commit = api.upload_folder(
+                folder_path=str(tmp_path),
+                repo_id=repo_id,
+                repo_type=repo_type,
+                commit_message=commit_message,
+                revision=revision,
+                create_pr=create_pr,
+                token=token,
+            )
+
+        return commit.commit_url if hasattr(commit, "commit_url") else str(commit)
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        repo_id: str,
+        *,
+        revision: str | None = None,
+        token: str | None = None,
+        cache_dir: str | Path | None = None,
+        force_download: bool = False,
+        **kwargs,
+    ):
+        """Load a matgl model from a Hugging Face Hub repository.
+
+        This is a thin convenience wrapper around :meth:`IOMixIn.load` that downloads the
+        serialized model artifacts from the Hugging Face Hub and then delegates to the
+        standard matgl loading path.
+
+        Args:
+            repo_id: Repository id on the Hugging Face Hub (e.g. ``"owner/matgl-model"``).
+            revision: Optional branch, tag or commit hash to download from.
+            token: Optional Hugging Face authentication token for private repos.
+            cache_dir: Directory to cache downloaded files. Defaults to the
+                ``huggingface_hub`` cache location.
+            force_download: If True, re-download files even if they are cached.
+            **kwargs: Additional kwargs forwarded to :meth:`IOMixIn.load`.
+
+        Returns:
+            An instance of ``cls`` with weights loaded from the Hub.
+        """
+        fpaths = _download_from_hf_hub(
+            repo_id,
+            revision=revision,
+            token=token,
+            cache_dir=cache_dir,
+            force_download=force_download,
+        )
+        return cls.load(fpaths, **kwargs)
+
 
 class RemoteFile:
     """Handling of download of remote files to a local cache."""
@@ -222,18 +330,22 @@ def load_model(path: str | Path, **kwargs):
     r"""Convenience method to load a model from a directory or name.
 
     Args:
-        path (str|path): Path to saved model or name of pre-trained model. The search order is path, followed by
-            download from PRETRAINED_MODELS_BASE_URL (with caching).
-        **kwargs: Additional kwargs passed to RemoteFile class. E.g., a useful one might be force_download if you
-            want to update the model.
+        path (str|path): Path to saved model, name of pre-trained model, or Hugging Face Hub
+            repo id in ``"owner/name"`` form. The search order is: local path, the matgl
+            pretrained models hosted at PRETRAINED_MODELS_BASE_URL (with caching), and finally
+            the Hugging Face Hub if the name matches a repo id pattern.
+        **kwargs: Additional kwargs passed to RemoteFile class or, when loading from the
+            Hugging Face Hub, to :meth:`IOMixIn.from_pretrained` (e.g. ``revision``,
+            ``token``, ``force_download``).
 
     Returns:
         Returns: model_object if include_json is false. (model_object, dict) if include_json is True.
     """
+    str_path = str(path)
     path = Path(path)
 
     try:
-        fpaths = _get_file_paths(path, **kwargs)
+        fpaths = _get_file_paths(path, str_path=str_path, **kwargs)
         with open(fpaths["model.json"]) as f:
             d = json.load(f)
             modname = d["@module"]
@@ -257,14 +369,20 @@ def load_model(path: str | Path, **kwargs):
         ) from ex
 
 
-def _get_file_paths(path: Path, **kwargs):
+def _get_file_paths(path: Path, str_path: str | None = None, **kwargs):
     """Search path for files.
 
     Args:
-        path (Path): Path to saved model or name of pre-trained model. The search order is path, followed by
-            download from PRETRAINED_MODELS_BASE_URL (with caching).
-        **kwargs: Additional kwargs passed to RemoteFile class. E.g., a useful one might be force_download if you
-            want to update the model.
+        path (Path): Path to saved model, name of a pre-trained model, or Hugging Face
+            Hub repo id. The search order is: local path, pre-trained models hosted at
+            PRETRAINED_MODELS_BASE_URL (with caching), and finally the Hugging Face Hub
+            when the identifier matches a repo id pattern (``"owner/name"``).
+        str_path (str | None): The original string form of ``path``, preserved so that
+            Hugging Face repo ids (which use ``/``) are not mangled by ``Path``.
+        **kwargs: Additional kwargs passed to RemoteFile for the matgl repository, or
+            forwarded to ``huggingface_hub.hf_hub_download`` when loading from the Hub.
+            Supported Hub-specific kwargs include ``revision``, ``token``, ``cache_dir``,
+            and ``force_download``.
 
     Returns:
         {
@@ -273,18 +391,116 @@ def _get_file_paths(path: Path, **kwargs):
             "model.json": path to model.json file
         }
     """
-    fnames = ("model.pt", "state.pt", "model.json")
+    fnames = _MODEL_FILES
 
     if all((path / fn).exists() for fn in fnames):
         return {fn: path / fn for fn in fnames}
 
+    str_path = str_path if str_path is not None else str(path)
+
+    # Filter out Hub-only kwargs so they do not break the RemoteFile call below.
+    hub_only_keys = {"revision", "token", "cache_dir"}
+    remote_kwargs = {k: v for k, v in kwargs.items() if k not in hub_only_keys}
+
     try:
-        return {fn: RemoteFile(f"{PRETRAINED_MODELS_BASE_URL}{path}/{fn}", **kwargs).local_path for fn in fnames}
-    except requests.RequestException:
+        return {fn: RemoteFile(f"{PRETRAINED_MODELS_BASE_URL}{path}/{fn}", **remote_kwargs).local_path for fn in fnames}
+    except requests.RequestException as matgl_err:
+        # Fall back to Hugging Face Hub when the identifier looks like a repo id.
+        if _HF_REPO_ID_RE.match(str_path):
+            try:
+                return _download_from_hf_hub(str_path, **kwargs)
+            except Exception as hf_err:  # pragma: no cover - passthrough error path
+                raise ValueError(
+                    f"No valid model found at {PRETRAINED_MODELS_BASE_URL}{path} nor on the "
+                    f"Hugging Face Hub repo '{str_path}'."
+                ) from hf_err
         import traceback
 
         traceback.print_exc()
-        raise ValueError(f"No valid model found in pre-trained_models at {PRETRAINED_MODELS_BASE_URL}.") from None
+        raise ValueError(f"No valid model found in pre-trained_models at {PRETRAINED_MODELS_BASE_URL}.") from matgl_err
+
+
+def _download_from_hf_hub(
+    repo_id: str,
+    *,
+    revision: str | None = None,
+    token: str | None = None,
+    cache_dir: str | Path | None = None,
+    force_download: bool = False,
+    **_ignored,
+) -> dict[str, Path]:
+    """Download the three matgl model artifacts from a Hugging Face Hub repo.
+
+    Args:
+        repo_id: Hugging Face repo id of the form ``"owner/name"``.
+        revision: Optional branch, tag, or commit hash.
+        token: Optional authentication token.
+        cache_dir: Optional cache directory override.
+        force_download: If True, re-download files even if cached.
+        **_ignored: Swallows unrelated kwargs so this helper can be used as a drop-in
+            fallback inside ``_get_file_paths``.
+
+    Returns:
+        Mapping of filename to local path for the downloaded artifacts.
+    """
+    return {
+        fn: Path(
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=fn,
+                revision=revision,
+                token=token,
+                cache_dir=str(cache_dir) if cache_dir is not None else None,
+                force_download=force_download,
+            )
+        )
+        for fn in _MODEL_FILES
+    }
+
+
+def _generate_hf_model_card(model, metadata: dict | None = None, readme_text: str | None = None) -> str:
+    """Generate a minimal README.md model card for a matgl model uploaded to the Hub.
+
+    Args:
+        model: The model instance being uploaded.
+        metadata: Optional user-supplied metadata dict.
+        readme_text: Optional README.md text to upload. If None, a default README.md text will be generated.
+
+    Returns:
+        A markdown string suitable for use as ``README.md`` on the Hugging Face Hub.
+    """
+    cls_name = model.__class__.__name__
+    model_version = getattr(model, "__version__", 0)
+    meta_block = ""
+    if metadata:
+        try:
+            meta_block = "\n\n## Metadata\n\n```json\n" + json.dumps(metadata, indent=2, default=str) + "\n```\n"
+        except (TypeError, ValueError):
+            meta_block = ""
+
+    if readme_text is None:
+        readme_text = (
+            f"# {cls_name}\n\n"
+            f"This is a [matgl](https://github.com/materialsvirtuallab/matgl) `{cls_name}` "
+            f"model (version {model_version}).\n\n"
+            "## Usage\n\n"
+            "```python\n"
+            "import matgl\n\n"
+            'model = matgl.load_model("<owner>/<repo>")\n'
+            "```\n"
+        )
+
+    return (
+        "---\n"
+        "library_name: matgl\n"
+        "tags:\n"
+        "- matgl\n"
+        "- materials-science\n"
+        "- graph-neural-network\n"
+        "---\n\n"
+        f"{readme_text}"
+        f"{meta_block}"
+    )
 
 
 def _check_ver(cls_, d: dict):
@@ -314,5 +530,5 @@ def get_available_pretrained_models() -> list[str]:
     Returns:
         List of available models.
     """
-    r = requests.get("http://api.github.com/repos/materialsvirtuallab/matgl/contents/pretrained_models")
+    r = requests.get("http://api.github.com/repos/materialyzeai/matgl/contents/pretrained_models")
     return [d["name"] for d in json.loads(r.content.decode("utf-8")) if d["type"] == "dir"]

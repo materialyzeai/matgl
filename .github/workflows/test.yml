@@ -83,6 +83,9 @@ jobs:
             optionals: "ops"
           - os: ubuntu-latest
             python: "3.13"
+            optionals: "alchmtk"
+          - os: ubuntu-latest
+            python: "3.13"
           - os: macos-latest
             python: "3.11"
 
