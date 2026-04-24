@@ -192,7 +192,7 @@ class QET(TensorNet):
         
         self.norm = nn.LayerNorm(units + 3) if include_magmom else nn.LayerNorm(units + 2)
         # short-range energy
-        self.final_layer = WeightedReadOut(
+        self.qet_final_layer = WeightedReadOut(
             in_feats=(units + 3 if include_magmom else units + 2),  # 1 for atomic charge, 1  for elec_pot, 1 for magmom
             dims=[units, units],
             num_targets=ntargets,  # type: ignore
@@ -296,7 +296,7 @@ class QET(TensorNet):
         )
 
         node_feat = self.norm(combined_node_feat)              # (N_atoms, units+2 or units+3)
-        atomic_energies = self.final_layer(node_feat)
+        atomic_energies = self.qet_final_layer(node_feat)
     
         if self.return_features:
             return node_feat, atomic_energies
