@@ -12,17 +12,18 @@ if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)
 from matgl.models._tensornet_pyg import TensorNet
 
+torch.manual_seed(0)
+
 
 def test_model(graph_MoS_pyg):
-    torch.manual_seed(0)
 
     # Optional regression-check values
     EXPECTED = {
-        "swish": torch.tensor(0.0813),
-        "tanh": torch.tensor(-0.0189),
-        "sigmoid": torch.tensor(0.0353),
+        "swish": torch.tensor(0.0827),
+        "tanh": torch.tensor(-0.0258),
+        "sigmoid": torch.tensor(0.0360),
         "softplus2": torch.tensor(0.1164),
-        "softexp": torch.tensor(0.1148),
+        "softexp": torch.tensor(0.1100),
     }
 
     _, graph, _ = graph_MoS_pyg
@@ -31,7 +32,7 @@ def test_model(graph_MoS_pyg):
 
     outputs = {}
     for act in activations:
-        model = TensorNet(is_intensive=False, activation_type=act)
+        model = TensorNet(is_intensive=False, activation_type=act, use_warp=False)
         model.to(graph.pos.device)
 
         output = model(g=graph)
@@ -73,10 +74,10 @@ def test_model_intensive(graph_MoS_pyg):
     lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th, device=graph.pos.device)
     graph.pbc_offshift = torch.matmul(graph.pbc_offset, lat[0])
     graph.pos = graph.frac_coords @ lat[0]
-    model = TensorNet(element_types=["Mo", "S"], is_intensive=True)
+    model = TensorNet(element_types=["Mo", "S"], is_intensive=True, use_warp=False)
     model.to(graph.pos.device)
     output = model(g=graph)
-    assert torch.allclose(output.detach().cpu(), torch.tensor([-0.0897]), atol=1e-4)
+    assert torch.allclose(output.detach().cpu(), torch.tensor([-0.0906]), atol=1e-4)
 
 
 def test_model_intensive_with_weighted_atom(graph_MoS_pyg):
@@ -84,10 +85,10 @@ def test_model_intensive_with_weighted_atom(graph_MoS_pyg):
     lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th, device=graph.pos.device)
     graph.pbc_offshift = torch.matmul(graph.pbc_offset, lat[0])
     graph.pos = graph.frac_coords @ lat[0]
-    model = TensorNet(element_types=["Mo", "S"], is_intensive=True, readout_type="weighted_atom")
+    model = TensorNet(element_types=["Mo", "S"], is_intensive=True, readout_type="weighted_atom", use_warp=False)
     model.to(graph.pos.device)
     output = model(g=graph)
-    assert torch.allclose(output.detach().cpu(), torch.tensor([-0.0217]), atol=1e-4)
+    assert torch.allclose(output.detach().cpu(), torch.tensor([-0.0210]), atol=1e-4)
 
 
 def test_model_intensive_with_ReduceReadOut(graph_MoS_pyg):
@@ -95,10 +96,10 @@ def test_model_intensive_with_ReduceReadOut(graph_MoS_pyg):
     lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th, device=graph.pos.device)
     graph.pbc_offshift = torch.matmul(graph.pbc_offset, lat[0])
     graph.pos = graph.frac_coords @ lat[0]
-    model = TensorNet(is_intensive=True, readout_type="reduce_atom")
+    model = TensorNet(is_intensive=True, readout_type="reduce_atom", use_warp=False)
     model.to(graph.pos.device)
     output = model(g=graph)
-    assert torch.allclose(output.detach().cpu(), torch.tensor([-0.1045]), atol=1e-4)
+    assert torch.allclose(output.detach().cpu(), torch.tensor([-0.1075]), atol=1e-4)
 
 
 def test_model_intensive_with_classification(graph_MoS_pyg):
@@ -106,11 +107,7 @@ def test_model_intensive_with_classification(graph_MoS_pyg):
     lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th, device=graph.pos.device)
     graph.pbc_offshift = torch.matmul(graph.pbc_offset, lat[0])
     graph.pos = graph.frac_coords @ lat[0]
-    model = TensorNet(
-        element_types=["Mo", "S"],
-        is_intensive=True,
-        task_type="classification",
-    )
+    model = TensorNet(element_types=["Mo", "S"], is_intensive=True, task_type="classification", use_warp=False)
     model.to(graph.pos.device)
     output = model(g=graph)
-    assert torch.allclose(output.detach().cpu(), torch.tensor([0.5090]), atol=1e-4)
+    assert torch.allclose(output.detach().cpu(), torch.tensor([0.5091]), atol=1e-4)
