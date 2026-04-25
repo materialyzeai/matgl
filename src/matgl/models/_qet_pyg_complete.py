@@ -344,9 +344,9 @@ class QET(TensorNet):
                                  sigma=sigma)
 
         combined_node_feat = (
-            torch.hstack([x, chi.unsqueeze(dim=1), elec_pot.unsqueeze(dim=1), magmom.unsqueeze(dim=1)])
+            torch.hstack([x, charge.unsqueeze(dim=1), elec_pot.unsqueeze(dim=1), magmom.unsqueeze(dim=1)])
             if self.include_magmom
-            else torch.hstack([x, chi.unsqueeze(dim=1), elec_pot.unsqueeze(dim=1)])
+            else torch.hstack([x, charge.unsqueeze(dim=1), elec_pot.unsqueeze(dim=1)])
         )
 
         node_feat = self.norm(combined_node_feat)              # (N_atoms, units+2 or units+3)

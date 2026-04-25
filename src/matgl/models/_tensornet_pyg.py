@@ -235,31 +235,18 @@ class TensorNet(MatGLModel):
             layer.reset_parameters()
         self.out_norm.reset_parameters()
 
-    def forward(
+    
+    def forward_features(
         self,
         g: Any,
         state_attr: torch.Tensor | None = None,
-        return_all_layer_output: bool = False,
-        **kwargs,
+        **kwargs,      
     ):
-        """
-        Args:
-            g: PyG Data object or dict with keys 'node_type'/'z', 'pos', 'edge_index',
-               and optionally 'pbc_offshift', 'batch', 'num_graphs'.
-            state_attr: State attrs for a batch of graphs.
-            return_all_layer_output: Whether to return outputs of all intermediate layers.
-            **kwargs: For future flexibility. Not used at the moment.
-
-        Returns:
-            output: Output property for a batch of graphs, or a dict of layer outputs
-            when ``return_all_layer_output=True``.
-        """
         z = getattr(g, "node_type", getattr(g, "z", None))
         pos = g.pos
         edge_index = g.edge_index
         pbc_offshift = getattr(g, "pbc_offshift", None)
-        batch = getattr(g, "batch", None)
-        num_graphs = getattr(g, "num_graphs", None)
+        
 
         # Bond vectors and distances
         bond_vec, bond_dist = compute_pair_vector_and_distance(pos, edge_index, pbc_offshift)
@@ -307,6 +294,33 @@ class TensorNet(MatGLModel):
         x = self.out_norm(x)
         x = self.linear(x)
         fea_dict["readout"] = x
+
+        return fea_dict
+    
+    def forward(
+        self,
+        g: Any,
+        state_attr: torch.Tensor | None = None,
+        return_all_layer_output: bool = False,
+        **kwargs,
+    ):
+        """
+        Args:
+            g: PyG Data object or dict with keys 'node_type'/'z', 'pos', 'edge_index',
+               and optionally 'pbc_offshift', 'batch', 'num_graphs'.
+            state_attr: State attrs for a batch of graphs.
+            return_all_layer_output: Whether to return outputs of all intermediate layers.
+            **kwargs: For future flexibility. Not used at the moment.
+
+        Returns:
+            output: Output property for a batch of graphs, or a dict of layer outputs
+            when ``return_all_layer_output=True``.
+        """
+        fea_dict = self.forward_features(g=g, state_attr=state_attr)
+
+        x = fea_dict["readout"]
+        batch = getattr(g, "batch", None)
+        num_graphs = getattr(g, "num_graphs", None)
 
         if self.is_intensive:
             node_vec = self.readout(x, batch)

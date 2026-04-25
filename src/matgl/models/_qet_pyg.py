@@ -192,7 +192,7 @@ class QET(TensorNet):
         
         self.norm = nn.LayerNorm(units + 3) if include_magmom else nn.LayerNorm(units + 2)
         # short-range energy
-        self.qet_final_layer = WeightedReadOut(
+        self.final_layer = WeightedReadOut(
             in_feats=(units + 3 if include_magmom else units + 2),  # 1 for atomic charge, 1  for elec_pot, 1 for magmom
             dims=[units, units],
             num_targets=ntargets,  # type: ignore
@@ -239,7 +239,7 @@ class QET(TensorNet):
         Returns:
             output: output: Output property for a batch of graphs
         """
-        fea_dict = super().forward(g, state_attr, return_all_layer_output=True)
+        fea_dict = super().forward_features(g, state_attr)
         x = fea_dict["readout"]
         
         #### QET specific
@@ -290,13 +290,13 @@ class QET(TensorNet):
                                  sigma=sigma)
 
         combined_node_feat = (
-            torch.hstack([x, chi.unsqueeze(dim=1), elec_pot.unsqueeze(dim=1), magmom.unsqueeze(dim=1)])
+            torch.hstack([x, charge.unsqueeze(dim=1), elec_pot.unsqueeze(dim=1), magmom.unsqueeze(dim=1)])
             if self.include_magmom
-            else torch.hstack([x, chi.unsqueeze(dim=1), elec_pot.unsqueeze(dim=1)])
+            else torch.hstack([x, charge.unsqueeze(dim=1), elec_pot.unsqueeze(dim=1)])
         )
 
         node_feat = self.norm(combined_node_feat)              # (N_atoms, units+2 or units+3)
-        atomic_energies = self.qet_final_layer(node_feat)
+        atomic_energies = self.final_layer(node_feat)
     
         if self.return_features:
             return node_feat, atomic_energies
