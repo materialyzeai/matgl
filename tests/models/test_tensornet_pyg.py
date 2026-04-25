@@ -10,7 +10,15 @@ import matgl
 
 if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)
-from matgl.models._tensornet_pyg import TensorNet
+
+from matgl.models._tensornet_pyg import TensorNet, _warp_available
+
+if _warp_available:
+    pytest.skip(
+        "Skipping PYG tests: TensorNet with warp kernel will be tested with test_tensornet_warp",
+        allow_module_level=True,
+    )
+
 
 torch.manual_seed(0)
 
