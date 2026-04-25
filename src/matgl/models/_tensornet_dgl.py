@@ -46,7 +46,7 @@ logger = logging.getLogger(__file__)
 class TensorNet(MatGLModel):
     """The main TensorNet model. The official implementation can be found in https://github.com/torchmd/torchmd-net."""
 
-    __version__ = 1
+    __version__ = 2
 
     def __init__(
         self,

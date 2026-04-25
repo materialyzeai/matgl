@@ -133,13 +133,13 @@ def test_PESCalculator_and_M3GNetCalculator(MoS):
 
     np.testing.assert_allclose(
         s_ase.get_potential_energy(),
-        -10.876679,
+        -8.622107,
         atol=1e-5,
         rtol=1e-6,
     )
     np.testing.assert_allclose(
         s_ase.get_charges(),
-        np.array([0.727852, -0.727852]),
+        np.array([-0.759547, 0.759546]),
         atol=1e-5,
         rtol=1e-6,
     )

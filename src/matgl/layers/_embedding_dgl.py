@@ -3,19 +3,13 @@
 from __future__ import annotations
 
 import dgl
-import dgl.function as fn
 import torch
 from torch import nn
 
 import matgl
 from matgl.layers._core import MLP
 from matgl.utils.cutoff import cosine_cutoff
-from matgl.utils.maths import (
-    new_radial_tensor,
-    tensor_norm,
-    vector_to_skewtensor,
-    vector_to_symtensor,
-)
+from matgl.utils.maths import new_radial_tensor, scatter_add, tensor_norm, vector_to_skewtensor, vector_to_symtensor
 
 
 class EmbeddingBlock(nn.Module):
@@ -224,19 +218,18 @@ class TensorEmbedding(nn.Module):
         return scalars, skew_metrices, traceless_tensors
 
     def node_update_(self, graph: dgl.DGLGraph) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Perform node update.
+        """Aggregate edge messages onto source nodes.
 
-        :param graph: Input graph
-        :return: Output tensor for nodes.
+        Since edges are center -> neighbor, summing onto src makes the
+        center atom collect information from all of its neighboring dst nodes.
         """
-        graph.update_all(fn.copy_e("I", "I"), fn.sum("I", "Ie"))
-        graph.update_all(fn.copy_e("A", "A"), fn.sum("A", "Ae"))
-        graph.update_all(fn.copy_e("S", "S"), fn.sum("S", "Se"))
-        scalars = graph.ndata.pop("Ie")
-        skew_metrices = graph.ndata.pop("Ae")
-        traceless_tensors = graph.ndata.pop("Se")
+        src, _ = graph.edges()
 
-        return scalars, skew_metrices, traceless_tensors
+        scalars = scatter_add(graph.edata["I"], src, dim=0, dim_size=graph.num_nodes())
+        skew_matrices = scatter_add(graph.edata["A"], src, dim=0, dim_size=graph.num_nodes())
+        traceless_tensors = scatter_add(graph.edata["S"], src, dim=0, dim_size=graph.num_nodes())
+
+        return scalars, skew_matrices, traceless_tensors
 
     def forward(self, g: dgl.DGLGraph, state_attr: torch.Tensor | None = None):
         """

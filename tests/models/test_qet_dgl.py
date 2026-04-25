@@ -18,11 +18,11 @@ def test_model(graph_MoS):
 
     # Optional regression-check values
     EXPECTED = {
-        "swish": torch.tensor(-0.0181),
-        "tanh": torch.tensor(-0.1098),
-        "sigmoid": torch.tensor(0.1396),
-        "softplus2": torch.tensor(0.0143),
-        "softexp": torch.tensor(0.0792),
+        "swish": torch.tensor(-0.0112),
+        "tanh": torch.tensor(-0.1138),
+        "sigmoid": torch.tensor(0.1377),
+        "softplus2": torch.tensor(0.0127),
+        "softexp": torch.tensor(0.0819),
     }
 
     _, graph, _ = graph_MoS

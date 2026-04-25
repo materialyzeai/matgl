@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 
 import matgl
-from matgl import load_model
 
 if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)
@@ -25,7 +24,7 @@ def test_PESCalculator_and_M3GNetCalculator(MoS, caplog):
     adaptor = AseAtomsAdaptor()
     s_ase = adaptor.get_atoms(MoS)  # type: ignore
 
-    ff = load_model("pretrained_models/TensorNet-MatPES-PBE-v2025.1-PES//")
+    ff = matgl.load_model("Materialyze/TensorNet-PES-MatPES-PBE-2025.2")
     ff.calc_hessian = True
 
     # ------------------------------------------------------------------
@@ -62,7 +61,7 @@ def test_PESCalculator_and_M3GNetCalculator(MoS, caplog):
 
         np.testing.assert_allclose(
             s_ase.get_potential_energy(),
-            -10.4884214,
+            -10.609233,
             atol=1e-5,
             rtol=1e-6,
         )
@@ -105,16 +104,16 @@ def test_PESCalculator_and_M3GNetCalculator(MoS, caplog):
 def test_PESCalculator_mol(AcAla3NHMe):
     adaptor = AseAtomsAdaptor()
     mol = adaptor.get_atoms(AcAla3NHMe)
-    ff = matgl.load_model("pretrained_models/TensorNet-MatPES-PBE-v2025.1-PES/")
+    ff = matgl.load_model("Materialyze/TensorNet-PES-MatPES-PBE-2025.2")
     calc = PESCalculator(potential=ff)
     mol.set_calculator(calc)
     assert isinstance(mol.get_potential_energy(), float)
     assert list(mol.get_forces().shape) == [42, 3]
-    np.testing.assert_allclose(mol.get_potential_energy(), -247.286789, atol=1e-3)
+    np.testing.assert_allclose(mol.get_potential_energy(), -249.38649, atol=1e-3)
 
 
 def test_Relaxer(MoS):
-    pot = matgl.load_model("pretrained_models/TensorNet-MatPES-PBE-v2025.1-PES//")
+    pot = matgl.load_model("Materialyze/TensorNet-PES-MatPES-PBE-2025.2")
     r = Relaxer(pot)
     results = r.relax(MoS, traj_file="MoS_relax.traj")
     s = results["final_structure"]
@@ -161,7 +160,7 @@ def test_get_graph_from_atoms_mol():
 
 
 def test_molecular_dynamics(MoS2):
-    pot = matgl.load_model("pretrained_models/TensorNet-MatPES-PBE-v2025.1-PES//")
+    pot = matgl.load_model("Materialyze/TensorNet-PES-MatPES-PBE-2025.2")
     for ensemble in [
         "nvt",
         "nve",
