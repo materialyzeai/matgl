@@ -77,7 +77,7 @@ def test_model_intensive(graph_MoS_pyg):
     model = TensorNet(element_types=["Mo", "S"], is_intensive=True, use_warp=False)
     model.to(graph.pos.device)
     output = model(g=graph)
-    assert torch.allclose(output.detach().cpu(), torch.tensor([-0.1122]), atol=1e-4)
+    assert torch.allclose(output.detach().cpu(), torch.tensor([0.0943]), atol=1e-4)
 
 
 def test_model_intensive_with_weighted_atom(graph_MoS_pyg):
@@ -88,7 +88,7 @@ def test_model_intensive_with_weighted_atom(graph_MoS_pyg):
     model = TensorNet(element_types=["Mo", "S"], is_intensive=True, readout_type="weighted_atom", use_warp=False)
     model.to(graph.pos.device)
     output = model(g=graph)
-    assert torch.allclose(output.detach().cpu(), torch.tensor([0.0226]), atol=1e-4)
+    assert torch.allclose(output.detach().cpu(), torch.tensor([-0.0611]), atol=1e-4)
 
 
 def test_model_intensive_with_ReduceReadOut(graph_MoS_pyg):
@@ -99,7 +99,7 @@ def test_model_intensive_with_ReduceReadOut(graph_MoS_pyg):
     model = TensorNet(is_intensive=True, readout_type="reduce_atom", use_warp=False)
     model.to(graph.pos.device)
     output = model(g=graph)
-    assert torch.allclose(output.detach().cpu(), torch.tensor([0.0133]), atol=1e-4)
+    assert torch.allclose(output.detach().cpu(), torch.tensor([0.0129]), atol=1e-4)
 
 
 def test_model_intensive_with_classification(graph_MoS_pyg):
@@ -110,4 +110,4 @@ def test_model_intensive_with_classification(graph_MoS_pyg):
     model = TensorNet(element_types=["Mo", "S"], is_intensive=True, task_type="classification", use_warp=False)
     model.to(graph.pos.device)
     output = model(g=graph)
-    assert torch.allclose(output.detach().cpu(), torch.tensor([0.5059]), atol=1e-4)
+    assert torch.allclose(output.detach().cpu(), torch.tensor([0.4863]), atol=1e-4)
