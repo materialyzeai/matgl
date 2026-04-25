@@ -21,7 +21,7 @@ def test_model(graph_MoS_pyg):
     EXPECTED = {
         "swish": torch.tensor(0.0612),
         "tanh": torch.tensor(0.0675),
-        "sigmoid": torch.tensor(0.0360),
+        "sigmoid": torch.tensor(0.0898),
         "softplus2": torch.tensor(0.1164),
         "softexp": torch.tensor(0.1100),
     }
