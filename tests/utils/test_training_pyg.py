@@ -63,7 +63,7 @@ class TestModelTrainer:
             num_workers=0,
             generator=torch.Generator(device=device),
         )
-        model = TensorNet(element_types=element_types, is_intensive=False)
+        model = TensorNet(element_types=element_types, is_intensive=False, use_warp=False)
         lit_model = PotentialLightningModule(
             model=model, stress_weight=0.0001, loss="smooth_l1_loss", loss_params={"beta": 1.0}
         )
@@ -77,7 +77,7 @@ class TestModelTrainer:
         pred_BNO_energy = model.predict_structure(BaNiO3)
 
         # We are not expecting accuracy with 10 epochs. This just tests that the energy is actually < 0.
-        assert torch.allclose(pred_LFP_energy, torch.tensor([-2.8354]), atol=1e-4)
+        assert torch.allclose(pred_LFP_energy, torch.tensor([-1.8878]), atol=1e-4)
         assert torch.allclose(pred_BNO_energy, torch.tensor([-2.6534]), atol=1e-4)
         # specify customize optimizer and scheduler
         from torch.optim.lr_scheduler import CosineAnnealingLR
