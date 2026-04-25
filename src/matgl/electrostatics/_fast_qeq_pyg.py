@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from typing import Any
+
 import torch
 from torch import nn
+
 from matgl.utils.maths import scatter_add
+
 
 class LinearQeq(nn.Module):
     """Charge equilibrium within batches of structures. adapted from https://github.com/choderalab/espaloma-charge/blob/main/espaloma_charge/models.py."""
@@ -11,11 +14,7 @@ class LinearQeq(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, 
-                g: Any, 
-                total_charge: torch.Tensor,
-                chi: torch.Tensor,
-                hardness: torch.Tensor):
+    def forward(self, g: Any, total_charge: torch.Tensor, chi: torch.Tensor, hardness: torch.Tensor):
         r"""
         Compute atomic charges in a molecule using the charge equilibration (QEq) model.
 
@@ -41,7 +40,7 @@ class LinearQeq(nn.Module):
         """
         # if not hasattr(g, "chi") or not hasattr(g, "hardness"):
         #     raise AttributeError("LinearQeq expects node attributes `chi` and `hardness`.")
-        
+
         chi = chi.reshape(-1)
         hardness = hardness.reshape(-1)
 
@@ -75,6 +74,6 @@ class LinearQeq(nn.Module):
         sum_q = total_charge_graph[batch]
         sum_hardness_inv = sum_hardness_inv[batch]
         sum_chi_hardness_inv = sum_chi_hardness_inv[batch]
-        
+
         charge = -chi * hardness_inv + hardness_inv * (sum_q + sum_chi_hardness_inv) / sum_hardness_inv
         return charge

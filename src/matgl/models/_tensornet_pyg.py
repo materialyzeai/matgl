@@ -235,18 +235,16 @@ class TensorNet(MatGLModel):
             layer.reset_parameters()
         self.out_norm.reset_parameters()
 
-    
     def forward_features(
         self,
         g: Any,
         state_attr: torch.Tensor | None = None,
-        **kwargs,      
+        **kwargs,
     ):
         z = getattr(g, "node_type", getattr(g, "z", None))
         pos = g.pos
         edge_index = g.edge_index
         pbc_offshift = getattr(g, "pbc_offshift", None)
-        
 
         # Bond vectors and distances
         bond_vec, bond_dist = compute_pair_vector_and_distance(pos, edge_index, pbc_offshift)
@@ -296,7 +294,7 @@ class TensorNet(MatGLModel):
         fea_dict["readout"] = x
 
         return fea_dict
-    
+
     def forward(
         self,
         g: Any,

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from typing import Any
+
 import numpy as np
 import torch
 import torch.nn as nn
 
 import matgl
 from matgl.config import COULOMB_CONSTANT
+from matgl.graph._compute_pyg import compute_pair_vector_and_distance
 from matgl.utils.cutoff import polynomial_cutoff
 from matgl.utils.maths import scatter_add
-from matgl.graph._compute_pyg import compute_pair_vector_and_distance
 
 
 class ElectrostaticPotential(nn.Module):
@@ -63,11 +64,7 @@ class ElectrostaticPotential(nn.Module):
         self.element_types = element_types
         self.cutoff = cutoff
 
-    def forward(self, 
-                g: Any,
-                charge: torch.Tensor,
-                sigma: torch.Tensor
-                ):
+    def forward(self, g: Any, charge: torch.Tensor, sigma: torch.Tensor):
         """
         Aggregate electrostatic potential contributions for all atoms in the graph.
 
@@ -83,13 +80,11 @@ class ElectrostaticPotential(nn.Module):
         """
         if not hasattr(g, "edge_index"):
             raise AttributeError("ElectrostaticPotential expects a PyG Data-like object with `edge_index`.")
-        else:
-            edge_index = g.edge_index
+        edge_index = g.edge_index
 
         if not hasattr(g, "pos"):
             raise AttributeError("ElectrostaticPotential expects node positions in `pos`.")
-        else:
-            pos = g.pos
+        pos = g.pos
 
         # if not hasattr(g, "charge"):
         #     raise AttributeError("ElectrostaticPotential expects node charges in `charge`.")
@@ -100,10 +95,10 @@ class ElectrostaticPotential(nn.Module):
         #     raise AttributeError("ElectrostaticPotential expects node widths in `sigma`.")
         # else:
         #     sigma = g.sigma
-        
+
         _, bond_dist = compute_pair_vector_and_distance(pos, edge_index, getattr(g, "pbc_offshift", None))
         src, dst = edge_index[0], edge_index[1]
-        gamma_ij = torch.sqrt(sigma[src]**2 + sigma[dst]**2)
+        gamma_ij = torch.sqrt(sigma[src] ** 2 + sigma[dst] ** 2)
         elec_pot_edge = (
             charge[dst]
             * torch.erf(bond_dist / self.sqrt2 / gamma_ij)

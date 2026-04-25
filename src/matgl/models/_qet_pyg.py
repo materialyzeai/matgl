@@ -11,7 +11,7 @@ please refer to::
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Literal, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import torch
 from ase.data import atomic_numbers, covalent_radii
@@ -21,13 +21,10 @@ import matgl
 from matgl.config import DEFAULT_ELEMENTS
 from matgl.electrostatics._elec_pot_pyg import ElectrostaticPotential
 from matgl.electrostatics._fast_qeq_pyg import LinearQeq
-
 from matgl.layers import MLP
 from matgl.layers._readout_torch import WeightedReadOut
-from matgl.graph._compute_pyg import compute_pair_vector_and_distance
-from matgl.utils.maths import decompose_tensor, scatter_add, tensor_norm
-
 from matgl.models._tensornet_pyg import TensorNet
+from matgl.utils.maths import scatter_add
 
 try:
     from matgl.layers._embedding_warp import TensorEmbedding as TensorEmbeddingWarp
@@ -79,7 +76,7 @@ class QET(TensorNet):
         is_hardness_envs: bool = False,
         include_magmom: bool = False,
         return_features: bool = False,
-        use_warp: bool | None=None,
+        use_warp: bool | None = None,
         **kwargs,
     ):
         r"""
@@ -185,11 +182,9 @@ class QET(TensorNet):
                 dims=[units, units, units, 1], activation=nn.SiLU(), activate_last=False, bias_last=False
             )
 
-        
         self.qeq = LinearQeq()
         self.elec_pot = ElectrostaticPotential(element_types=element_types, cutoff=cutoff)
-        
-        
+
         self.norm = nn.LayerNorm(units + 3) if include_magmom else nn.LayerNorm(units + 2)
         # short-range energy
         self.final_layer = WeightedReadOut(
@@ -198,7 +193,6 @@ class QET(TensorNet):
             num_targets=ntargets,  # type: ignore
         )
 
-        
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -207,7 +201,6 @@ class QET(TensorNet):
             module = getattr(self, name, None)
             if module is not None and hasattr(module, "reset_parameters"):
                 module.reset_parameters()
-
 
         # if hasattr(self, "hardness_readout") and isinstance(self.hardness_readout, nn.Module):
         #     self.hardness_readout.reset_parameters()
@@ -241,13 +234,11 @@ class QET(TensorNet):
         """
         fea_dict = super().forward_features(g, state_attr)
         x = fea_dict["readout"]
-        
+
         #### QET specific
         ## electronegativity: chi + external potential
         chi = (
-            torch.squeeze(self.chi_readout(x)) + ext_pot
-            if ext_pot is not None
-            else torch.squeeze(self.chi_readout(x))
+            torch.squeeze(self.chi_readout(x)) + ext_pot if ext_pot is not None else torch.squeeze(self.chi_readout(x))
         )  # (num_nodes, 1)
 
         ## magmom
@@ -255,7 +246,6 @@ class QET(TensorNet):
         if self.include_magmom:
             magmom = torch.squeeze(self.magmom_readout(x))  # (num_nodes, 1)
 
-        
         ## hardness
         node_type = getattr(g, "node_type", getattr(g, "z", None))
         if node_type is None:
@@ -280,14 +270,14 @@ class QET(TensorNet):
         # g = self.qeq(g=g, total_charge=total_charge)
         # g = self.elec_pot(g)
 
-        charge = self.qeq(g=g, 
-                          total_charge=total_charge,
-                          chi=chi,
-                          hardness=hardness,)
-        
-        elec_pot = self.elec_pot(g,
-                                 charge=charge,
-                                 sigma=sigma)
+        charge = self.qeq(
+            g=g,
+            total_charge=total_charge,
+            chi=chi,
+            hardness=hardness,
+        )
+
+        elec_pot = self.elec_pot(g, charge=charge, sigma=sigma)
 
         combined_node_feat = (
             torch.hstack([x, charge.unsqueeze(dim=1), elec_pot.unsqueeze(dim=1), magmom.unsqueeze(dim=1)])
@@ -295,12 +285,12 @@ class QET(TensorNet):
             else torch.hstack([x, charge.unsqueeze(dim=1), elec_pot.unsqueeze(dim=1)])
         )
 
-        node_feat = self.norm(combined_node_feat)              # (N_atoms, units+2 or units+3)
+        node_feat = self.norm(combined_node_feat)  # (N_atoms, units+2 or units+3)
         atomic_energies = self.final_layer(node_feat)
-    
+
         if self.return_features:
             return node_feat, atomic_energies
- 
+
         batch = getattr(g, "batch", None)
         num_graphs = getattr(g, "num_graphs", None)
 
@@ -318,7 +308,6 @@ class QET(TensorNet):
             e_total = torch.sum(atomic_energies, dim=0, keepdim=True).squeeze()
 
         return torch.squeeze(e_total)
-    
 
     def predict_structure(
         self,
