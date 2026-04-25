@@ -100,8 +100,8 @@ class TestModelTrainer:
         pred_BNO_energy = model.predict_structure(BaNiO3)
 
         # We are not expecting accuracy with 10 epochs. This just tests that the energy is actually < 0.
-        assert torch.allclose(pred_LFP_energy, torch.tensor([-1.8878]), atol=1e-4)
-        assert torch.allclose(pred_BNO_energy, torch.tensor([-3.2062]), atol=1e-4)
+        assert torch.all(pred_LFP_energy < 0)
+        assert torch.all(pred_BNO_energy < 0)
 
         self.teardown_class()
 
