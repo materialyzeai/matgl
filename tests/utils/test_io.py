@@ -104,6 +104,57 @@ def test_load_model_falls_back_to_hf_hub(tmp_path):
     assert loaded._init_args["flag"] is True
 
 
+def test_load_model_prefers_materialyze_hf_org(tmp_path):
+    """A bare name should be resolved via the Materialyze HF org before falling back to GitHub."""
+    model = OldModel(11, source="materialyze")
+    serialized_dir = tmp_path / "serialized"
+    model.save(serialized_dir)
+
+    calls: list[str] = []
+
+    def fake_hf_hub_download(repo_id, filename, **kwargs):
+        calls.append(repo_id)
+        assert repo_id == f"{matgl_io.HF_MATGL_ORG}/BareModelName"
+        return str(serialized_dir / filename)
+
+    def fail_remote(*args, **kwargs):
+        raise AssertionError("RemoteFile should not be called when the HF org lookup succeeds")
+
+    with (
+        patch.object(matgl_io, "hf_hub_download", side_effect=fake_hf_hub_download),
+        patch.object(matgl_io, "RemoteFile", side_effect=fail_remote),
+    ):
+        loaded = load_model("BareModelName")
+
+    assert isinstance(loaded, torch.nn.Module)
+    assert loaded._init_args["source"] == "materialyze"
+    assert calls == [f"{matgl_io.HF_MATGL_ORG}/BareModelName"] * 3
+
+
+def test_load_model_falls_back_to_github_when_hf_missing(tmp_path):
+    """If a bare name is not on the Materialyze HF org, fall through to the GitHub mirror."""
+    model = OldModel(13, source="github")
+    serialized_dir = tmp_path / "serialized"
+    model.save(serialized_dir)
+
+    def fake_hf_hub_download(repo_id, filename, **kwargs):
+        raise RuntimeError(f"missing {repo_id}")
+
+    class FakeRemoteFile:
+        def __init__(self, uri, **kwargs):
+            fname = uri.rsplit("/", 1)[-1]
+            self.local_path = serialized_dir / fname
+
+    with (
+        patch.object(matgl_io, "hf_hub_download", side_effect=fake_hf_hub_download),
+        patch.object(matgl_io, "RemoteFile", FakeRemoteFile),
+    ):
+        loaded = load_model("LegacyOnlyModel")
+
+    assert isinstance(loaded, torch.nn.Module)
+    assert loaded._init_args["source"] == "github"
+
+
 def test_push_to_hub_invokes_hub_api(tmp_path):
     """push_to_hub should serialize the model and upload the folder via HfApi."""
     model = OldModel(2)

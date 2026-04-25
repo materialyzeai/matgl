@@ -6,6 +6,13 @@ nav_order: 3
 
 # Change Log
 
+## 2.1.2
+- Added Hugging Face Hub support for loading pre-trained models, with automatic fallback checking and respect for
+  the `MATGL_CACHE` environment variable.
+- Removed the deprecated `hubconf.py` (superseded by Hugging Face support).
+- Added `TensorNetWrapper` integrating the NVIDIA `nvalchemi-toolkit` for fully GPU-resident MD/Relax workflows,
+  including an example script for NVT MD. (#754)
+
 ## 2.1.1
 - Merged `TensorNet` (PyG) and `TensorNetWarp` into a single `TensorNet` class with optional warp acceleration
   (`use_warp` parameter; auto-detected when `nvalchemi-toolkit-ops` is installed).

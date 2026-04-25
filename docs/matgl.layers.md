@@ -18,17 +18,17 @@ Bases: `Enum`
 
 Enumeration of optional activation functions.
 
-#### sigmoid      *= <class ‘torch.nn.modules.activation.Sigmoid’>*
+#### sigmoid       *= <class ‘torch.nn.modules.activation.Sigmoid’>*
 
-#### softexp      *= <class ‘matgl.layers._activations.SoftExponential’>*
+#### softexp       *= <class ‘matgl.layers._activations.SoftExponential’>*
 
-#### softplus      *= <class ‘torch.nn.modules.activation.Softplus’>*
+#### softplus       *= <class ‘torch.nn.modules.activation.Softplus’>*
 
-#### softplus2      *= <class ‘matgl.layers._activations.SoftPlus2’>*
+#### softplus2       *= <class ‘matgl.layers._activations.SoftPlus2’>*
 
-#### swish      *= <class ‘torch.nn.modules.activation.SiLU’>*
+#### swish       *= <class ‘torch.nn.modules.activation.SiLU’>*
 
-#### tanh      *= <class ‘torch.nn.modules.activation.Tanh’>*
+#### tanh       *= <class ‘torch.nn.modules.activation.Tanh’>*
 
 ### *class* matgl.layers._activations.SoftExponential(alpha: float | None = None)
 
@@ -746,7 +746,7 @@ Init ThreeBodyInteractions.
 * **Parameters:**
   * **update_network_atom** – MLP for node features in Eq.2
   * **update_network_bond** – Gated-MLP for edge features in Eq.3
-  * **\*\*kwargs** – Kwargs pass-through to nn.Module.     *\_init*\_().
+  * **\*\*kwargs** – Kwargs pass-through to nn.Module.      *\_init*\_().
 
 #### forward(graph: dgl.DGLGraph, line_graph: dgl.DGLGraph, three_basis: torch.Tensor, three_cutoff: float, node_feat: torch.Tensor, edge_feat: torch.Tensor)
 

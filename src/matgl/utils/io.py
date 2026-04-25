@@ -26,6 +26,10 @@ _MODEL_FILES = ("model.pt", "state.pt", "model.json")
 # Loose validation pattern for a Hugging Face repo_id ("owner/name" or "owner/name/subfolder"-like).
 _HF_REPO_ID_RE = re.compile(r"^[A-Za-z0-9][\w\-.]*/[\w\-.]+$")
 
+# Default Hugging Face organization searched when a bare model name is supplied to
+# ``load_model`` (i.e. no "owner/" prefix). Mirrors the official matgl model zoo.
+HF_MATGL_ORG = "Materialyze"
+
 
 class IOMixIn:
     """Mixin class for handling input/output operations for model saving and loading.
@@ -118,11 +122,12 @@ class IOMixIn:
 
     @classmethod
     def load(cls, path: str | Path | dict, **kwargs):
-        """Load the model weights from a directory.
+        """Load the model weights from a directory, pre-trained name, or Hugging Face repo.
 
         Args:
-            path (str|path|dict): Path to saved model or name of pre-trained model. If it is a dict, it is assumed to
-                be of the form::
+            path (str|path|dict): Path to saved model, name of a pre-trained model, or
+                Hugging Face Hub repo id in ``"owner/name"`` form. If it is a dict, it is
+                assumed to be of the form::
 
                     {
                         "model.pt": path to model.pt file,
@@ -130,10 +135,19 @@ class IOMixIn:
                         "model.json": path to model.json file
                     }
 
-                Otherwise, the search order is path, followed by download from PRETRAINED_MODELS_BASE_URL
-                (with caching).
-            **kwargs: Additional kwargs passed to RemoteFile class. E.g., a useful one might be force_download if you
-                want to update the model.
+                Otherwise the identifier is resolved via :func:`_get_file_paths`, whose
+                search order is:
+
+                1. Local filesystem path.
+                2. If the identifier already matches an ``"owner/name"`` pattern, the
+                   Hugging Face Hub directly.
+                3. If the identifier is a bare model name, the official ``Materialyze``
+                   Hugging Face org (``Materialyze/<name>``).
+                4. The legacy matgl pretrained models hosted at
+                   ``PRETRAINED_MODELS_BASE_URL`` (with caching).
+            **kwargs: Additional kwargs passed to RemoteFile or, when loading from the
+                Hugging Face Hub, forwarded to ``huggingface_hub.hf_hub_download``
+                (e.g. ``force_download``, ``revision``, ``token``, ``cache_dir``).
 
         Returns: model_object.
         """
@@ -255,8 +269,9 @@ class IOMixIn:
             repo_id: Repository id on the Hugging Face Hub (e.g. ``"owner/matgl-model"``).
             revision: Optional branch, tag or commit hash to download from.
             token: Optional Hugging Face authentication token for private repos.
-            cache_dir: Directory to cache downloaded files. Defaults to the
-                ``huggingface_hub`` cache location.
+            cache_dir: Directory to cache downloaded files. Defaults to
+                ``MATGL_CACHE`` (i.e. ``~/.cache/matgl``) so that matgl shares a single
+                cache location for both the legacy GitHub mirror and the Hugging Face Hub.
             force_download: If True, re-download files even if they are cached.
             **kwargs: Additional kwargs forwarded to :meth:`IOMixIn.load`.
 
@@ -331,9 +346,17 @@ def load_model(path: str | Path, **kwargs):
 
     Args:
         path (str|path): Path to saved model, name of pre-trained model, or Hugging Face Hub
-            repo id in ``"owner/name"`` form. The search order is: local path, the matgl
-            pretrained models hosted at PRETRAINED_MODELS_BASE_URL (with caching), and finally
-            the Hugging Face Hub if the name matches a repo id pattern.
+            repo id in ``"owner/name"`` form. The search order is:
+
+            1. Local filesystem path.
+            2. If ``path`` is a bare model name (no ``"/"``), the ``Materialyze`` Hugging Face
+               org (``Materialyze/<name>``). This is the recommended source for official
+               matgl models.
+            3. The legacy matgl pretrained models hosted at ``PRETRAINED_MODELS_BASE_URL``
+               (with caching).
+
+            If ``path`` already matches a ``"owner/name"`` pattern it is loaded directly
+            from the Hugging Face Hub.
         **kwargs: Additional kwargs passed to RemoteFile class or, when loading from the
             Hugging Face Hub, to :meth:`IOMixIn.from_pretrained` (e.g. ``revision``,
             ``token``, ``force_download``).
@@ -374,9 +397,15 @@ def _get_file_paths(path: Path, str_path: str | None = None, **kwargs):
 
     Args:
         path (Path): Path to saved model, name of a pre-trained model, or Hugging Face
-            Hub repo id. The search order is: local path, pre-trained models hosted at
-            PRETRAINED_MODELS_BASE_URL (with caching), and finally the Hugging Face Hub
-            when the identifier matches a repo id pattern (``"owner/name"``).
+            Hub repo id. The search order is:
+
+            1. Local filesystem path.
+            2. If the identifier already matches an ``"owner/name"`` repo id pattern, the
+               Hugging Face Hub directly.
+            3. If the identifier is a bare model name, the official ``Materialyze`` Hugging
+               Face org (``Materialyze/<name>``).
+            4. The legacy matgl pretrained models hosted at ``PRETRAINED_MODELS_BASE_URL``
+               (with caching).
         str_path (str | None): The original string form of ``path``, preserved so that
             Hugging Face repo ids (which use ``/``) are not mangled by ``Path``.
         **kwargs: Additional kwargs passed to RemoteFile for the matgl repository, or
@@ -398,26 +427,42 @@ def _get_file_paths(path: Path, str_path: str | None = None, **kwargs):
 
     str_path = str_path if str_path is not None else str(path)
 
+    # An explicit "owner/name" identifier is always resolved from the Hugging Face Hub.
+    if _HF_REPO_ID_RE.match(str_path):
+        return _download_from_hf_hub(str_path, **kwargs)
+
     # Filter out Hub-only kwargs so they do not break the RemoteFile call below.
     hub_only_keys = {"revision", "token", "cache_dir"}
     remote_kwargs = {k: v for k, v in kwargs.items() if k not in hub_only_keys}
 
+    # For a bare model name, prefer the official Materialyze Hugging Face org; fall back
+    # to the legacy GitHub-hosted pretrained_models/ directory if the HF repo is missing.
+    hf_err: Exception | None = None
+    if "/" not in str_path:
+        hf_repo_id = f"{HF_MATGL_ORG}/{str_path}"
+        try:
+            return _download_from_hf_hub(hf_repo_id, **kwargs)
+        except Exception as err:
+            hf_err = err
+            logger.info(
+                "Model '%s' not found at Hugging Face repo '%s' (%s). Falling back to %s.",
+                str_path,
+                hf_repo_id,
+                err,
+                PRETRAINED_MODELS_BASE_URL,
+            )
+
     try:
         return {fn: RemoteFile(f"{PRETRAINED_MODELS_BASE_URL}{path}/{fn}", **remote_kwargs).local_path for fn in fnames}
     except requests.RequestException as matgl_err:
-        # Fall back to Hugging Face Hub when the identifier looks like a repo id.
-        if _HF_REPO_ID_RE.match(str_path):
-            try:
-                return _download_from_hf_hub(str_path, **kwargs)
-            except Exception as hf_err:  # pragma: no cover - passthrough error path
-                raise ValueError(
-                    f"No valid model found at {PRETRAINED_MODELS_BASE_URL}{path} nor on the "
-                    f"Hugging Face Hub repo '{str_path}'."
-                ) from hf_err
         import traceback
 
         traceback.print_exc()
-        raise ValueError(f"No valid model found in pre-trained_models at {PRETRAINED_MODELS_BASE_URL}.") from matgl_err
+        msg = (
+            f"No valid model found locally, at Hugging Face org '{HF_MATGL_ORG}', "
+            f"or in pre-trained_models at {PRETRAINED_MODELS_BASE_URL}."
+        )
+        raise ValueError(msg) from (hf_err or matgl_err)
 
 
 def _download_from_hf_hub(
@@ -431,11 +476,14 @@ def _download_from_hf_hub(
 ) -> dict[str, Path]:
     """Download the three matgl model artifacts from a Hugging Face Hub repo.
 
+    Downloads are cached under ``MATGL_CACHE`` by default so that matgl shares a single
+    cache location for both the legacy GitHub mirror and the Hugging Face Hub.
+
     Args:
         repo_id: Hugging Face repo id of the form ``"owner/name"``.
         revision: Optional branch, tag, or commit hash.
         token: Optional authentication token.
-        cache_dir: Optional cache directory override.
+        cache_dir: Optional cache directory override. Defaults to ``MATGL_CACHE``.
         force_download: If True, re-download files even if cached.
         **_ignored: Swallows unrelated kwargs so this helper can be used as a drop-in
             fallback inside ``_get_file_paths``.
@@ -443,6 +491,7 @@ def _download_from_hf_hub(
     Returns:
         Mapping of filename to local path for the downloaded artifacts.
     """
+    resolved_cache_dir = str(cache_dir) if cache_dir is not None else str(MATGL_CACHE)
     return {
         fn: Path(
             hf_hub_download(
@@ -450,7 +499,7 @@ def _download_from_hf_hub(
                 filename=fn,
                 revision=revision,
                 token=token,
-                cache_dir=str(cache_dir) if cache_dir is not None else None,
+                cache_dir=resolved_cache_dir,
                 force_download=force_download,
             )
         )
@@ -524,11 +573,42 @@ def _check_ver(cls_, d: dict):
         )
 
 
-def get_available_pretrained_models() -> list[str]:
-    """Checks Github for available pretrained_models for download. These can be used with load_model.
+def get_available_pretrained_models(include_hf: bool = True, include_github: bool = True) -> list[str]:
+    """Get the list of pre-trained models available for download via ``load_model``.
+
+    By default this queries both the official ``Materialyze`` Hugging Face org and the
+    legacy GitHub ``pretrained_models/`` directory, returning the de-duplicated union
+    sorted alphabetically. Hugging Face models that live under the ``Materialyze`` org
+    are returned as bare names (i.e. without the ``"Materialyze/"`` prefix) so they can
+    be passed directly to ``load_model``.
+
+    Args:
+        include_hf: If True, include models published under the ``Materialyze`` Hugging
+            Face org. Requires network access to ``huggingface.co``.
+        include_github: If True, include models hosted in the legacy GitHub
+            ``pretrained_models/`` directory. Requires network access to
+            ``api.github.com``.
 
     Returns:
-        List of available models.
+        Sorted list of available model names.
     """
-    r = requests.get("http://api.github.com/repos/materialyzeai/matgl/contents/pretrained_models")
-    return [d["name"] for d in json.loads(r.content.decode("utf-8")) if d["type"] == "dir"]
+    names: set[str] = set()
+
+    if include_hf:
+        try:
+            for model_info in HfApi().list_models(author=HF_MATGL_ORG):
+                repo_id = str(getattr(model_info, "id", "") or getattr(model_info, "modelId", "") or "")
+                if "/" in repo_id:
+                    names.add(repo_id.split("/", 1)[1])
+        except Exception as err:
+            logger.warning("Failed to list models from Hugging Face org '%s': %s", HF_MATGL_ORG, err)
+
+    if include_github:
+        try:
+            r = requests.get("http://api.github.com/repos/materialyzeai/matgl/contents/pretrained_models")
+            r.raise_for_status()
+            names.update(d["name"] for d in json.loads(r.content.decode("utf-8")) if d["type"] == "dir")
+        except Exception as err:
+            logger.warning("Failed to list models from GitHub pretrained_models: %s", err)
+
+    return sorted(names)

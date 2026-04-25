@@ -50,7 +50,7 @@ Init M3GNetCalculator with a Potential.
   * **state_attr** (*tensor*) – State attribute
   * **compute_stress** (*bool*) – whether to calculate the stress
   * **stress_weight** (*float*) – the stress weight.
-  * **\*\*kwargs** – Kwargs pass through to super().     *\_init*\_().
+  * **\*\*kwargs** – Kwargs pass through to super().      *\_init*\_().
 
 #### calculate(atoms: Atoms | None = None, properties: list | None = None, system_changes: list | None = None)
 
@@ -63,7 +63,7 @@ Perform calculation for an input Atoms.
     changed for new calculation. If not, the previous calculation
     results will be loaded.
 
-#### implemented_properties\*: List[str]\*      *= (‘energy’, ‘free_energy’, ‘forces’, ‘stress’, ‘hessian’)*
+#### implemented_properties\*: List[str]\*       *= (‘energy’, ‘free_energy’, ‘forces’, ‘stress’, ‘hessian’)*
 
 Properties calculator can handle (energy, forces, …)
 
@@ -113,21 +113,21 @@ Bases: `Enum`
 
 An enumeration of optimizers for used in.
 
-#### bfgs      *= <class ‘ase.optimize.bfgs.BFGS’>*
+#### bfgs       *= <class ‘ase.optimize.bfgs.BFGS’>*
 
-#### bfgslinesearch      *= <class ‘ase.optimize.bfgslinesearch.BFGSLineSearch’>*
+#### bfgslinesearch       *= <class ‘ase.optimize.bfgslinesearch.BFGSLineSearch’>*
 
-#### fire      *= <class ‘ase.optimize.fire.FIRE’>*
+#### fire       *= <class ‘ase.optimize.fire.FIRE’>*
 
-#### lbfgs      *= <class ‘ase.optimize.lbfgs.LBFGS’>*
+#### lbfgs       *= <class ‘ase.optimize.lbfgs.LBFGS’>*
 
-#### lbfgslinesearch      *= <class ‘ase.optimize.lbfgs.LBFGSLineSearch’>*
+#### lbfgslinesearch       *= <class ‘ase.optimize.lbfgs.LBFGSLineSearch’>*
 
-#### mdmin      *= <class ‘ase.optimize.mdmin.MDMin’>*
+#### mdmin       *= <class ‘ase.optimize.mdmin.MDMin’>*
 
-#### scipyfminbfgs      *= <class ‘ase.optimize.sciopt.SciPyFminBFGS’>*
+#### scipyfminbfgs       *= <class ‘ase.optimize.sciopt.SciPyFminBFGS’>*
 
-#### scipyfmincg      *= <class ‘ase.optimize.sciopt.SciPyFminCG’>*
+#### scipyfmincg       *= <class ‘ase.optimize.sciopt.SciPyFminCG’>*
 
 ### *class* matgl.ext.ase.Relaxer(potential: Potential | None = None, state_attr: torch.Tensor | None = None, optimizer: Optimizer | str = ‘FIRE’, relax_cell: bool = True, stress_weight: float = 0.01)
 

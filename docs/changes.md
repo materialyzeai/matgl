@@ -6,6 +6,19 @@ nav_order: 3
 
 # Change Log
 
+## 2.1.2
+- Added Hugging Face Hub support for loading pre-trained models, with automatic fallback checking and respect for
+  the `MATGL_CACHE` environment variable.
+- Removed the deprecated `hubconf.py` (superseded by Hugging Face support).
+- Added `TensorNetWrapper` integrating the NVIDIA `nvalchemi-toolkit` for fully GPU-resident MD/Relax workflows,
+  including an example script for NVT MD. (#754)
+- Added an example notebook for training a QET potential with PyTorch Lightning. (#742)
+- Added the QET-MatQ-PES FP dataset with accompanying README. (#743)
+- Added documentation on typical MatGL installation time for the DGL backend. (#741)
+- Bumped supported `torch` upper bound to `<=2.11.0`. (#746)
+- Upgraded `pymatgen-core` and refreshed `uv.lock`.
+- Test suite cleanup and improved coverage for IO utilities.
+
 ## 2.1.1
 - Merged `TensorNet` (PyG) and `TensorNetWarp` into a single `TensorNet` class with optional warp acceleration
   (`use_warp` parameter; auto-detected when `nvalchemi-toolkit-ops` is installed).
@@ -13,7 +26,7 @@ nav_order: 3
   and `matgl.layers._graph_convolution_warp`.
 - Made `nvalchemiops` an optional dependency throughout: `_pymatgen_pyg`, `_ase_pyg`, and warp layer imports
   all fall back gracefully to pymatgen-based neighbor list construction when the package is absent.
-  
+
 ## 2.1.0
 - Bug fix for accidental change of default backend.
 - Training module updated for QET support.

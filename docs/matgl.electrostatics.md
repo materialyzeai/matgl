@@ -8,7 +8,6 @@ nav_exclude: true
 
 Electrostatics module for MatGL.
 
-
 ## matgl.electrostatics._elec_pot_dgl module
 
 ## matgl.electrostatics._fast_qeq_dgl module

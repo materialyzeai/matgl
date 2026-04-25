@@ -211,8 +211,8 @@ Dataloader for MEGNet training.
   * **num_workers** (*int*) – Number of workers.
   * **use_ddp** (*bool*\*,\* *optional*) – Whether to use DDP. Defaults to False.
   * **pin_memory** (*bool*\*,\* *optional*) – Whether to pin memory. Defaults to False.
-  * **test_data** (*dgl.data.utils.Subset*      *|* *None*\*,\* *optional*) – Test dataset. Defaults to None.
-  * **generator** (*torch.Generator*      *|* *None*\*,\* *optional*) – Random number generator. Defaults to None.
+  * **test_data** (*dgl.data.utils.Subset*       *|* *None*\*,\* *optional*) – Test dataset. Defaults to None.
+  * **generator** (*torch.Generator*       *|* *None*\*,\* *optional*) – Random number generator. Defaults to None.
 * **Returns:**
   Train, validation and test data loaders. Test data
   : loader is None if test_data is None.

@@ -48,7 +48,7 @@ Bases: `object`
 Mixin class for model saving and loading.
 
 For proper usage, models should subclass nn.Module and IOMix and the save_args method should be called
-immediately after the super().     *\_init*\_() call:
+immediately after the super().      *\_init*\_() call:
 
 ```default
 super().__init__()

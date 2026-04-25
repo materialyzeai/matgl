@@ -30,7 +30,7 @@ warnings.simplefilter("ignore")
 
 # Loading the pre-trained QET PES model
 
-We will first load the QET PES model, which is trained on the MatQ dataset. This can be done with a single line of code. Here we only use M3GNet for demonstration and users can choose other available models.
+We will first load the QET PES model, which is trained on the MatQ dataset. This can be done with a single line of code. Here we only use QET for demonstration and users can choose other available models.
 
 
 ```python
@@ -102,7 +102,7 @@ calc = PESCalculator(pot)
 # set up the calculator for atoms object
 atoms.set_calculator(calc)
 print(f"The calculated potential energy is {atoms.get_potential_energy():.3f} eV.")
-# you can also calculate chharges as well
+# you can also calculate charges as well
 print(f"The calculated charges is {atoms.get_charges()}.")
 ```
 
