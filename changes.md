@@ -6,6 +6,14 @@ nav_order: 3
 
 # Change Log
 
+## 2.2.0
+- Fixed an incorrect message-passing convention in the PyG and DGL `TensorNet` interaction and embedding blocks.
+  Edge messages are now aggregated onto the source (center) node so that each atom correctly collects information
+  from its neighbors. Pre-trained PyG `TensorNet` weights have been re-released to match the corrected convention.
+  (#758, @kenko911)
+- Refreshed the PyG `TensorNet` README, added a missing `TrajectoryObserver`, improved `PESCalculator` stress-unit
+  handling and logging, and tightened the related unit tests. (#758, @kenko911)
+
 ## 2.1.2
 - Added Hugging Face Hub support for loading pre-trained models, with automatic fallback checking and respect for
   the `MATGL_CACHE` environment variable.

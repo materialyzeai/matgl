@@ -57,7 +57,7 @@ dependencies = [
     "pymatgen-core>=2026.4.16",
     "huggingface_hub>=0.24",
 ]
-version = "2.1.2"
+version = "2.2.0"
 
 [project.scripts]
 mgl = "matgl.cli:main"
