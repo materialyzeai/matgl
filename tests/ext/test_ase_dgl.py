@@ -116,7 +116,7 @@ def test_PESCalculator_and_M3GNetCalculator(MoS):
     # QET PES (charges + stress)
     # ============================================================
     s_ase = adaptor.get_atoms(MoS)  # type: ignore
-    ff = load_model("pretrained_models/QET-MatQ-PES/")
+    ff = matgl.load_model("Materialyze/QET-PES-MatQ")
     ff.calc_hessian = True
 
     calc = PESCalculator(
@@ -133,13 +133,13 @@ def test_PESCalculator_and_M3GNetCalculator(MoS):
 
     np.testing.assert_allclose(
         s_ase.get_potential_energy(),
-        -8.622107,
+        -10.798001,
         atol=1e-5,
         rtol=1e-6,
     )
     np.testing.assert_allclose(
         s_ase.get_charges(),
-        np.array([-0.759547, 0.759546]),
+        np.array([0.690892, -0.690892]),
         atol=1e-5,
         rtol=1e-6,
     )
