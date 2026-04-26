@@ -12,7 +12,7 @@ if matgl.config.BACKEND != "DGL":
 from matgl.models._qet_dgl import QET
 
 
-def test_model(graph_MoS):
+def test_qet(graph_MoS):
     torch.manual_seed(0)
     torch.use_deterministic_algorithms(True)
 
