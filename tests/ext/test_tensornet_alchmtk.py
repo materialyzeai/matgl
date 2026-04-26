@@ -547,7 +547,7 @@ class TestEndToEnd:
 class TestPretrained:
     def test_pretrained_MoS_energy(self, MoS):
         """Pretrained TensorNet on MoS with NL built via NeighborListHook."""
-        pot = matgl.load_model("pretrained_models/TensorNet-MatPES-PBE-v2025.1-PES/")
+        pot = matgl.load_model("TensorNet-PES-MatPES-PBE-2025.2")
         wrapper = TensorNetWrapper.from_potential(pot)
         _set_active_outputs(wrapper, {"energy", "forces"})
 
@@ -560,14 +560,14 @@ class TestPretrained:
 
         # Reference from test_ase_pyg.py: -10.4884214
         assert outputs["energy"].squeeze().item() == pytest.approx(
-            -10.4884214,
+            -10.609231830433348,
             abs=1e-3,
         )
         assert outputs["forces"].shape == (2, 3)
 
     def test_pretrained_molecule_energy(self, AcAla3NHMe):
         """Pretrained TensorNet on AcAla3NHMe molecule with NL built via NeighborListHook."""
-        pot = matgl.load_model("pretrained_models/TensorNet-MatPES-PBE-v2025.1-PES/")
+        pot = matgl.load_model("TensorNet-PES-MatPES-PBE-2025.2")
         wrapper = TensorNetWrapper.from_potential(pot)
         _set_active_outputs(wrapper, {"energy", "forces"})
 
@@ -580,7 +580,7 @@ class TestPretrained:
 
         # Reference from test_ase_pyg.py: -247.286789
         assert outputs["energy"].squeeze().item() == pytest.approx(
-            -247.286789,
+            -249.38646720203124,
             abs=1e-3,
         )
         assert outputs["forces"].shape == (42, 3)
