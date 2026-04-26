@@ -97,7 +97,8 @@ class MEGNetGraphConv(Module):
         Returns:
             Output tensor for nodes.
         """
-        graph.update_all(fn.copy_e("e", "e"), fn.mean("e", "ve"))
+        src, _ = graph.edges()
+        graph.ndata["ve"] = scatter_add(graph.edata["e"], src, dim=0, dim_size=graph.num_nodes())
         ve = graph.ndata.pop("ve")
         v = graph.ndata.pop("v")
         u = graph.ndata.pop("u")
@@ -355,8 +356,7 @@ class M3GNetGraphConv(Module):
         else:
             inputs = torch.hstack([vi, vj, eij])
         graph.edata["mess"] = self.node_update_func(inputs) * self.node_weight_func(rbf)
-        graph.update_all(fn.copy_e("mess", "mess"), fn.sum("mess", "ve"))
-        node_update = graph.ndata.pop("ve")
+        node_update = scatter_add(graph.edata["mess"], src_id, dim=0, dim_size=graph.num_nodes())
         return node_update
 
     def state_update_(self, graph: dgl.DGLGraph, state_feat: Tensor) -> Tensor:
