@@ -238,6 +238,48 @@ def test_model_lightning_module_loss_fn_scaling():
     assert torch.allclose(out["Total_Loss"], torch.tensor(0.0), atol=1e-6)
 
 
+def test_model_lightning_module_forward_and_step(LiFePO4, BaNiO3):
+    """ModelLightningModule.forward should attach `pos`/`pbc_offshift` derived from
+    ``frac_coords``/``pbc_offset`` and ``lat``, then return a model prediction; step
+    should compose forward + loss_fn into a (results, batch_size) tuple."""
+    torch.manual_seed(0)
+    structures = [LiFePO4, BaNiO3]
+    labels = {"energies": [-1.0, -2.0]}
+    element_types = get_element_list(structures)
+    converter = Structure2Graph(element_types=element_types, cutoff=5.0)
+    dataset = MGLDataset(
+        structures=structures,
+        converter=converter,
+        labels=labels,
+        save_cache=False,
+    )
+    # Manually batch the dataset to avoid creating a Lightning Trainer.
+    from matgl.graph._data_pyg import collate_fn_graph
+
+    batch = collate_fn_graph([dataset[0], dataset[1]])
+    g, lat, state_attr, _label_tensor = batch
+
+    model = TensorNet(element_types=element_types, is_intensive=True, ntargets=1, use_warp=False)
+    lit = ModelLightningModule(model=model, data_mean=0.0, data_std=1.0, sync_dist=False)
+
+    preds = lit(g=g, lat=lat, state_attr=state_attr)
+    # Two structures in the batch → preds should be a length-2 1-D tensor.
+    assert preds.shape == (2,)
+    assert torch.isfinite(preds).all()
+
+    # forward must have populated ``g.pos`` and ``g.pbc_offshift`` from ``lat``.
+    assert hasattr(g, "pos")
+    assert hasattr(g, "pbc_offshift")
+    assert g.pos.shape == (g.num_nodes, 3)
+    assert g.pbc_offshift.shape == (g.edge_index.size(1), 3)
+
+    # The full step path should also work and produce the expected logging keys.
+    results, batch_size = lit.step(batch)
+    assert {"Total_Loss", "MAE", "RMSE"}.issubset(results)
+    assert batch_size == preds.numel()
+    assert torch.isfinite(results["Total_Loss"])
+
+
 @pytest.mark.parametrize("distribution", ["normal", "uniform", "fake"])
 def test_xavier_init(distribution):
     model = TensorNet()

@@ -217,3 +217,149 @@ def test_load_bad_model():
             load_model("bad_serialized_model")
     finally:
         shutil.rmtree("bad_serialized_model")
+
+
+def test_load_model_wraps_unknown_error_as_runtime_error(tmp_path):
+    """Non-(ImportError, ValueError) exceptions should be re-raised as ``RuntimeError``."""
+    serialized_dir = tmp_path / "weird_model"
+    serialized_dir.mkdir()
+    for fn in ("model.pt", "state.pt", "model.json"):
+        (serialized_dir / fn).write_text("doesn't matter")
+
+    def boom(*_args, **_kwargs):
+        raise KeyboardInterrupt("boom")
+
+    with (
+        patch.object(matgl_io, "_get_file_paths", side_effect=boom),
+        pytest.raises(RuntimeError, match="Unknown error occurred while loading model"),
+    ):
+        load_model(serialized_dir)
+
+
+def test_get_file_paths_malformed_identifier_raises_value_error(tmp_path):
+    """An identifier that contains ``/`` but doesn't match a valid HF repo id must
+    fail with a clear ``ValueError`` rather than attempting a network call."""
+    from matgl.utils.io import _get_file_paths
+
+    # Doesn't exist locally and doesn't match ``owner/name`` (leading slash, double slash).
+    bogus = "//bad//repo//id"
+    with pytest.raises(ValueError, match=r"No valid model found locally or at Hugging Face Hub"):
+        _get_file_paths(tmp_path / bogus, str_path=bogus)
+
+
+def test_get_file_paths_bare_name_hub_failure_raises_value_error(tmp_path):
+    """When a bare name fails to download from the materialyze HF org, raise ``ValueError``."""
+    from matgl.utils.io import _get_file_paths
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("simulated hub failure")
+
+    with (
+        patch.object(matgl_io, "_download_from_hf_hub", side_effect=boom),
+        pytest.raises(ValueError, match=r"No valid model found locally or at Hugging Face repo"),
+    ):
+        _get_file_paths(tmp_path / "BareName", str_path="BareName")
+
+
+def test_iomixin_load_dgl_class_under_pyg_warns():
+    """Loading a model whose nested kwargs reference a DGL-only class under PYG must warn.
+
+    Triggers the branch that auto-flips the backend to DGL when a serialized model has a
+    nested component class name containing ``m3gnet`` / ``megnet`` / ``chgnet`` / ``qet``.
+    """
+    import matgl as _matgl
+
+    if _matgl.config.BACKEND != "PYG":
+        pytest.skip("Only meaningful on the PyG backend.")
+
+    # IOMixIn.load expects a dict-of-paths or a Path. Pre-build the artifacts on disk.
+    import json as _json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        nested = {
+            "@class": "M3GNet",
+            "@module": "definitely.not.a.real.module.at.all",
+            "@model_version": 1,
+            "init_args": {},
+        }
+        init_args = {"n": 1, "submodel": nested}
+
+        torch.save(init_args, tmp_path / "model.pt")
+        torch.save({}, tmp_path / "state.pt")
+        (tmp_path / "model.json").write_text(
+            _json.dumps(
+                {
+                    "@class": "OldModel",
+                    "@module": "tests.utils.test_io",
+                    "@model_version": 1,
+                    "metadata": None,
+                    "kwargs": init_args,
+                }
+            )
+        )
+
+        # ``matgl.set_backend("DGL")`` would mutate global state and may fail if DGL
+        # isn't installed; patch it to a no-op so the test is self-contained.
+        with (
+            patch.object(_matgl, "set_backend") as mock_set_backend,
+            pytest.warns(UserWarning, match=r"Setting the backend to DGL"),
+            pytest.raises((ImportError, ValueError, ModuleNotFoundError)),
+        ):
+            OldModel.load(tmp_path)
+
+        mock_set_backend.assert_called_with("DGL")
+
+
+def test_generate_hf_model_card_with_unserializable_metadata():
+    """``_generate_hf_model_card`` must swallow ``TypeError`` from non-serializable metadata.
+
+    Forces the ``json.dumps`` fallback to fail even with ``default=str`` by using an
+    object whose ``__repr__`` raises (and therefore so does ``str(obj)``).
+    """
+    from matgl.utils.io import _generate_hf_model_card
+
+    class Unserializable:
+        def __repr__(self):
+            raise TypeError("repr exploded")
+
+    model = OldModel(1)
+    card = _generate_hf_model_card(model, metadata={"oops": Unserializable()})
+
+    assert "## Metadata" not in card
+    assert "OldModel" in card
+
+
+def test_get_available_pretrained_models_handles_hub_errors():
+    """If the HF hub call fails, ``get_available_pretrained_models`` returns an empty list."""
+
+    class _BoomApi:
+        def list_models(self, **_kwargs):
+            raise RuntimeError("network is down")
+
+    with patch.object(matgl_io, "HfApi", return_value=_BoomApi()):
+        names = get_available_pretrained_models()
+
+    assert names == []
+
+
+def test_get_available_pretrained_models_strips_owner_prefix():
+    """Returned names should be bare (no ``"owner/"`` prefix) and sorted."""
+
+    class _FakeModelInfo:
+        def __init__(self, repo_id: str):
+            self.id = repo_id
+
+    class _FakeApi:
+        def list_models(self, **_kwargs):
+            return [
+                _FakeModelInfo("materialyze/Zeta"),
+                _FakeModelInfo("materialyze/Alpha"),
+                _FakeModelInfo("no-slash-id"),  # malformed entries are silently skipped
+            ]
+
+    with patch.object(matgl_io, "HfApi", return_value=_FakeApi()):
+        names = get_available_pretrained_models()
+
+    assert names == ["Alpha", "Zeta"]

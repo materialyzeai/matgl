@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os.path
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 import torch
 from ase.build import molecule
+from ase.calculators.calculator import Calculator
 from pymatgen.io.ase import AseAtomsAdaptor
 
 import matgl
@@ -13,6 +15,7 @@ from matgl import load_model
 
 if matgl.config.BACKEND != "DGL":
     pytest.skip("Skipping DGL tests", allow_module_level=True)
+from matgl.ext import _ase_dgl as ase_mod
 from matgl.ext.ase import Atoms2Graph, M3GNetCalculator, MolecularDynamics, PESCalculator, Relaxer
 
 
@@ -220,7 +223,7 @@ def test_get_graph_from_atoms_mol():
     assert np.allclose(state, [0.0, 0.0])
 
 
-@pytest.mark.skipif(True, reason="Too slow.")
+@pytest.mark.skipif(True, reason="Slow; superseded by test_molecular_dynamics_branches which mocks the calculator.")
 def test_molecular_dynamics(MoS2):
     pot = load_model("TensorNetDGL-PES-MatPES-PBE-2025.2")
     for ensemble in [
@@ -243,3 +246,72 @@ def test_molecular_dynamics(MoS2):
     md.run(1)
     with pytest.raises(ValueError, match="Ensemble not supported"):
         MolecularDynamics(MoS2, potential=pot, ensemble="notanensemble")
+
+
+def _fake_pes_calculator():
+    """Build a stand-in for ``PESCalculator`` that satisfies ASE's ``set_calculator``.
+
+    The real ``PESCalculator`` requires a trained Potential. We avoid downloading a
+    pretrained model in tests by substituting a minimal ASE ``Calculator`` whose
+    ``calculate`` is never invoked because the tests never run MD steps.
+    """
+    calc = MagicMock(spec=Calculator)
+    calc.results = {}
+    calc.parameters = {}
+    return calc
+
+
+def test_molecular_dynamics_branches(MoS2):
+    """Exercise every supported MD ensemble branch (and the invalid one) without
+    requiring a pretrained potential.
+
+    The MD constructors don't run any forces at init time, so a mock PESCalculator
+    is sufficient to hit all branches in ``MolecularDynamics.__init__`` and the
+    ``set_atoms`` helper.
+    """
+    fake_potential = MagicMock(spec=torch.nn.Module)
+
+    ensembles = [
+        "nvt",
+        "nve",
+        "nvt_langevin",
+        "nvt_andersen",
+        "nvt_bussi",
+        "nvt_nose_hoover_chain",
+        "npt",
+        "npt_berendsen",
+        "npt_nose_hoover",
+        "npt_nose_hoover_chain",
+    ]
+
+    with patch.object(ase_mod, "PESCalculator", side_effect=lambda **_kw: _fake_pes_calculator()):
+        for ensemble in ensembles:
+            md = MolecularDynamics(
+                MoS2,
+                potential=fake_potential,
+                ensemble=ensemble,
+                taut=0.1,
+                taup=0.1,
+                compressibility_au=10,
+            )
+            assert md.dyn is not None
+            # Re-wire calculator/atoms via the public helper.
+            md.set_atoms(MoS2)
+
+        # ``taut`` / ``taup`` defaults branch.
+        md_default = MolecularDynamics(
+            MoS2,
+            potential=fake_potential,
+            ensemble="npt_nose_hoover_chain",
+            taut=None,
+            taup=None,
+            compressibility_au=10,
+        )
+        assert md_default.dyn is not None
+
+        with pytest.raises(ValueError, match="Ensemble not supported"):
+            MolecularDynamics(MoS2, potential=fake_potential, ensemble="notanensemble")
+
+        # ``stress_weight`` is rejected with a warning.
+        with pytest.warns(UserWarning, match="Relaxer does not support user-defined stress_weight"):
+            MolecularDynamics(MoS2, potential=fake_potential, ensemble="nve", stress_weight=0.1)
