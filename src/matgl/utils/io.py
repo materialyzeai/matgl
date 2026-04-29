@@ -204,8 +204,10 @@ class IOMixIn:
 
         The model is saved using the standard matgl serialization (``model.pt``, ``state.pt``
         and ``model.json``) to a temporary directory, then uploaded to the specified
-        repository. A simple ``README.md`` model card is generated if one is not already
-        present in the serialized artifacts.
+        repository. A ``README.md`` model card is generated only when the repository is
+        being created for the first time; if the repository already exists on the Hub, its
+        existing ``README.md`` is left untouched (unless ``readme_text`` is explicitly
+        provided, in which case the supplied content is uploaded).
 
         Args:
             repo_id: Target repository in ``"owner/name"`` form. The repo will be created
@@ -220,12 +222,15 @@ class IOMixIn:
             create_pr: If True, a pull request will be opened instead of committing to
                 the branch directly.
             repo_type: Repo type, typically ``"model"``.
-            readme_text: Optional README.md text to upload.
+            readme_text: Optional README.md text to upload. When provided, the supplied
+                content is always uploaded (overwriting any existing README on the Hub).
+                When omitted, a default README is generated only for newly-created repos.
 
         Returns:
             The URL of the resulting commit on the Hugging Face Hub.
         """
         api = HfApi(token=token)
+        repo_existed = api.repo_exists(repo_id=repo_id, repo_type=repo_type, token=token)
         create_repo(repo_id, private=private, token=token, repo_type=repo_type, exist_ok=True)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -233,7 +238,10 @@ class IOMixIn:
             self.save(tmp_path, metadata=metadata, makedirs=True)  # type: ignore[attr-defined]
 
             readme = tmp_path / "README.md"
-            if not readme.exists():
+            # Only write a README when (a) the user explicitly supplied one, or (b) the
+            # repo is being created fresh. For pre-existing repos with no explicit
+            # readme_text, the existing README on the Hub is retained.
+            if not readme.exists() and (readme_text is not None or not repo_existed):
                 readme.write_text(_generate_hf_model_card(self, metadata=metadata, readme_text=readme_text))
 
             commit = api.upload_folder(

@@ -175,6 +175,7 @@ def test_push_to_hub_invokes_hub_api(tmp_path):
         patch.object(matgl_io, "HfApi") as fake_api_cls,
     ):
         fake_api = MagicMock()
+        fake_api.repo_exists.return_value = False
         fake_api.upload_folder.side_effect = fake_upload_folder
         fake_api_cls.return_value = fake_api
 
@@ -183,6 +184,51 @@ def test_push_to_hub_invokes_hub_api(tmp_path):
     assert url == "https://huggingface.co/owner/repo/commit/abcdef"
     assert captured["repo_id"] == "owner/repo"
     fake_create.assert_called_once()
+
+
+def test_push_to_hub_retains_existing_readme(tmp_path):
+    """When the repo already exists, push_to_hub must not generate a README."""
+    model = OldModel(2)
+
+    def fake_upload_folder(*, folder_path, repo_id, **kwargs):
+        files = set(os.listdir(folder_path))
+        assert {"model.pt", "state.pt", "model.json"}.issubset(files)
+        assert "README.md" not in files
+        return MagicMock(commit_url="https://huggingface.co/owner/repo/commit/deadbeef")
+
+    with (
+        patch.object(matgl_io, "create_repo"),
+        patch.object(matgl_io, "HfApi") as fake_api_cls,
+    ):
+        fake_api = MagicMock()
+        fake_api.repo_exists.return_value = True
+        fake_api.upload_folder.side_effect = fake_upload_folder
+        fake_api_cls.return_value = fake_api
+
+        model.push_to_hub("owner/repo", metadata={"note": "test"})
+
+
+def test_push_to_hub_uploads_explicit_readme_for_existing_repo(tmp_path):
+    """An explicit ``readme_text`` must be uploaded even when the repo already exists."""
+    model = OldModel(2)
+
+    def fake_upload_folder(*, folder_path, repo_id, **kwargs):
+        files = set(os.listdir(folder_path))
+        assert "README.md" in files
+        contents = (Path(folder_path) / "README.md").read_text()
+        assert "Custom README content" in contents
+        return MagicMock(commit_url="https://huggingface.co/owner/repo/commit/cafebabe")
+
+    with (
+        patch.object(matgl_io, "create_repo"),
+        patch.object(matgl_io, "HfApi") as fake_api_cls,
+    ):
+        fake_api = MagicMock()
+        fake_api.repo_exists.return_value = True
+        fake_api.upload_folder.side_effect = fake_upload_folder
+        fake_api_cls.return_value = fake_api
+
+        model.push_to_hub("owner/repo", readme_text="Custom README content")
 
 
 def test_load_bad_model():
