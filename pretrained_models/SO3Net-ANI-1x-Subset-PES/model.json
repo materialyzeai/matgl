@@ -1,0 +1,55 @@
+{
+    "@class": "Potential",
+    "@module": "matgl.apps.pes",
+    "@model_version": 3,
+    "metadata": null,
+    "kwargs": {
+        "model": {
+            "@class": "SO3Net",
+            "@module": "matgl.models._so3net",
+            "@model_version": 0,
+            "init_args": {
+                "element_types": [
+                    "H",
+                    "C",
+                    "N",
+                    "O"
+                ],
+                "units": 64,
+                "dim_state_embedding": 0,
+                "ntypes_state": null,
+                "dim_state_feats": null,
+                "nblocks": 3,
+                "nmax": 5,
+                "cutoff": 5.0,
+                "rbf_learnable": false,
+                "target_property": "atomwise",
+                "task_type": "regression",
+                "readout_type": "weighted_atom",
+                "niters_set2set": 3,
+                "nlayers_set2set": 3,
+                "nlayers_readout": 2,
+                "is_intensive": false,
+                "include_state": false,
+                "use_vector_representation": false,
+                "correct_charges": false,
+                "predict_dipole_magnitude": false,
+                "activation_type": "swish",
+                "ntargets": 1,
+                "return_vector_representation": false,
+                "dim_node_embedding": 64,
+                "lmax": 2
+            }
+        },
+        "data_mean": "tensor(0.)",
+        "data_std": "tensor(3.70301199)",
+        "element_refs": "tensor([  -16.51807976, -1036.37304688, -1488.65246582, -2046.00830078])",
+        "calc_forces": true,
+        "calc_stresses": false,
+        "calc_hessian": false,
+        "calc_magmom": false,
+        "calc_repuls": false,
+        "zbl_trainable": false,
+        "debug_mode": false
+    }
+}
