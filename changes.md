@@ -6,6 +6,26 @@ nav_order: 3
 
 # Change Log
 
+## Unreleased
+- Removed the legacy GitHub `pretrained_models/` download fallback now that Hugging Face
+  is the canonical source for pre-trained matgl models. The `RemoteFile` class and the
+  `PRETRAINED_MODELS_BASE_URL` config constant have been removed, and
+  `get_available_pretrained_models` no longer accepts the `include_hf` / `include_github`
+  arguments (it now always queries the `materialyze` Hugging Face org). **Breaking
+  change** for any code that imported `matgl.utils.io.RemoteFile` or
+  `matgl.config.PRETRAINED_MODELS_BASE_URL` directly.
+
+## 2.2.1
+- Updated HuggingFace Repo Id to lowercase "materialyze".
+
+## 2.2.0
+- Fixed an incorrect message-passing convention in the PyG and DGL `TensorNet` interaction and embedding blocks.
+  Edge messages are now aggregated onto the source (center) node so that each atom correctly collects information
+  from its neighbors. Pre-trained PyG `TensorNet` weights have been re-released to match the corrected convention.
+  (#758, @kenko911)
+- Refreshed the PyG `TensorNet` README, added a missing `TrajectoryObserver`, improved `PESCalculator` stress-unit
+  handling and logging, and tightened the related unit tests. (#758, @kenko911)
+
 ## 2.1.2
 - Added Hugging Face Hub support for loading pre-trained models, with automatic fallback checking and respect for
   the `MATGL_CACHE` environment variable.

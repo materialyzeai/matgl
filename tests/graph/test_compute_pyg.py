@@ -10,6 +10,7 @@ if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)
 from matgl.graph._compute_pyg import (
     compute_pair_vector_and_distance,
+    separate_node_edge_keys,
 )
 
 
@@ -103,3 +104,39 @@ class TestCompute:
         )
 
         np.testing.assert_array_almost_equal(np.sort(d), np.sort(d2))
+
+
+class TestSeparateNodeEdgeKeys:
+    """Coverage for ``separate_node_edge_keys`` which classifies tensors on a Data object."""
+
+    def test_partitions_node_edge_and_other_keys(self, graph_LiFePO4_pyg):
+        _, g, _ = graph_LiFePO4_pyg
+        # Inject extra attributes representing each bucket.
+        g.scalar_meta = torch.tensor(1.0)  # 0-dim → other
+        g.misshape = torch.zeros(2, 4)  # leading dim matches neither N nor E → other
+        node_keys, edge_keys, other_keys = separate_node_edge_keys(g)
+
+        assert "edge_index" in other_keys
+        assert "scalar_meta" in other_keys
+        assert "misshape" in other_keys
+        # Standard PyG/MatGL fields land in their canonical buckets.
+        assert "node_type" in node_keys or "frac_coords" in node_keys
+        assert "pbc_offset" in edge_keys
+        assert set(node_keys).isdisjoint(edge_keys)
+        assert set(node_keys).isdisjoint(other_keys)
+        assert set(edge_keys).isdisjoint(other_keys)
+
+    def test_node_count_collision_prefers_node_bucket(self):
+        """When num_nodes happens to equal num_edges, the first matching branch wins."""
+        from torch_geometric.data import Data
+
+        # 2 nodes, 2 edges → both buckets share the same first-dim size.
+        d = Data(
+            edge_index=torch.tensor([[0, 1], [1, 0]]),
+            node_attr=torch.zeros(2, 4),  # matches num_nodes first → node bucket
+            edge_attr=torch.zeros(2, 5),  # matches num_edges first → still node bucket (collision)
+        )
+        node_keys, edge_keys, other_keys = separate_node_edge_keys(d)
+        assert set(node_keys) == {"node_attr", "edge_attr"}
+        assert edge_keys == []
+        assert "edge_index" in other_keys

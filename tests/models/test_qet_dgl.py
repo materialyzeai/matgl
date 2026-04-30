@@ -12,17 +12,17 @@ if matgl.config.BACKEND != "DGL":
 from matgl.models._qet_dgl import QET
 
 
-def test_model(graph_MoS):
+def test_qet(graph_MoS):
     torch.manual_seed(0)
     torch.use_deterministic_algorithms(True)
 
     # Optional regression-check values
     EXPECTED = {
-        "swish": torch.tensor(-0.0181),
-        "tanh": torch.tensor(-0.1098),
-        "sigmoid": torch.tensor(0.1396),
-        "softplus2": torch.tensor(0.0143),
-        "softexp": torch.tensor(0.0792),
+        "swish": torch.tensor(-0.0112),
+        "tanh": torch.tensor(-0.1138),
+        "sigmoid": torch.tensor(0.1377),
+        "softplus2": torch.tensor(0.0127),
+        "softexp": torch.tensor(0.0819),
     }
 
     _, graph, _ = graph_MoS

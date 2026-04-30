@@ -15,7 +15,7 @@ from matgl.layers._core import MLP, GatedMLP
 from matgl.layers._core_dgl import GatedMLPNorm
 from matgl.layers._norm import GraphNorm, LayerNorm
 from matgl.utils.cutoff import cosine_cutoff
-from matgl.utils.maths import decompose_tensor, new_radial_tensor, tensor_norm
+from matgl.utils.maths import decompose_tensor, new_radial_tensor, scatter_add, tensor_norm
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -527,7 +527,6 @@ class TensorNetInteraction(nn.Module):
         self.linears_scalar.append(nn.Linear(units, 2 * units, bias=True, dtype=dtype))
         self.linears_scalar.append(nn.Linear(2 * units, 3 * units, bias=True, dtype=dtype))
         self.linears_tensor = nn.ModuleList(nn.Linear(units, units, bias=False) for _ in range(6))
-        #        self.act = activation()
         self.act = activation
         self.equivariance_invariance_group = equivariance_invariance_group
         self.reset_parameters()
@@ -572,21 +571,18 @@ class TensorNetInteraction(nn.Module):
         return graph
 
     def node_update_(self, graph: dgl.DGLGraph) -> tuple[Tensor, Tensor, Tensor]:
-        """Perform node update.
+        """Aggregate edge messages onto source nodes.
 
-        Args:
-            graph: DGL g
-
-        Returns:
-            node_update: node features update
+        Since the graph edges are center -> neighbor, but we want the center to
+        receive information from its neighbors, we sum messages onto src.
         """
-        graph.update_all(fn.copy_e("I", "I"), fn.sum("I", "Ie"))
-        graph.update_all(fn.copy_e("A", "A"), fn.sum("A", "Ae"))
-        graph.update_all(fn.copy_e("S", "S"), fn.sum("S", "Se"))
-        scalars = graph.ndata.pop("Ie")
-        skew_metrices = graph.ndata.pop("Ae")
-        traceless_tensors = graph.ndata.pop("Se")
-        return scalars, skew_metrices, traceless_tensors
+        src, _ = graph.edges()
+
+        scalars = scatter_add(graph.edata["I"], src, dim=0, dim_size=graph.num_nodes())
+        skew_matrices = scatter_add(graph.edata["A"], src, dim=0, dim_size=graph.num_nodes())
+        traceless_tensors = scatter_add(graph.edata["S"], src, dim=0, dim_size=graph.num_nodes())
+
+        return scalars, skew_matrices, traceless_tensors
 
     def forward(self, g: dgl.DGLGraph, X: Tensor):
         """

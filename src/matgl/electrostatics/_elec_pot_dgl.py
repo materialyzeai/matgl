@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import dgl
-import dgl.function as fn
+from typing import TYPE_CHECKING
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -9,6 +9,10 @@ import torch.nn as nn
 import matgl
 from matgl.config import COULOMB_CONSTANT
 from matgl.utils.cutoff import polynomial_cutoff
+from matgl.utils.maths import scatter_add
+
+if TYPE_CHECKING:
+    import dgl
 
 
 class ElectrostaticPotential(nn.Module):
@@ -91,7 +95,7 @@ class ElectrostaticPotential(nn.Module):
             * polynomial_cutoff(bond_dist, self.cutoff)
             / bond_dist
         )
-        return {"elec_pot": elec_pot * COULOMB_CONSTANT}
+        return {"m_elec_pot": elec_pot * COULOMB_CONSTANT}
 
     def forward(self, g: dgl.DGLGraph) -> dgl.DGLGraph:
         """
@@ -117,7 +121,12 @@ class ElectrostaticPotential(nn.Module):
             The same input graph with an additional node feature:
               - ``elec_pot`` (torch.Tensor): The total electrostatic potential at each atom.
         """
-        g.update_all(self.message_func, fn.sum("elec_pot", "V"))
-        g.ndata["elec_pot"] = g.ndata.pop("V")
-
+        g.apply_edges(self.message_func)
+        src, _ = g.edges()
+        g.ndata["elec_pot"] = scatter_add(
+            g.edata["m_elec_pot"],
+            src,
+            dim=0,
+            dim_size=g.num_nodes(),
+        )
         return g

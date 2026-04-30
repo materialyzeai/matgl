@@ -57,7 +57,7 @@ class TensorNet(MatGLModel):
     for message passing. Pass ``use_warp=False`` to force the plain PyG implementation.
     """
 
-    __version__ = 1
+    __version__ = 2
 
     def __init__(
         self,

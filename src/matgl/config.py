@@ -21,9 +21,6 @@ DEFAULT_ELEMENTS = tuple(el.symbol for el in Element if el.symbol not in ["Po", 
 MATGL_CACHE = Path(os.path.expanduser("~")) / ".cache/matgl"
 os.makedirs(MATGL_CACHE, exist_ok=True)
 
-# Download url for pre-trained models.
-PRETRAINED_MODELS_BASE_URL = "http://github.com/materialsvirtuallab/matgl/raw/main/pretrained_models/"
-
 # Set the backend. Note that not all models are available for all backends.
 BACKEND: Literal["PYG", "DGL"] = os.environ.get("MATGL_BACKEND", "PYG").upper()  # type: ignore[assignment,return-value]
 

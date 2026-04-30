@@ -173,7 +173,7 @@ class TensorEmbedding(nn.Module):
             Sij=Sij,
         )
 
-        scalars, skew_matrices, traceless_tensors = self.aggregate(msg, edge_index[1], dim_size=x.size(0))
+        scalars, skew_matrices, traceless_tensors = self.aggregate(msg, edge_index[0], dim_size=x.size(0))
 
         # Node update
         norm = tensor_norm(scalars + skew_matrices + traceless_tensors)

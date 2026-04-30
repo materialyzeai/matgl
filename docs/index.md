@@ -181,13 +181,13 @@ For a full range of options, use `mgl -h`.
 Pre-trained MatGL models can be loaded from (and published to) the [Hugging Face Hub]. Any repo that contains the standard matgl
 serialization artifacts (`model.pt`, `state.pt`, and `model.json`) can be loaded directly using `matgl.load_model` by
 passing the repo id in `"owner/name"` form. Pre-trained models released by the [Materialyze] lab can be found under the
-[Materialyze Hugging Face Organization](https://huggingface.co/Materialyze).
+[Materialyze Hugging Face Organization](https://huggingface.co/materialyze).
 
 ```python
 import matgl
 
 # Load directly from a Hugging Face Hub repo id.
-model = matgl.load_model("Materialyze/TensorNet-PES-MatPES-2025.1")
+model = matgl.load_model("materialyze/TensorNet-PES-MatPES-2025.1")
 ```
 
 Equivalently, any matgl model class exposes a `from_pretrained` classmethod:
@@ -195,7 +195,7 @@ Equivalently, any matgl model class exposes a `from_pretrained` classmethod:
 ```python
 from matgl.models import M3GNet
 
-model = M3GNet.from_pretrained("Materialyze/TensorNet-PES-MatPES-2025.1")
+model = M3GNet.from_pretrained("materialyze/TensorNet-PES-MatPES-2025.1")
 ```
 
 To publish a trained model to the Hugging Face Hub, use `push_to_hub` (requires `huggingface-cli login` or a `token`):

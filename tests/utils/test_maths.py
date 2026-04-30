@@ -1,17 +1,10 @@
 from __future__ import annotations
 
-import pytest
-
-import matgl
-
-if matgl.config.BACKEND != "DGL":
-    pytest.skip("Skipping DGL tests", allow_module_level=True)
-
-import dgl
 import numpy as np
 import pytest
 import torch
 
+import matgl
 from matgl.utils.maths import (
     SPHERICAL_BESSEL_ROOTS,
     binom,
@@ -61,7 +54,10 @@ def test_segments():
     assert np.allclose(res.tolist(), [0.5, 0.5, 0.4, 0.6])
 
 
+@pytest.mark.skipif(matgl.config.BACKEND != "DGL", reason="broadcast_states_to_* require a DGL graph.")
 def test_broadcast():
+    import dgl
+
     src_ids = torch.tensor([2, 3, 4])
     dst_ids = torch.tensor([1, 2, 3])
     g = dgl.graph((src_ids, dst_ids))
