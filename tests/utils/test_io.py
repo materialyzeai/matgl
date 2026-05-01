@@ -32,6 +32,21 @@ class NewModel(torch.nn.Module, IOMixIn):
         self.n = n
 
 
+class ModelWithParams(torch.nn.Module, IOMixIn):
+    """Minimal IOMixIn model with a known parameter count for ``num_parameters`` tests."""
+
+    def __init__(self):
+        super().__init__()
+        self.lin = torch.nn.Linear(5, 3)
+        self.save_args(locals())
+
+
+def test_iomixin_num_parameters():
+    model = ModelWithParams()
+    # Linear(5, 3): weight 5 * 3 + bias 3
+    assert model.num_parameters == 5 * 3 + 3
+
+
 def test_model_versioning():
     model = OldModel(1, k=2)
     model.save("OldModel")

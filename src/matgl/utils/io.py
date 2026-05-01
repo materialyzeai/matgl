@@ -10,6 +10,7 @@ import re
 import tempfile
 import warnings
 from pathlib import Path
+from typing import cast
 
 import torch
 from huggingface_hub import HfApi, create_repo, hf_hub_download
@@ -290,6 +291,11 @@ class IOMixIn:
             force_download=force_download,
         )
         return cls.load(fpaths, **kwargs)
+
+    @property
+    def num_parameters(self) -> int:
+        """Return the number of parameters in the model."""
+        return sum(p.numel() for p in cast("torch.nn.Module", self).parameters())
 
 
 def load_model(path: str | Path, **kwargs):
