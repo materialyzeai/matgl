@@ -10,7 +10,6 @@ please refer to::
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any, Literal
 
 import torch
@@ -47,8 +46,6 @@ except ImportError:
 if TYPE_CHECKING:
     from matgl.graph._converters_pyg import GraphConverter
 
-logger = logging.getLogger(__file__)
-
 
 class TensorNet(MatGLModel):
     """The main TensorNet model. The official implementation can be found in https://github.com/torchmd/torchmd-net.
@@ -58,6 +55,7 @@ class TensorNet(MatGLModel):
     """
 
     __version__ = 2
+    final_layer: MLP | WeightedReadOut
 
     def __init__(
         self,
@@ -136,16 +134,12 @@ class TensorNet(MatGLModel):
                 f"Invalid activation type, please try using one of {[af.name for af in ActivationFunction]}"
             ) from None
 
-        # Resolve warp availability
-        if use_warp is None:
-            self._use_warp = _warp_available
-        elif use_warp and not _warp_available:
+        if use_warp and not _warp_available:
             raise ImportError(
                 "use_warp=True but nvalchemi-toolkit-ops is not installed. "
                 "Install it or pass use_warp=False to use the plain PyG backend."
             )
-        else:
-            self._use_warp = use_warp
+        self._use_warp = _warp_available if use_warp is None else use_warp
 
         self.element_types = element_types  # type: ignore
 
@@ -192,32 +186,37 @@ class TensorNet(MatGLModel):
         )
 
         self.layers = nn.ModuleList(
-            [
-                InteractionCls(num_rbf, units, activation, cutoff, equivariance_invariance_group, dtype)
-                for _ in range(nblocks)
-                if nblocks != 0
-            ]
+            InteractionCls(num_rbf, units, activation, cutoff, equivariance_invariance_group, dtype)
+            for _ in range(nblocks)
         )
 
         self.out_norm = nn.LayerNorm(3 * units, dtype=dtype)
         self.linear = nn.Linear(3 * units, units, dtype=dtype)
-        if is_intensive:
-            input_feats = units
-            if readout_type == "weighted_atom":
-                self.readout = WeightedAtomReadOut(  # type:ignore[assignment]
-                    in_feats=input_feats, dims=[units, units], activation=activation
-                )
-                readout_feats = units
-            else:
-                self.readout = ReduceReadOut("mean", field=field)  # type: ignore
-                readout_feats = input_feats  # type: ignore
+        self.is_intensive = is_intensive
+        self._build_readout(
+            units=units,
+            ntargets=ntargets,
+            readout_type=readout_type,
+            field=field,
+            activation=activation,
+            task_type=task_type,
+        )
+        self.reset_parameters()
 
-            dims_final_layer = [readout_feats, units, units, ntargets]
-            self.final_layer = MLP(dims_final_layer, activation, activate_last=False)
-            if task_type == "classification":
-                self.sigmoid = nn.Sigmoid()
-
-        else:
+    def _build_readout(
+        self,
+        units: int,
+        ntargets: int,
+        readout_type: Literal["weighted_atom", "reduce_atom"],
+        field: Literal["node_feat", "edge_feat"],
+        activation: nn.Module,
+        task_type: Literal["classification", "regression"],
+    ) -> None:
+        """Build the readout / ``final_layer`` modules. Override in a subclass to
+        skip or replace the default readout construction (e.g. ``QET`` builds its
+        own atomic-energy head over a wider concatenated node feature).
+        """
+        if not self.is_intensive:
             if task_type == "classification":
                 raise ValueError("Classification task cannot be extensive.")
             self.final_layer = WeightedReadOut(
@@ -225,9 +224,17 @@ class TensorNet(MatGLModel):
                 dims=[units, units],
                 num_targets=ntargets,  # type: ignore
             )
+            return
 
-        self.is_intensive = is_intensive
-        self.reset_parameters()
+        if readout_type == "weighted_atom":
+            self.readout = WeightedAtomReadOut(  # type:ignore[assignment]
+                in_feats=units, dims=[units, units], activation=activation
+            )
+        else:
+            self.readout = ReduceReadOut("mean", field=field)  # type: ignore
+        self.final_layer = MLP([units, units, units, ntargets], activation, activate_last=False)
+        if task_type == "classification":
+            self.sigmoid = nn.Sigmoid()
 
     def reset_parameters(self):
         self.tensor_embedding.reset_parameters()
@@ -235,31 +242,28 @@ class TensorNet(MatGLModel):
             layer.reset_parameters()
         self.out_norm.reset_parameters()
 
-    def forward(
+    def forward_features(
         self,
         g: Any,
         state_attr: torch.Tensor | None = None,
-        return_all_layer_output: bool = False,
         **kwargs,
-    ):
-        """
+    ) -> dict[str, Any]:
+        """Run TensorNet's feature extraction up through the per-atom readout.
+
+        Returns a dict with intermediate features (``edge_attr``, ``embedding``,
+        ``gc_<i>``, ``readout``). Subclasses (e.g. ``QET``) reuse this without
+        re-implementing the embedding / interaction stack.
+
         Args:
             g: PyG Data object or dict with keys 'node_type'/'z', 'pos', 'edge_index',
                and optionally 'pbc_offshift', 'batch', 'num_graphs'.
             state_attr: State attrs for a batch of graphs.
-            return_all_layer_output: Whether to return outputs of all intermediate layers.
             **kwargs: For future flexibility. Not used at the moment.
-
-        Returns:
-            output: Output property for a batch of graphs, or a dict of layer outputs
-            when ``return_all_layer_output=True``.
         """
         z = getattr(g, "node_type", getattr(g, "z", None))
         pos = g.pos
         edge_index = g.edge_index
         pbc_offshift = getattr(g, "pbc_offshift", None)
-        batch = getattr(g, "batch", None)
-        num_graphs = getattr(g, "num_graphs", None)
 
         # Bond vectors and distances
         bond_vec, bond_dist = compute_pair_vector_and_distance(pos, edge_index, pbc_offshift)
@@ -307,6 +311,31 @@ class TensorNet(MatGLModel):
         x = self.out_norm(x)
         x = self.linear(x)
         fea_dict["readout"] = x
+        return fea_dict
+
+    def forward(
+        self,
+        g: Any,
+        state_attr: torch.Tensor | None = None,
+        return_all_layer_output: bool = False,
+        **kwargs,
+    ):
+        """
+        Args:
+            g: PyG Data object or dict with keys 'node_type'/'z', 'pos', 'edge_index',
+               and optionally 'pbc_offshift', 'batch', 'num_graphs'.
+            state_attr: State attrs for a batch of graphs.
+            return_all_layer_output: Whether to return outputs of all intermediate layers.
+            **kwargs: For future flexibility. Not used at the moment.
+
+        Returns:
+            output: Output property for a batch of graphs, or a dict of layer outputs
+            when ``return_all_layer_output=True``.
+        """
+        fea_dict = self.forward_features(g=g, state_attr=state_attr)
+        x = fea_dict["readout"]
+        batch = getattr(g, "batch", None)
+        num_graphs = getattr(g, "num_graphs", None)
 
         if self.is_intensive:
             node_vec = self.readout(x, batch)
@@ -315,19 +344,14 @@ class TensorNet(MatGLModel):
                 output = self.sigmoid(output)
             output = torch.squeeze(output)
         else:
-            atomic_energies = self.final_layer(x)
-            if batch is not None:
-                # edge case: avoid losing the batch dimension on size-(1,1) outputs
-                if atomic_energies.shape == (1, 1):
-                    atomic_energies = atomic_energies.squeeze(-1)
-                else:
-                    atomic_energies = atomic_energies.squeeze()
+            atomic_energies = self.final_layer(x).view(-1)
+            if batch is None:
+                output = atomic_energies.sum()
+            else:
                 batch_long = batch.to(torch.long)
                 if num_graphs is None:
                     num_graphs = int(batch_long.max().item()) + 1
                 output = scatter_add(atomic_energies, batch_long, dim_size=num_graphs)  # type: ignore[arg-type]
-            else:
-                output = torch.sum(atomic_energies, dim=0, keepdim=True).squeeze()
 
         fea_dict["final"] = output
         if return_all_layer_output:
