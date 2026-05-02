@@ -66,10 +66,6 @@ class QET(TensorNet):
         equivariance_invariance_group: str = "O(3)",
         dtype: torch.dtype = matgl.float_th,
         width: float = 0.5,
-        readout_type: Literal["weighted_atom", "reduce_atom"] = "weighted_atom",
-        task_type: Literal["classification", "regression"] = "regression",
-        field: Literal["node_feat", "edge_feat"] = "node_feat",
-        is_intensive: bool = True,
         ntargets: int = 1,
         is_sigma_train: bool = False,
         is_hardness_envs: bool = False,
@@ -105,11 +101,6 @@ class QET(TensorNet):
                (default :obj:`"O(3)"`)
             dtype (torch.dtype): data type for all variables
             width (float): the width of Gaussian radial basis functions
-            readout_type (str): Accepted for IOMixIn compatibility; QET always uses an
-                atomic-energy ``WeightedReadOut`` over the concatenated node features.
-            task_type (str): Accepted for IOMixIn compatibility; QET is always regression.
-            field (str): Accepted for IOMixIn compatibility; unused by QET.
-            is_intensive (bool): Accepted for IOMixIn compatibility; QET is always extensive.
             ntargets (int): Number of target properties
             include_magmom (bool): Whether the magmom is returned (not implemented yet)
             is_hardness_envs (bool): Whether the hardness is environment dependent
@@ -120,9 +111,12 @@ class QET(TensorNet):
             **kwargs: For future flexibility. Not used at the moment.
 
         """
-        # Defer reset_parameters until after QET-specific heads are built so the
-        # random init stream order matches the standalone implementation.
-        self._qet_init_complete = False
+        # QET ignores intensive / readout-shape kwargs — it is always extensive
+        # and always applies a WeightedReadOut over the wider concatenated
+        # node feature. Silently drop them so callers / saved checkpoints that
+        # pass them through don't crash on duplicate kwargs.
+        for legacy in ("is_intensive", "readout_type", "task_type", "field"):
+            kwargs.pop(legacy, None)
         super().__init__(
             element_types=element_types,
             units=units,
@@ -141,9 +135,6 @@ class QET(TensorNet):
             equivariance_invariance_group=equivariance_invariance_group,
             dtype=dtype,
             width=width,
-            readout_type="weighted_atom",
-            task_type="regression",
-            field=field,
             is_intensive=False,
             ntargets=ntargets,
             use_warp=use_warp,
@@ -156,14 +147,14 @@ class QET(TensorNet):
         self.include_magmom = include_magmom
         self.return_features = return_features
 
-        self.hardness_readout: nn.Parameter | nn.Module
-        if not is_hardness_envs:
-            self.hardness_readout = torch.nn.Parameter(data=torch.ones(len(element_types)))
-        else:
-            self.hardness_readout = MLP(dims=[units, units, units, 1], activation=nn.Softplus(), activate_last=True)
+        self.hardness_readout: nn.Module | nn.Parameter = (
+            MLP(dims=[units, units, units, 1], activation=nn.Softplus(), activate_last=True)
+            if is_hardness_envs
+            else nn.Parameter(torch.ones(len(element_types)))
+        )
 
         if is_sigma_train:
-            self.sigma = torch.nn.Parameter(data=torch.ones(len(element_types)))
+            self.sigma = nn.Parameter(torch.ones(len(element_types)))
         else:
             self.register_buffer(
                 "sigma",
@@ -178,34 +169,12 @@ class QET(TensorNet):
 
         self.qeq = LinearQeq()
         self.elec_pot = ElectrostaticPotential(element_types=element_types, cutoff=cutoff)
-        self.norm = nn.LayerNorm(units + 3) if include_magmom else nn.LayerNorm(units + 2)
-        self.final_layer = WeightedReadOut(
-            in_feats=(units + 3 if include_magmom else units + 2),  # +1 charge, +1 elec_pot, (+1 magmom)
-            dims=[units, units],
-            num_targets=ntargets,  # type: ignore
+        extra_feats = 3 if include_magmom else 2  # +1 charge, +1 elec_pot, (+1 magmom)
+        self.norm = nn.LayerNorm(units + extra_feats)
+        # Replaces the parent's WeightedReadOut, which is built over the narrower units-wide feature.
+        self.final_layer = WeightedReadOut(  # type: ignore[assignment]
+            in_feats=units + extra_feats, dims=[units, units], num_targets=ntargets
         )
-
-        self._qet_init_complete = True
-        self.reset_parameters()
-
-    def _build_readout(self, *args, **kwargs) -> None:
-        """Skip the parent's readout build; QET constructs its own ``final_layer``
-        in :meth:`__init__` over the wider concatenated feature.
-        """
-        return
-
-    def reset_parameters(self) -> None:
-        """Reset trainable parameters of the inherited TensorNet stack.
-
-        While ``self._qet_init_complete`` is ``False`` (i.e. QET is still inside
-        its own ``__init__``), this is a no-op so that the parent's automatic
-        ``reset_parameters()`` call inside ``super().__init__`` does not perturb
-        the random stream. QET re-invokes this method at the end of its own
-        ``__init__`` once all heads have been built.
-        """
-        if not getattr(self, "_qet_init_complete", False):
-            return
-        super().reset_parameters()
 
     def forward(  # type: ignore[override]
         self,
@@ -263,20 +232,13 @@ class QET(TensorNet):
             return node_feat, atomic_energies
 
         batch = getattr(g, "batch", None)
-        num_graphs = getattr(g, "num_graphs", None)
-        if batch is not None:
-            if atomic_energies.shape == (1, 1):
-                atomic_energies = atomic_energies.squeeze(-1)
-            else:
-                atomic_energies = atomic_energies.squeeze()
-            batch_long = batch.to(torch.long)
-            if num_graphs is None:
-                num_graphs = int(batch_long.max()) + 1
-            e_total = scatter_add(atomic_energies, batch_long, dim_size=num_graphs)
+        if batch is None:
+            batch = atomic_energies.new_zeros(atomic_energies.shape[0], dtype=torch.long)
+            num_graphs = 1
         else:
-            e_total = torch.sum(atomic_energies, dim=0, keepdim=True).squeeze()
-
-        return torch.squeeze(e_total)
+            batch = batch.to(torch.long)
+            num_graphs = int(getattr(g, "num_graphs", int(batch.max()) + 1))
+        return torch.squeeze(scatter_add(atomic_energies.squeeze(-1), batch, dim_size=num_graphs))
 
     def predict_structure(  # type: ignore[override]
         self,
