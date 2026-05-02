@@ -112,7 +112,14 @@ Models subclass `torch.nn.Module` **and** `matgl.utils.io.IOMixIn`, and call `se
 
 ### Pre-trained model layout
 
-`pretrained_models/<MODEL_NAME>/` holds `model.pt`, `state.pt`, `model.json`, plus a `README.md` and a notebook documenting metrics. Mirror this when contributing new pretrained models — `mgl predict --choices` discovers models by directory name.
+**The in-repo `pretrained_models/` directory is deprecated.** All new pre-trained models must be
+uploaded to Hugging Face Hub (under the `materialyze` org) via `model.push_to_hub(...)`, and loaded
+with `matgl.load_model("materialyze/<model-name>")` or the bare-name form. Do not add new model
+directories to `pretrained_models/`.
+
+The existing layout — `pretrained_models/<MODEL_NAME>/` holding `model.pt`, `state.pt`,
+`model.json`, plus a `README.md` and a notebook documenting metrics — is retained only for the
+already-shipped checkpoints that `mgl predict --choices` still discovers locally.
 
 ### Tests
 
