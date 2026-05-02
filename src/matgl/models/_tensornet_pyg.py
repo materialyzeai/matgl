@@ -55,6 +55,7 @@ class TensorNet(MatGLModel):
     """
 
     __version__ = 2
+    final_layer: MLP | WeightedReadOut
 
     def __init__(
         self,
