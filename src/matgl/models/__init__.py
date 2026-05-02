@@ -14,6 +14,7 @@ if BACKEND == "DGL":
     from ._so3net import SO3Net
     from ._tensornet_dgl import TensorNet
 else:
+    from ._qet_pyg import QET  # type: ignore[assignment]
     from ._tensornet_pyg import TensorNet  # type: ignore[assignment]
 
 from ._wrappers import TransformedTargetModel

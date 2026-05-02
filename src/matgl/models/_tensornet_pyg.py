@@ -201,22 +201,45 @@ class TensorNet(MatGLModel):
 
         self.out_norm = nn.LayerNorm(3 * units, dtype=dtype)
         self.linear = nn.Linear(3 * units, units, dtype=dtype)
-        if is_intensive:
+        self.is_intensive = is_intensive
+        self._build_readout(
+            units=units,
+            ntargets=ntargets,
+            readout_type=readout_type,
+            field=field,
+            activation=activation,
+            task_type=task_type,
+        )
+        self.reset_parameters()
+
+    def _build_readout(
+        self,
+        units: int,
+        ntargets: int,
+        readout_type: Literal["weighted_atom", "reduce_atom"],
+        field: Literal["node_feat", "edge_feat"],
+        activation: nn.Module,
+        task_type: Literal["classification", "regression"],
+    ) -> None:
+        """Build the readout / ``final_layer`` modules. Override in a subclass to
+        skip or replace the default readout construction (e.g. ``QET`` builds its
+        own atomic-energy head over a wider concatenated node feature).
+        """
+        if self.is_intensive:
             input_feats = units
             if readout_type == "weighted_atom":
                 self.readout = WeightedAtomReadOut(  # type:ignore[assignment]
                     in_feats=input_feats, dims=[units, units], activation=activation
                 )
-                readout_feats = units
+                readout_feats = input_feats
             else:
                 self.readout = ReduceReadOut("mean", field=field)  # type: ignore
-                readout_feats = input_feats  # type: ignore
+                readout_feats = input_feats
 
             dims_final_layer = [readout_feats, units, units, ntargets]
             self.final_layer = MLP(dims_final_layer, activation, activate_last=False)
             if task_type == "classification":
                 self.sigmoid = nn.Sigmoid()
-
         else:
             if task_type == "classification":
                 raise ValueError("Classification task cannot be extensive.")
@@ -225,9 +248,6 @@ class TensorNet(MatGLModel):
                 dims=[units, units],
                 num_targets=ntargets,  # type: ignore
             )
-
-        self.is_intensive = is_intensive
-        self.reset_parameters()
 
     def reset_parameters(self):
         self.tensor_embedding.reset_parameters()
