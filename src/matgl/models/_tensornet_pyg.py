@@ -278,7 +278,7 @@ class TensorNet(MatGLModel):
                 col_indices,
                 col_indptr,
             ) = graph_transform(edge_index.int(), z.shape[0])  # type: ignore[union-attr]
-            X = self.tensor_embedding(z, edge_index, bond_dist, bond_vec, edge_attr, col_data, col_indptr)
+            X = self.tensor_embedding(z, edge_index, bond_dist, bond_vec, edge_attr, row_data, row_indptr)
             fea_dict["embedding"] = X
             for i, layer in enumerate(self.layers):
                 X = layer(
