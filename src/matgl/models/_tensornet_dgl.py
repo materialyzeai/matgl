@@ -179,7 +179,39 @@ class TensorNet(MatGLModel):
 
         self.out_norm = nn.LayerNorm(3 * units, dtype=dtype)
         self.linear = nn.Linear(3 * units, units, dtype=dtype)
-        if is_intensive:
+        self.is_intensive = is_intensive
+        self._build_readout(
+            units=units,
+            ntargets=ntargets,
+            readout_type=readout_type,
+            niters_set2set=niters_set2set,
+            nlayers_set2set=nlayers_set2set,
+            field=field,
+            include_state=include_state,
+            dim_state_feats=dim_state_feats,
+            activation=activation,
+            task_type=task_type,
+        )
+        self.reset_parameters()
+
+    def _build_readout(
+        self,
+        units: int,
+        ntargets: int,
+        readout_type: Literal["set2set", "weighted_atom", "reduce_atom"],
+        niters_set2set: int,
+        nlayers_set2set: int,
+        field: Literal["node_feat", "edge_feat"],
+        include_state: bool,
+        dim_state_feats: int | None,
+        activation: nn.Module,
+        task_type: Literal["classification", "regression"],
+    ) -> None:
+        """Build the readout / ``final_layer`` modules. Override in a subclass to
+        skip or replace the default readout construction (e.g. ``QET`` builds its
+        own atomic-energy head over a wider concatenated node feature).
+        """
+        if self.is_intensive:
             input_feats = units
             self.readout: nn.Module
             if readout_type == "set2set":
@@ -198,7 +230,6 @@ class TensorNet(MatGLModel):
             self.final_layer = MLP(dims_final_layer, activation, activate_last=False)
             if task_type == "classification":
                 self.sigmoid = nn.Sigmoid()
-
         else:
             if task_type == "classification":
                 raise ValueError("Classification task cannot be extensive.")
@@ -208,32 +239,29 @@ class TensorNet(MatGLModel):
                 num_targets=ntargets,  # type: ignore
             )
 
-        self.is_intensive = is_intensive
-        self.reset_parameters()
-
     def reset_parameters(self):
         self.tensor_embedding.reset_parameters()
         for layer in self.layers:
             layer.reset_parameters()
         self.out_norm.reset_parameters()
 
-    def forward(
+    def forward_features(
         self,
         g: dgl.DGLGraph,
         state_attr: torch.Tensor | None = None,
-        return_all_layer_output: bool = False,
         **kwargs,
-    ):
-        """
+    ) -> dict:
+        """Run TensorNet's feature extraction up through the per-atom readout.
+
+        Returns a dict with intermediate features (``edge_attr``, ``embedding``,
+        ``gc_<i>``, ``readout``) and writes the final per-atom features to
+        ``g.ndata["node_feat"]``. Subclasses (e.g. ``QET``) reuse this without
+        re-implementing the embedding / interaction stack.
 
         Args:
-            g : DGLGraph for a batch of graphs.
+            g: DGLGraph for a batch of graphs.
             state_attr: State attrs for a batch of graphs.
-            return_all_layer_output: Whether to return outputs of all layers.
             **kwargs: For future flexibility. Not used at the moment.
-
-        Returns:
-            output: output: Output property for a batch of graphs
         """
         # Obtain graph, with distances and relative position vectors
         bond_vec, bond_dist = compute_pair_vector_and_distance(g)
@@ -264,6 +292,27 @@ class TensorNet(MatGLModel):
 
         g.ndata["node_feat"] = x
         fea_dict["readout"] = x
+        return fea_dict
+
+    def forward(
+        self,
+        g: dgl.DGLGraph,
+        state_attr: torch.Tensor | None = None,
+        return_all_layer_output: bool = False,
+        **kwargs,
+    ):
+        """
+
+        Args:
+            g : DGLGraph for a batch of graphs.
+            state_attr: State attrs for a batch of graphs.
+            return_all_layer_output: Whether to return outputs of all layers.
+            **kwargs: For future flexibility. Not used at the moment.
+
+        Returns:
+            output: output: Output property for a batch of graphs
+        """
+        fea_dict = self.forward_features(g=g, state_attr=state_attr)
 
         if self.is_intensive:
             node_vec = self.readout(g)
