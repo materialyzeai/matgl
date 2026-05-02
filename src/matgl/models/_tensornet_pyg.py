@@ -10,7 +10,6 @@ please refer to::
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any, Literal
 
 import torch
@@ -46,8 +45,6 @@ except ImportError:
 
 if TYPE_CHECKING:
     from matgl.graph._converters_pyg import GraphConverter
-
-logger = logging.getLogger(__file__)
 
 
 class TensorNet(MatGLModel):
@@ -136,16 +133,12 @@ class TensorNet(MatGLModel):
                 f"Invalid activation type, please try using one of {[af.name for af in ActivationFunction]}"
             ) from None
 
-        # Resolve warp availability
-        if use_warp is None:
-            self._use_warp = _warp_available
-        elif use_warp and not _warp_available:
+        if use_warp and not _warp_available:
             raise ImportError(
                 "use_warp=True but nvalchemi-toolkit-ops is not installed. "
                 "Install it or pass use_warp=False to use the plain PyG backend."
             )
-        else:
-            self._use_warp = use_warp
+        self._use_warp = _warp_available if use_warp is None else use_warp
 
         self.element_types = element_types  # type: ignore
 
@@ -192,11 +185,8 @@ class TensorNet(MatGLModel):
         )
 
         self.layers = nn.ModuleList(
-            [
-                InteractionCls(num_rbf, units, activation, cutoff, equivariance_invariance_group, dtype)
-                for _ in range(nblocks)
-                if nblocks != 0
-            ]
+            InteractionCls(num_rbf, units, activation, cutoff, equivariance_invariance_group, dtype)
+            for _ in range(nblocks)
         )
 
         self.out_norm = nn.LayerNorm(3 * units, dtype=dtype)
@@ -225,22 +215,7 @@ class TensorNet(MatGLModel):
         skip or replace the default readout construction (e.g. ``QET`` builds its
         own atomic-energy head over a wider concatenated node feature).
         """
-        if self.is_intensive:
-            input_feats = units
-            if readout_type == "weighted_atom":
-                self.readout = WeightedAtomReadOut(  # type:ignore[assignment]
-                    in_feats=input_feats, dims=[units, units], activation=activation
-                )
-                readout_feats = input_feats
-            else:
-                self.readout = ReduceReadOut("mean", field=field)  # type: ignore
-                readout_feats = input_feats
-
-            dims_final_layer = [readout_feats, units, units, ntargets]
-            self.final_layer = MLP(dims_final_layer, activation, activate_last=False)
-            if task_type == "classification":
-                self.sigmoid = nn.Sigmoid()
-        else:
+        if not self.is_intensive:
             if task_type == "classification":
                 raise ValueError("Classification task cannot be extensive.")
             self.final_layer = WeightedReadOut(
@@ -248,6 +223,17 @@ class TensorNet(MatGLModel):
                 dims=[units, units],
                 num_targets=ntargets,  # type: ignore
             )
+            return
+
+        if readout_type == "weighted_atom":
+            self.readout = WeightedAtomReadOut(  # type:ignore[assignment]
+                in_feats=units, dims=[units, units], activation=activation
+            )
+        else:
+            self.readout = ReduceReadOut("mean", field=field)  # type: ignore
+        self.final_layer = MLP([units, units, units, ntargets], activation, activate_last=False)
+        if task_type == "classification":
+            self.sigmoid = nn.Sigmoid()
 
     def reset_parameters(self):
         self.tensor_embedding.reset_parameters()
@@ -357,19 +343,14 @@ class TensorNet(MatGLModel):
                 output = self.sigmoid(output)
             output = torch.squeeze(output)
         else:
-            atomic_energies = self.final_layer(x)
-            if batch is not None:
-                # edge case: avoid losing the batch dimension on size-(1,1) outputs
-                if atomic_energies.shape == (1, 1):
-                    atomic_energies = atomic_energies.squeeze(-1)
-                else:
-                    atomic_energies = atomic_energies.squeeze()
+            atomic_energies = self.final_layer(x).view(-1)
+            if batch is None:
+                output = atomic_energies.sum()
+            else:
                 batch_long = batch.to(torch.long)
                 if num_graphs is None:
                     num_graphs = int(batch_long.max().item()) + 1
                 output = scatter_add(atomic_energies, batch_long, dim_size=num_graphs)  # type: ignore[arg-type]
-            else:
-                output = torch.sum(atomic_energies, dim=0, keepdim=True).squeeze()
 
         fea_dict["final"] = output
         if return_all_layer_output:
