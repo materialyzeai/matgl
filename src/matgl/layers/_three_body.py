@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import numpy as np
 import torch
 from torch import nn
@@ -11,12 +9,14 @@ from torch import nn
 import matgl
 from matgl.utils.maths import _block_repeat, get_segment_indices_from_n, scatter_sum
 
-if TYPE_CHECKING:
-    import dgl
-
 
 class ThreeBodyInteractions(nn.Module):
-    """Include 3D interactions to the bond update."""
+    """Three-body bond update.
+
+    Backend-agnostic: ``forward`` takes only tensors. The DGL- or PyG-side
+    caller is responsible for unpacking the parent-graph edges and the
+    line-graph adjacency / per-bond triple counts before calling this layer.
+    """
 
     def __init__(self, update_network_atom: nn.Module, update_network_bond: nn.Module, **kwargs):
         """Initialize ThreeBodyInteractions.
@@ -32,8 +32,10 @@ class ThreeBodyInteractions(nn.Module):
 
     def forward(
         self,
-        graph: dgl.DGLGraph,
-        line_graph: dgl.DGLGraph,
+        edge_dst_atom: torch.Tensor,
+        line_edge_index: torch.Tensor,
+        n_triple_ij: torch.Tensor,
+        num_bonds: int,
         three_basis: torch.Tensor,
         three_cutoff: torch.Tensor,
         node_feat: torch.Tensor,
@@ -42,15 +44,23 @@ class ThreeBodyInteractions(nn.Module):
         """Forward function for ThreeBodyInteractions.
 
         Args:
-            graph: dgl graph
-            line_graph: line graph
-            three_basis: three body basis expansion
-            three_cutoff: cutoff radius
-            node_feat: node features
-            edge_feat: edge features
+            edge_dst_atom: For each bond ``b`` in the parent graph, the index
+                of the destination atom of that bond. Shape ``(num_bonds,)``.
+            line_edge_index: Line-graph edges as ``(2, num_triples)`` with
+                row 0 = source bond index, row 1 = destination bond index.
+            n_triple_ij: For each bond, the number of triples it participates
+                in as the "central" bond. Shape ``(num_bonds,)``. Used to
+                build segment ids for the per-bond aggregation.
+            num_bonds: Total number of bonds in the parent graph (i.e. the
+                ``dim_size`` for the per-bond scatter).
+            three_basis: three body basis expansion of shape
+                ``(num_triples, basis_dim)``.
+            three_cutoff: per-bond cutoff weights, shape ``(num_bonds,)``.
+            node_feat: node features.
+            edge_feat: edge features (one row per bond).
         """
         # Get the indices of the end atoms for each bond in the line graph
-        end_atom_indices = graph.edges()[1][line_graph.edges()[1]].to(matgl.int_th)
+        end_atom_indices = edge_dst_atom[line_edge_index[1]].to(matgl.int_th)
 
         # Update node features using the atom update network
         updated_atoms = self.update_network_atom(node_feat)
@@ -63,7 +73,7 @@ class ThreeBodyInteractions(nn.Module):
 
         # Reshape and compute weights based on the three-cutoff tensor
         three_cutoff = three_cutoff.unsqueeze(1)
-        edge_indices = torch.stack(list(line_graph.edges()), dim=1)
+        edge_indices = line_edge_index.t().contiguous()
         weights = three_cutoff[edge_indices].view(-1, 2)
         weights = weights.prod(dim=-1)
 
@@ -71,11 +81,11 @@ class ThreeBodyInteractions(nn.Module):
         basis = basis * weights[:, None]
 
         # Aggregate the new bonds using scatter_sum
-        segment_ids = get_segment_indices_from_n(line_graph.ndata["n_triple_ij"])
+        segment_ids = get_segment_indices_from_n(n_triple_ij)
         new_bonds = scatter_sum(
             basis.to(matgl.float_th),
             segment_ids=segment_ids,
-            num_segments=graph.num_edges(),
+            num_segments=num_bonds,
             dim=0,
         )
 
