@@ -301,3 +301,203 @@ def separate_node_edge_keys(graph: Data) -> tuple[list[str], list[str], list[str
             other_keys.append(key)
 
     return node_keys, edge_keys, other_keys
+
+
+# ---------------------------------------------------------------------------
+# CHGNet-specific: directed line graph construction and angle utilities
+# ---------------------------------------------------------------------------
+
+
+def create_directed_line_graph_pyg(
+    edge_index: torch.Tensor,
+    pbc_offset: torch.Tensor,
+    bond_vec: torch.Tensor,
+    bond_dist: torch.Tensor,
+    threebody_cutoff: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build a directed line graph for three-body CHGNet interactions (PyG version).
+
+    Mirrors the logic of ``_create_directed_line_graph`` from ``_compute_dgl.py`` but
+    operates entirely on edge-index tensors — no DGL dependency.
+
+    Convention (same as atom graph):
+      - ``src_indices`` / ``edge_index[0]`` = central atom
+      - ``dst_indices`` / ``edge_index[1]`` = neighbor atom
+
+    In the line graph:
+      - Nodes  = bonds (edges of the atom graph) within ``threebody_cutoff``
+      - Edges  = bond-pairs sharing a central atom
+      - dst of a line-graph edge = the bond **being updated** (receives messages)
+      - src of a line-graph edge = bonds **sending messages** to the dst bond
+
+    Args:
+        edge_index: Atom-graph edge indices, shape (2, num_edges).
+        pbc_offset: Periodic image offsets per bond, shape (num_edges, 3).
+        bond_vec: Bond vectors (central→neighbor), shape (num_edges, 3).
+        bond_dist: Bond distances, shape (num_edges,).
+        threebody_cutoff: Cutoff radius for three-body interactions.
+
+    Returns:
+        lg_edge_index: Line-graph edge indices (2, num_lg_edges).
+        lg_bond_vec: Bond vectors for line-graph nodes, shape (num_lg_nodes, 3).
+        lg_bond_dist: Bond distances for line-graph nodes, shape (num_lg_nodes,).
+        lg_pbc_offset: PBC offsets for line-graph nodes, shape (num_lg_nodes, 3).
+        lg_src_bond_sign: Sign correction for src bonds (+1 or -1),
+            shape (num_lg_nodes, 1).
+    """
+    device = edge_index.device
+
+    # --- filter bonds within three-body cutoff ---
+    valid = bond_dist <= threebody_cutoff
+    edge_ids = valid.nonzero(as_tuple=False).squeeze(1)  # global ids of valid bonds
+
+    if edge_ids.numel() == 0:
+        empty = torch.zeros(0, dtype=matgl.int_th, device=device)
+        return (
+            torch.zeros((2, 0), dtype=matgl.int_th, device=device),
+            bond_vec.new_zeros((0, 3)),
+            bond_dist.new_zeros(0),
+            pbc_offset.new_zeros((0, 3)),
+            bond_vec.new_ones((0, 1)),
+        )
+
+    src_indices = edge_index[0]  # central atom
+    dst_indices = edge_index[1]  # neighbor
+
+    # Map global edge ids → local line-graph node ids
+    num_lg_nodes = edge_ids.numel()
+    global_to_local = torch.full((edge_index.size(1),), -1, dtype=torch.long, device=device)
+    local_ids = torch.arange(num_lg_nodes, dtype=torch.long, device=device)
+    global_to_local[edge_ids] = local_ids
+
+    # Sub-graph src/dst for valid bonds
+    v_src = src_indices[edge_ids]  # central atoms for valid bonds
+    v_dst = dst_indices[edge_ids]  # neighbors for valid bonds
+    v_images = pbc_offset[edge_ids]
+
+    is_self_edge = v_src == v_dst
+
+    # Vectorized Line Graph Edge Construction
+    
+    # Calculate connections using dense matrices over the reduced (valid) edges
+    v_src_j = v_src.unsqueeze(0)  # shape (1, V)
+    v_dst_j = v_dst.unsqueeze(0)  # shape (1, V)
+    v_images_j = v_images.unsqueeze(0) # shape (1, V, 3)
+
+    v_src_i = v_src.unsqueeze(1)  # shape (V, 1)
+    v_dst_i = v_dst.unsqueeze(1)  # shape (V, 1)
+    v_images_i = v_images.unsqueeze(1) # shape (V, 1, 3)
+
+    # shared_src: src[i] == src[j]
+    shared_src = (v_src_i == v_src_j)
+    
+    # incoming_to_ca: dst[i] == src[j]
+    incoming_to_ca = (v_dst_i == v_src_j)
+    
+    # Backtracking: incoming & src[i] == dst[j] & images[i] == -images[j]
+    is_backtrack = incoming_to_ca & (v_src_i == v_dst_j) & torch.all(-v_images_i == v_images_j, dim=2)
+    
+    # Base inclusion for non-self edges (matches DGL logic: incoming & (shared_src | ~backtracking))
+    include_mask = incoming_to_ca & (shared_src | ~is_backtrack)
+    
+    # For self-edges (is_self_edge[j]), we ONLY include incoming_to_ca (we don't include shared_src, no backtrack checks)
+    self_edges_j = is_self_edge.unsqueeze(0)  # (1, V)
+    include_mask = torch.where(self_edges_j, incoming_to_ca, include_mask)
+
+    # Exclude i == j
+    include_mask.fill_diagonal_(False)
+    
+    # Get the indices of the connected line graph nodes
+    lg_src, lg_dst = include_mask.nonzero(as_tuple=True)
+    lg_edge_index = torch.stack([lg_src, lg_dst], dim=0)
+
+    # Line-graph node features = bond properties of the corresponding atom-graph edge
+    lg_bond_vec = bond_vec[edge_ids]
+    lg_bond_dist = bond_dist[edge_ids]
+    lg_pbc_offset = pbc_offset[edge_ids]
+
+    # Sign correction: non-self edges get sign = -1 (bond vector points away from central atom)
+    lg_src_bond_sign = torch.ones((num_lg_nodes, 1), dtype=bond_vec.dtype, device=device)
+    
+    # Find local ids of non-self edges
+    not_self_edge = ~is_self_edge
+    ns_local_ids = local_ids[not_self_edge]
+    if ns_local_ids.numel() > 0:
+        lg_src_bond_sign[ns_local_ids] = -1.0
+
+    return lg_edge_index, lg_bond_vec, lg_bond_dist, lg_pbc_offset, lg_src_bond_sign
+
+
+def compute_theta_pyg(
+    bond_vec: torch.Tensor,
+    src_bond_sign: torch.Tensor,
+    lg_src: torch.Tensor,
+    lg_dst: torch.Tensor,
+    directed: bool = True,
+    eps: float = 1e-7,
+) -> torch.Tensor:
+    """Compute bond angles (cos theta) for line-graph edges (PyG version).
+
+    Mirrors ``compute_theta`` from ``_compute_dgl.py``.
+
+    Args:
+        bond_vec: Bond vectors for all line-graph nodes, shape (num_lg_nodes, 3).
+        src_bond_sign: Sign correction for src bond vectors, shape (num_lg_nodes, 1).
+            ``-1`` for non-self directed bonds (their vector needs flipping to point
+            toward the central atom), ``+1`` for self-loop bonds.
+        lg_src: Source line-graph node indices (bond sending message), shape (num_lg_edges,).
+        lg_dst: Destination line-graph node indices (bond receiving message), shape (num_lg_edges,).
+        directed: If True, apply ``src_bond_sign`` correction (for directed line graph).
+        eps: Epsilon for numerical stability in acos.
+
+    Returns:
+        cos_theta: Cosine of bond angles, shape (num_lg_edges,).
+    """
+    vec1 = bond_vec[lg_src] * src_bond_sign[lg_src] if directed else bond_vec[lg_src]
+    vec2 = bond_vec[lg_dst]
+    cos_theta = (vec1 * vec2).sum(dim=1) / (
+        torch.norm(vec1, dim=1) * torch.norm(vec2, dim=1)
+    ).clamp(min=eps)
+    return cos_theta.clamp(-1 + eps, 1 - eps)
+
+
+def ensure_directed_line_graph_compatibility_pyg(
+    bond_dist: torch.Tensor,
+    threebody_cutoff: float,
+    lg_edge_index: torch.Tensor,
+    lg_bond_vec: torch.Tensor,
+    lg_bond_dist: torch.Tensor,
+    lg_pbc_offset: torch.Tensor,
+    lg_src_bond_sign: torch.Tensor,
+    edge_ids: torch.Tensor,
+    tol: float = 5e-6,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Refresh line-graph node data to match the current atom graph.
+
+    Used in the ``forward`` pass when a pre-built line graph is passed in (e.g. from
+    the dataloader) but atomic positions have changed (e.g. during MD / relaxation).
+    Updates ``lg_bond_vec``, ``lg_bond_dist``, ``lg_pbc_offset`` in-place to reflect
+    new bond vectors computed from current positions.
+
+    Args:
+        bond_dist: Current bond distances (atom graph), shape (num_edges,).
+        threebody_cutoff: Cutoff for three-body interactions.
+        lg_edge_index: Existing line-graph edge index, shape (2, num_lg_edges).
+        lg_bond_vec: Existing line-graph node bond vectors (will be replaced).
+        lg_bond_dist: Existing line-graph node bond distances (will be replaced).
+        lg_pbc_offset: Existing line-graph node PBC offsets.
+        lg_src_bond_sign: Existing sign correction tensor.
+        edge_ids: Global edge ids that are line-graph nodes, shape (num_lg_nodes,).
+        tol: Numerical tolerance added to cutoff when number of nodes exceeds valid count.
+
+    Returns:
+        Updated (lg_edge_index, lg_bond_vec, lg_bond_dist, lg_pbc_offset, lg_src_bond_sign, edge_ids).
+    """
+    valid = bond_dist <= threebody_cutoff
+    if lg_bond_dist.size(0) > valid.sum():
+        valid = bond_dist <= threebody_cutoff + tol
+    if lg_bond_dist.size(0) > valid.sum():
+        raise RuntimeError("Line graph is incompatible with atom graph after tolerance adjustment.")
+    # Refresh only the node data — topology (edge_index) stays the same
+    new_edge_ids = valid.nonzero(as_tuple=False).squeeze(1)[: lg_bond_dist.size(0)]
+    return lg_edge_index, lg_bond_vec, lg_bond_dist, lg_pbc_offset, lg_src_bond_sign, new_edge_ids

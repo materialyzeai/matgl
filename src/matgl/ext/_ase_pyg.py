@@ -174,7 +174,8 @@ class PESCalculator(Calculator):
         use_voigt: bool = False,
         **kwargs,
     ):
-        """Init PESCalculator with a Potential from matgl.
+        """
+        Init PESCalculator with a Potential from matgl.
 
         Args:
             potential (Potential): matgl.apps.pes.Potential
@@ -218,8 +219,8 @@ class PESCalculator(Calculator):
                 "stress_weight to 1.0."
             )
         self.state_attr = state_attr
-        self.element_types: tuple[str, ...] = potential.model.element_types  # type: ignore[assignment,union-attr,attr-defined]
-        self.cutoff: float = potential.model.cutoff  # type: ignore[assignment,union-attr,attr-defined]
+        self.element_types: tuple[str, ...] = potential.model.element_types  # type: ignore[assignment,union-attr]
+        self.cutoff: float = potential.model.cutoff  # type: ignore[assignment,union-attr]
         self.use_voigt = use_voigt
         self._atoms2graph = Atoms2Graph(self.element_types, self.cutoff)
 
@@ -229,7 +230,8 @@ class PESCalculator(Calculator):
         properties: list | None = None,
         system_changes: list | None = None,
     ):
-        """Perform calculation for an input Atoms.
+        """
+        Perform calculation for an input Atoms.
 
         Args:
             atoms (ase.Atoms): ase Atoms object
@@ -246,26 +248,23 @@ class PESCalculator(Calculator):
             calc_result = self.potential(graph, lattice, self.state_attr)
         else:
             calc_result = self.potential(graph, lattice, state_attr_default)
-
-        # Detach to host once per output tensor — repeated ``.detach().cpu()``
-        # on the same tensor was triggering an extra host sync per MD step.
-        host = [t.detach().cpu() for t in calc_result]
-        energy_arr = host[0].numpy()
-        forces_arr = host[1].numpy()
-        energy_val = energy_arr.item()
         self.results.update(
-            energy=energy_val,
-            free_energy=energy_val,
-            forces=forces_arr,
+            energy=calc_result[0].detach().cpu().numpy().item(),
+            free_energy=calc_result[0].detach().cpu().numpy().item(),
+            forces=calc_result[1].detach().cpu().numpy(),
         )
         if self.compute_stress:
-            stress_arr = host[2].numpy()
-            stresses_np = full_3x3_to_voigt_6_stress(stress_arr) if self.use_voigt else stress_arr
+            stress_tensor = calc_result[2][0] if calc_result[2].dim() == 3 else calc_result[2]
+            stresses_np = (
+                full_3x3_to_voigt_6_stress(stress_tensor.detach().cpu().numpy())
+                if self.use_voigt
+                else stress_tensor.detach().cpu().numpy()
+            )
             self.results.update(stress=stresses_np * self.conversion_factor)
         if self.compute_hessian:
-            self.results.update(hessian=host[3].numpy())
+            self.results.update(hessian=calc_result[3].detach().cpu().numpy())
         if self.compute_magmom:
-            self.results.update(magmoms=host[4].numpy())
+            self.results.update(magmoms=calc_result[4].detach().cpu().numpy())
 
 
 # for backward compatibility
@@ -279,7 +278,8 @@ class M3GNetCalculator(PESCalculator):
         stress_weight: float = 1.0,
         **kwargs,
     ):
-        """Init M3GNetCalculator with a M3GNet Potential.
+        """
+        Init M3GNetCalculator with a M3GNet Potential.
 
         Args:
             potential (Potential): matgl.apps.pes.Potential
@@ -302,14 +302,13 @@ class Relaxer:
         relax_cell: bool = True,
         **kwargs,
     ):
-        """Initialize the Relaxer.
-
+        """
         Args:
             potential (Potential): a M3GNet potential, a str path to a saved model or a short name for saved model
-                that comes with M3GNet distribution
+            that comes with M3GNet distribution
             state_attr (torch.Tensor): State attr.
             optimizer (str or ase Optimizer): the optimization algorithm.
-                Defaults to "FIRE"
+            Defaults to "FIRE"
             relax_cell (bool): whether to relax the lattice cell
             **kwargs: Kwargs pass through to super().__init__().
         """
@@ -343,7 +342,8 @@ class Relaxer:
         params_asecellfilter: dict | None = None,
         **kwargs,
     ):
-        """Relax an input Atoms.
+        """
+        Relax an input Atoms.
 
         Args:
             atoms (Atoms | Structure | Molecule): the atoms for relaxation
@@ -396,13 +396,13 @@ class Relaxer:
 
 
 class TrajectoryObserver(collections.abc.Sequence):
-    """Trajectory observer hook for the relaxation process.
-
-    Saves the intermediate structures.
+    """Trajectory observer is a hook in the relaxation process that saves the
+    intermediate structures.
     """
 
     def __init__(self, atoms: Atoms) -> None:
-        """Init the Trajectory Observer from a Atoms.
+        """
+        Init the Trajectory Observer from a Atoms.
 
         Args:
             atoms (Atoms): Structure to observe.
@@ -498,7 +498,8 @@ class MolecularDynamics:
         mask: tuple | np.ndarray | None = None,
         **kwargs,
     ):
-        """Init the MD simulation.
+        """
+        Init the MD simulation.
 
         Args:
             atoms (Atoms): atoms to run the MD
@@ -729,7 +730,6 @@ class MolecularDynamics:
 
     def upper_triangular_cell(self, verbose: bool | None = False) -> None:
         """Transform to upper-triangular cell.
-
         ASE Nose-Hoover implementation only supports upper-triangular cell
         while ASE's canonical description is lower-triangular cell.
 
