@@ -6,6 +6,18 @@ nav_order: 3
 
 # Change Log
 
+## Unreleased
+- Removed the legacy GitHub `pretrained_models/` download fallback now that Hugging Face
+  is the canonical source for pre-trained matgl models. The `RemoteFile` class and the
+  `PRETRAINED_MODELS_BASE_URL` config constant have been removed, and
+  `get_available_pretrained_models` no longer accepts the `include_hf` / `include_github`
+  arguments (it now always queries the `materialyze` Hugging Face org). **Breaking
+  change** for any code that imported `matgl.utils.io.RemoteFile` or
+  `matgl.config.PRETRAINED_MODELS_BASE_URL` directly.
+
+## 2.2.1
+- Updated HuggingFace Repo Id to lowercase "materialyze".
+
 ## 2.2.0
 - Fixed an incorrect message-passing convention in the PyG and DGL `TensorNet` interaction and embedding blocks.
   Edge messages are now aggregated onto the source (center) node so that each atom correctly collects information

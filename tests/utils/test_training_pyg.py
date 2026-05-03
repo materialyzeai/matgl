@@ -20,7 +20,11 @@ if matgl.config.BACKEND != "PYG":
 from matgl.ext._pymatgen_pyg import Structure2Graph, get_element_list
 from matgl.graph._data_pyg import MGLDataLoader, MGLDataset, collate_fn_pes, split_dataset
 from matgl.models._tensornet_pyg import TensorNet
-from matgl.utils._training_pyg import PotentialLightningModule, xavier_init
+from matgl.utils._training_pyg import (
+    ModelLightningModule,
+    PotentialLightningModule,
+    xavier_init,
+)
 
 module_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -111,6 +115,169 @@ class TestModelTrainer:
             shutil.rmtree("lightning_logs")
         except FileNotFoundError:
             pass
+
+
+def _make_efs_batch():
+    """Tiny synthetic (preds, labels) tuple usable by PotentialLightningModule.loss_fn.
+
+    Three structures with 2/3/4 atoms. We give torch.nn.Parameter forces so that
+    grad-required inputs match what the real training loop produces.
+    """
+    energies = torch.tensor([-1.0, -2.0, -3.0])
+    forces = torch.zeros(2 + 3 + 4, 3)
+    stresses = torch.zeros(3, 3, 3)
+    magmoms = torch.zeros(2 + 3 + 4, 1)
+    num_atoms = torch.tensor([2, 3, 4])
+    return energies, forces, stresses, magmoms, num_atoms
+
+
+@pytest.mark.parametrize("loss_name", ["mse_loss", "huber_loss", "smooth_l1_loss", "l1_loss"])
+def test_potential_lightning_module_loss_selection(loss_name):
+    """Each supported loss-name string should resolve to a callable on `self.loss`."""
+    model = TensorNet(use_warp=False)
+    lit = PotentialLightningModule(model=model, loss=loss_name)
+    assert callable(lit.loss)
+
+
+def test_potential_lightning_loss_fn_no_num_atoms_branch():
+    """num_atoms=None → loss_fn falls back to torch.ones_like(preds[0])."""
+    model = TensorNet(use_warp=False)
+    lit = PotentialLightningModule(model=model, stress_weight=0.0, magmom_weight=0.0)
+    energies, forces, stresses, _, _ = _make_efs_batch()
+    preds = (energies.clone(), forces.clone(), stresses.clone())
+    labels = (energies, forces, stresses)
+    out = lit.loss_fn(loss=lit.loss, labels=labels, preds=preds, num_atoms=None)
+    assert "Total_Loss" in out
+    # Identical preds and labels with num_atoms broadcast: total loss must be (≈) 0.
+    assert torch.allclose(out["Total_Loss"], torch.tensor(0.0), atol=1e-6)
+
+
+def test_potential_lightning_loss_fn_allow_missing_labels():
+    """allow_missing_labels=True must drop NaN entries before computing the loss."""
+    model = TensorNet(use_warp=False)
+    lit = PotentialLightningModule(model=model, stress_weight=0.0, magmom_weight=0.0, allow_missing_labels=True)
+    # Make the second structure's energy + matching forces NaN.
+    energies, forces, stresses, _, num_atoms = _make_efs_batch()
+    energies = energies.clone()
+    energies[1] = float("nan")
+    forces = forces.clone()
+    forces[2:5] = float("nan")  # rows belonging to structure index 1
+    stresses = stresses.clone()
+    stresses[1] = float("nan")
+
+    preds = (
+        torch.tensor([-1.0, -2.0, -3.0]),
+        torch.zeros_like(forces),
+        torch.zeros_like(stresses),
+    )
+    labels = (energies, forces, stresses)
+    out = lit.loss_fn(loss=lit.loss, labels=labels, preds=preds, num_atoms=num_atoms)
+    # All survivors are exact matches → finite, near-zero loss.
+    assert torch.isfinite(out["Total_Loss"])
+    assert torch.allclose(out["Total_Loss"], torch.tensor(0.0), atol=1e-6)
+
+
+@pytest.mark.parametrize("magmom_target", ["absolute", "symbreak"])
+def test_potential_lightning_loss_fn_magmom_branches(magmom_target):
+    """`magmom_weight > 0` enables calc_magmom and exercises both magmom_target branches."""
+    model = TensorNet(use_warp=False)
+    lit = PotentialLightningModule(
+        model=model,
+        stress_weight=0.0,
+        magmom_weight=1.0,
+        magmom_target=magmom_target,
+    )
+    assert lit.model.calc_magmom is True
+    energies, forces, stresses, magmoms, num_atoms = _make_efs_batch()
+    # Use signed magmoms so the symbreak min(loss(m), loss(-m)) path is non-trivial.
+    magmom_labels = magmoms.clone()
+    magmom_labels[0] = 0.5
+    magmom_labels[1] = -0.5
+    preds = (energies.clone(), forces.clone(), stresses.clone(), magmom_labels.clone())
+    labels = (energies, forces, stresses, magmom_labels)
+    out = lit.loss_fn(loss=lit.loss, labels=labels, preds=preds, num_atoms=num_atoms)
+    assert "Magmom_MAE" in out
+    assert "Magmom_RMSE" in out
+    assert torch.isfinite(out["Total_Loss"])
+
+
+def test_potential_lightning_on_load_checkpoint_fills_missing_keys():
+    """on_load_checkpoint should populate keys that are missing from the checkpoint."""
+    model = TensorNet(use_warp=False)
+    lit = PotentialLightningModule(model=model)
+    full = lit.state_dict()
+    # Drop one key to simulate an upgrade-style checkpoint.
+    dropped_key = next(iter(full))
+    partial = {k: v for k, v in full.items() if k != dropped_key}
+    checkpoint = {"state_dict": partial}
+    lit.on_load_checkpoint(checkpoint)
+    assert dropped_key in checkpoint["state_dict"]
+    assert torch.allclose(checkpoint["state_dict"][dropped_key], full[dropped_key])
+
+
+def test_model_lightning_module_init_loss_branches():
+    """ModelLightningModule's __init__ should resolve each supported loss string."""
+    model = TensorNet(use_warp=False, is_intensive=True, ntargets=1)
+    for name in ("mse_loss", "huber_loss", "smooth_l1_loss", "anything_else"):
+        lit = ModelLightningModule(model=model, loss=name, sync_dist=True)
+        assert lit.model is model
+        assert callable(lit.loss)
+        # `sync_dist` is forwarded onto the instance so logging picks it up.
+        assert lit.sync_dist is True
+
+
+def test_model_lightning_module_loss_fn_scaling():
+    """ModelLightningModule.loss_fn rescales preds via data_mean/data_std before comparing."""
+    model = TensorNet(use_warp=False, is_intensive=True, ntargets=1)
+    lit = ModelLightningModule(model=model, data_mean=2.0, data_std=3.0)
+    preds = torch.tensor([[1.0], [2.0]])
+    labels = torch.tensor([5.0, 8.0])  # 1*3+2=5, 2*3+2=8 → exact match
+    out = lit.loss_fn(loss=lit.loss, labels=labels, preds=preds)
+    assert "MAE" in out
+    assert "RMSE" in out
+    assert torch.allclose(out["Total_Loss"], torch.tensor(0.0), atol=1e-6)
+
+
+def test_model_lightning_module_forward_and_step(LiFePO4, BaNiO3):
+    """ModelLightningModule.forward should attach `pos`/`pbc_offshift` derived from
+    ``frac_coords``/``pbc_offset`` and ``lat``, then return a model prediction; step
+    should compose forward + loss_fn into a (results, batch_size) tuple."""
+    torch.manual_seed(0)
+    structures = [LiFePO4, BaNiO3]
+    labels = {"energies": [-1.0, -2.0]}
+    element_types = get_element_list(structures)
+    converter = Structure2Graph(element_types=element_types, cutoff=5.0)
+    dataset = MGLDataset(
+        structures=structures,
+        converter=converter,
+        labels=labels,
+        save_cache=False,
+    )
+    # Manually batch the dataset to avoid creating a Lightning Trainer.
+    from matgl.graph._data_pyg import collate_fn_graph
+
+    batch = collate_fn_graph([dataset[0], dataset[1]])
+    g, lat, state_attr, _label_tensor = batch
+
+    model = TensorNet(element_types=element_types, is_intensive=True, ntargets=1, use_warp=False)
+    lit = ModelLightningModule(model=model, data_mean=0.0, data_std=1.0, sync_dist=False)
+
+    preds = lit(g=g, lat=lat, state_attr=state_attr)
+    # Two structures in the batch → preds should be a length-2 1-D tensor.
+    assert preds.shape == (2,)
+    assert torch.isfinite(preds).all()
+
+    # forward must have populated ``g.pos`` and ``g.pbc_offshift`` from ``lat``.
+    assert hasattr(g, "pos")
+    assert hasattr(g, "pbc_offshift")
+    assert g.pos.shape == (g.num_nodes, 3)
+    assert g.pbc_offshift.shape == (g.edge_index.size(1), 3)
+
+    # The full step path should also work and produce the expected logging keys.
+    results, batch_size = lit.step(batch)
+    assert {"Total_Loss", "MAE", "RMSE"}.issubset(results)
+    assert batch_size == preds.numel()
+    assert torch.isfinite(results["Total_Loss"])
 
 
 @pytest.mark.parametrize("distribution", ["normal", "uniform", "fake"])

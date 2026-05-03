@@ -12,7 +12,6 @@ import numpy as np
 import torch
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 from pymatgen.core.structure import Structure
-from pymatgen.ext.matproj import MPRester
 from pymatgen.io.ase import AseAtomsAdaptor
 
 import matgl
@@ -134,6 +133,10 @@ def predict_structure(args: argparse.Namespace) -> None:
                 value = model.predict_structure(structure)  # type:ignore[operator]
                 print(f"{args.model} prediction for {file_path}: {value} eV/atom.")
     if args.mpids:
+        # Lazy import: ``MPRester`` lives in the full ``pymatgen`` package which is
+        # an optional dep (only ``pymatgen-core`` is required at install time).
+        from pymatgen.ext.matproj import MPRester
+
         mpr = MPRester()
         for material_id in args.mpids:
             structure = mpr.get_structure_by_material_id(material_id)

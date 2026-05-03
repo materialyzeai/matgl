@@ -57,7 +57,7 @@ dependencies = [
     "pymatgen-core>=2026.4.16",
     "huggingface_hub>=0.24",
 ]
-version = "2.2.0"
+version = "2.2.1"
 
 [project.scripts]
 mgl = "matgl.cli:main"
@@ -183,6 +183,16 @@ ignore_errors = true
 
 [tool.coverage.run]
 relative_files = true
+omit = [
+    # GPU-only NVIDIA Warp kernels — require CUDA hardware and the `warp` runtime.
+    # Not exercised in CI; the pure-PyTorch reference ops in matgl.ops are tested instead.
+    "src/matgl/kernels/*",
+    # NVIDIA nvalchemi-toolkit interface — requires the proprietary nvalchemiops
+    # package and CUDA hardware; not available in CI.
+    "src/matgl/ext/alchmtk.py",
+    "src/matgl/ext/_alchmtk.py",
+    "src/matgl/ext/_tensornet_alchmtk.py",
+]
 
 [tool.coverage.report]
 exclude_lines = [

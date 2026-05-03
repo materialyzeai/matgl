@@ -206,20 +206,37 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         l_g: Data | None = None,
         state_attr: torch.Tensor | None = None,
     ):
-        """Args:
-            g: dgl Graph
-            lat: lattice
-            l_g: Line graph
-            state_attr: State attribute.
+        """Compute model predictions.
+
+        Attaches per-node ``pos`` and per-edge ``pbc_offshift`` tensors derived from
+        ``frac_coords``/``pbc_offset`` and the supplied lattice(s), then delegates to
+        the wrapped model. Works for both single-graph (``lat`` shape ``(3, 3)``) and
+        batched (``lat`` shape ``(B, 3, 3)``) inputs.
+
+        Args:
+            g: PyG graph (single ``Data`` or batched ``Batch``).
+            lat: Lattice tensor.
+            l_g: Optional line graph.
+            state_attr: Optional state attribute.
 
         Returns:
             Model prediction.
         """
-        g.edata["lattice"] = torch.repeat_interleave(lat, g.batch_num_edges(), dim=0)  # type:ignore[arg-type]
-        g.edata["pbc_offshift"] = (g.edata["pbc_offset"].unsqueeze(dim=-1) * g.edata["lattice"]).sum(dim=1)
-        g.ndata["pos"] = (
-            g.ndata["frac_coords"].unsqueeze(dim=-1) * torch.repeat_interleave(lat, g.batch_num_nodes(), dim=0)  # type:ignore[arg-type]
-        ).sum(dim=1)
+        if lat is not None:
+            # Normalize lat to (B, 3, 3) regardless of whether the caller supplied a
+            # single-graph (3, 3) tensor or a (B, 3, 3) batched tensor.
+            if lat.dim() == 2:
+                lat = lat.unsqueeze(0)
+            # PyG batches assign each node a graph index via ``g.batch``; for a
+            # non-batched ``Data`` this attribute is missing/None, in which case
+            # every node belongs to graph 0.
+            batch = getattr(g, "batch", None)
+            if batch is None:
+                batch = torch.zeros(g.num_nodes, dtype=torch.long, device=g.frac_coords.device)
+            node_lat = lat[batch]
+            g.pos = (g.frac_coords.unsqueeze(dim=-1) * node_lat).sum(dim=1)
+            edge_lat = lat[batch[g.edge_index[0]]]
+            g.pbc_offshift = (g.pbc_offset.unsqueeze(dim=-1) * edge_lat).sum(dim=1)
         if self.include_line_graph:
             return self.model(g=g, l_g=l_g, state_attr=state_attr)
         return self.model(g, state_attr=state_attr)

@@ -55,7 +55,9 @@ def separate_node_edge_keys(graph: Data) -> tuple[list[str], list[str], list[str
     num_nodes = graph.num_nodes
     num_edges = graph.num_edges
 
-    for key in graph:
+    # PyG's ``Data.__iter__`` yields ``(key, value)`` tuples, so use ``.keys()``
+    # explicitly to iterate attribute names.
+    for key in graph.keys():  # noqa: SIM118
         value = graph[key]
         if key == "edge_index":
             other_keys.append(key)

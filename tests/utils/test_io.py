@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-import matgl
 from matgl.utils import io as matgl_io
 from matgl.utils.io import IOMixIn, get_available_pretrained_models, load_model
 
@@ -33,6 +32,21 @@ class NewModel(torch.nn.Module, IOMixIn):
         self.n = n
 
 
+class ModelWithParams(torch.nn.Module, IOMixIn):
+    """Minimal IOMixIn model with a known parameter count for ``num_parameters`` tests."""
+
+    def __init__(self):
+        super().__init__()
+        self.lin = torch.nn.Linear(5, 3)
+        self.save_args(locals())
+
+
+def test_iomixin_num_parameters():
+    model = ModelWithParams()
+    # Linear(5, 3): weight 5 * 3 + bias 3
+    assert model.num_parameters == 5 * 3 + 3
+
+
 def test_model_versioning():
     model = OldModel(1, k=2)
     model.save("OldModel")
@@ -49,21 +63,8 @@ def test_model_versioning():
 def test_get_available_pretrained_models():
     model_names = get_available_pretrained_models()
     assert len(model_names) > 1
-    assert "M3GNet-MP-2021.2.8-PES" in model_names
-
-
-@pytest.mark.skipif(matgl.config.BACKEND != "DGL", reason="Only works with DGL.")
-def test_load_model():
-    # Load model from name.
-
-    model = load_model("M3GNet-MP-2021.2.8-DIRECT-PES")
-    assert issubclass(model.__class__, torch.nn.Module)
-
-    # Load model from a full path.
-    model = load_model(this_dir / ".." / ".." / "pretrained_models" / "MEGNet-MP-2018.6.1-Eform")
-    assert issubclass(model.__class__, torch.nn.Module)
-    model = load_model(this_dir / ".." / ".." / "pretrained_models" / "CHGNet-MPtrj-2024.2.13-11M-PES")
-    assert issubclass(model.__class__, torch.nn.Module)
+    # All names should be bare model names (no "owner/" prefix).
+    assert all("/" not in name for name in model_names)
 
 
 def test_from_pretrained_uses_hf_hub(tmp_path):
@@ -104,8 +105,8 @@ def test_load_model_falls_back_to_hf_hub(tmp_path):
     assert loaded._init_args["flag"] is True
 
 
-def test_load_model_prefers_materialyze_hf_org(tmp_path):
-    """A bare name should be resolved via the Materialyze HF org before falling back to GitHub."""
+def test_load_model_resolves_bare_name_via_materialyze_hf_org(tmp_path):
+    """A bare name should be resolved via the materialyze HF org."""
     model = OldModel(11, source="materialyze")
     serialized_dir = tmp_path / "serialized"
     model.save(serialized_dir)
@@ -117,13 +118,7 @@ def test_load_model_prefers_materialyze_hf_org(tmp_path):
         assert repo_id == f"{matgl_io.HF_MATGL_ORG}/BareModelName"
         return str(serialized_dir / filename)
 
-    def fail_remote(*args, **kwargs):
-        raise AssertionError("RemoteFile should not be called when the HF org lookup succeeds")
-
-    with (
-        patch.object(matgl_io, "hf_hub_download", side_effect=fake_hf_hub_download),
-        patch.object(matgl_io, "RemoteFile", side_effect=fail_remote),
-    ):
+    with patch.object(matgl_io, "hf_hub_download", side_effect=fake_hf_hub_download):
         loaded = load_model("BareModelName")
 
     assert isinstance(loaded, torch.nn.Module)
@@ -131,28 +126,17 @@ def test_load_model_prefers_materialyze_hf_org(tmp_path):
     assert calls == [f"{matgl_io.HF_MATGL_ORG}/BareModelName"] * 3
 
 
-def test_load_model_falls_back_to_github_when_hf_missing(tmp_path):
-    """If a bare name is not on the Materialyze HF org, fall through to the GitHub mirror."""
-    model = OldModel(13, source="github")
-    serialized_dir = tmp_path / "serialized"
-    model.save(serialized_dir)
+def test_load_model_raises_when_bare_name_missing_on_hf(tmp_path):
+    """If a bare name is not on the materialyze HF org, loading should fail with a ValueError."""
 
     def fake_hf_hub_download(repo_id, filename, **kwargs):
         raise RuntimeError(f"missing {repo_id}")
 
-    class FakeRemoteFile:
-        def __init__(self, uri, **kwargs):
-            fname = uri.rsplit("/", 1)[-1]
-            self.local_path = serialized_dir / fname
-
     with (
         patch.object(matgl_io, "hf_hub_download", side_effect=fake_hf_hub_download),
-        patch.object(matgl_io, "RemoteFile", FakeRemoteFile),
+        pytest.raises(ValueError, match=r"Bad serialized model or bad model name\."),
     ):
-        loaded = load_model("LegacyOnlyModel")
-
-    assert isinstance(loaded, torch.nn.Module)
-    assert loaded._init_args["source"] == "github"
+        load_model("LegacyOnlyModel")
 
 
 def test_push_to_hub_invokes_hub_api(tmp_path):
@@ -175,6 +159,7 @@ def test_push_to_hub_invokes_hub_api(tmp_path):
         patch.object(matgl_io, "HfApi") as fake_api_cls,
     ):
         fake_api = MagicMock()
+        fake_api.repo_exists.return_value = False
         fake_api.upload_folder.side_effect = fake_upload_folder
         fake_api_cls.return_value = fake_api
 
@@ -183,6 +168,51 @@ def test_push_to_hub_invokes_hub_api(tmp_path):
     assert url == "https://huggingface.co/owner/repo/commit/abcdef"
     assert captured["repo_id"] == "owner/repo"
     fake_create.assert_called_once()
+
+
+def test_push_to_hub_retains_existing_readme(tmp_path):
+    """When the repo already exists, push_to_hub must not generate a README."""
+    model = OldModel(2)
+
+    def fake_upload_folder(*, folder_path, repo_id, **kwargs):
+        files = set(os.listdir(folder_path))
+        assert {"model.pt", "state.pt", "model.json"}.issubset(files)
+        assert "README.md" not in files
+        return MagicMock(commit_url="https://huggingface.co/owner/repo/commit/deadbeef")
+
+    with (
+        patch.object(matgl_io, "create_repo"),
+        patch.object(matgl_io, "HfApi") as fake_api_cls,
+    ):
+        fake_api = MagicMock()
+        fake_api.repo_exists.return_value = True
+        fake_api.upload_folder.side_effect = fake_upload_folder
+        fake_api_cls.return_value = fake_api
+
+        model.push_to_hub("owner/repo", metadata={"note": "test"})
+
+
+def test_push_to_hub_uploads_explicit_readme_for_existing_repo(tmp_path):
+    """An explicit ``readme_text`` must be uploaded even when the repo already exists."""
+    model = OldModel(2)
+
+    def fake_upload_folder(*, folder_path, repo_id, **kwargs):
+        files = set(os.listdir(folder_path))
+        assert "README.md" in files
+        contents = (Path(folder_path) / "README.md").read_text()
+        assert "Custom README content" in contents
+        return MagicMock(commit_url="https://huggingface.co/owner/repo/commit/cafebabe")
+
+    with (
+        patch.object(matgl_io, "create_repo"),
+        patch.object(matgl_io, "HfApi") as fake_api_cls,
+    ):
+        fake_api = MagicMock()
+        fake_api.repo_exists.return_value = True
+        fake_api.upload_folder.side_effect = fake_upload_folder
+        fake_api_cls.return_value = fake_api
+
+        model.push_to_hub("owner/repo", readme_text="Custom README content")
 
 
 def test_load_bad_model():
@@ -202,3 +232,149 @@ def test_load_bad_model():
             load_model("bad_serialized_model")
     finally:
         shutil.rmtree("bad_serialized_model")
+
+
+def test_load_model_wraps_unknown_error_as_runtime_error(tmp_path):
+    """Non-(ImportError, ValueError) exceptions should be re-raised as ``RuntimeError``."""
+    serialized_dir = tmp_path / "weird_model"
+    serialized_dir.mkdir()
+    for fn in ("model.pt", "state.pt", "model.json"):
+        (serialized_dir / fn).write_text("doesn't matter")
+
+    def boom(*_args, **_kwargs):
+        raise KeyboardInterrupt("boom")
+
+    with (
+        patch.object(matgl_io, "_get_file_paths", side_effect=boom),
+        pytest.raises(RuntimeError, match="Unknown error occurred while loading model"),
+    ):
+        load_model(serialized_dir)
+
+
+def test_get_file_paths_malformed_identifier_raises_value_error(tmp_path):
+    """An identifier that contains ``/`` but doesn't match a valid HF repo id must
+    fail with a clear ``ValueError`` rather than attempting a network call."""
+    from matgl.utils.io import _get_file_paths
+
+    # Doesn't exist locally and doesn't match ``owner/name`` (leading slash, double slash).
+    bogus = "//bad//repo//id"
+    with pytest.raises(ValueError, match=r"No valid model found locally or at Hugging Face Hub"):
+        _get_file_paths(tmp_path / bogus, str_path=bogus)
+
+
+def test_get_file_paths_bare_name_hub_failure_raises_value_error(tmp_path):
+    """When a bare name fails to download from the materialyze HF org, raise ``ValueError``."""
+    from matgl.utils.io import _get_file_paths
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("simulated hub failure")
+
+    with (
+        patch.object(matgl_io, "_download_from_hf_hub", side_effect=boom),
+        pytest.raises(ValueError, match=r"No valid model found locally or at Hugging Face repo"),
+    ):
+        _get_file_paths(tmp_path / "BareName", str_path="BareName")
+
+
+def test_iomixin_load_dgl_class_under_pyg_warns():
+    """Loading a model whose nested kwargs reference a DGL-only class under PYG must warn.
+
+    Triggers the branch that auto-flips the backend to DGL when a serialized model has a
+    nested component class name containing ``m3gnet`` / ``megnet`` / ``chgnet`` / ``qet``.
+    """
+    import matgl as _matgl
+
+    if _matgl.config.BACKEND != "PYG":
+        pytest.skip("Only meaningful on the PyG backend.")
+
+    # IOMixIn.load expects a dict-of-paths or a Path. Pre-build the artifacts on disk.
+    import json as _json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        nested = {
+            "@class": "M3GNet",
+            "@module": "definitely.not.a.real.module.at.all",
+            "@model_version": 1,
+            "init_args": {},
+        }
+        init_args = {"n": 1, "submodel": nested}
+
+        torch.save(init_args, tmp_path / "model.pt")
+        torch.save({}, tmp_path / "state.pt")
+        (tmp_path / "model.json").write_text(
+            _json.dumps(
+                {
+                    "@class": "OldModel",
+                    "@module": "tests.utils.test_io",
+                    "@model_version": 1,
+                    "metadata": None,
+                    "kwargs": init_args,
+                }
+            )
+        )
+
+        # ``matgl.set_backend("DGL")`` would mutate global state and may fail if DGL
+        # isn't installed; patch it to a no-op so the test is self-contained.
+        with (
+            patch.object(_matgl, "set_backend") as mock_set_backend,
+            pytest.warns(UserWarning, match=r"Setting the backend to DGL"),
+            pytest.raises((ImportError, ValueError, ModuleNotFoundError)),
+        ):
+            OldModel.load(tmp_path)
+
+        mock_set_backend.assert_called_with("DGL")
+
+
+def test_generate_hf_model_card_with_unserializable_metadata():
+    """``_generate_hf_model_card`` must swallow ``TypeError`` from non-serializable metadata.
+
+    Forces the ``json.dumps`` fallback to fail even with ``default=str`` by using an
+    object whose ``__repr__`` raises (and therefore so does ``str(obj)``).
+    """
+    from matgl.utils.io import _generate_hf_model_card
+
+    class Unserializable:
+        def __repr__(self):
+            raise TypeError("repr exploded")
+
+    model = OldModel(1)
+    card = _generate_hf_model_card(model, metadata={"oops": Unserializable()})
+
+    assert "## Metadata" not in card
+    assert "OldModel" in card
+
+
+def test_get_available_pretrained_models_handles_hub_errors():
+    """If the HF hub call fails, ``get_available_pretrained_models`` returns an empty list."""
+
+    class _BoomApi:
+        def list_models(self, **_kwargs):
+            raise RuntimeError("network is down")
+
+    with patch.object(matgl_io, "HfApi", return_value=_BoomApi()):
+        names = get_available_pretrained_models()
+
+    assert names == []
+
+
+def test_get_available_pretrained_models_strips_owner_prefix():
+    """Returned names should be bare (no ``"owner/"`` prefix) and sorted."""
+
+    class _FakeModelInfo:
+        def __init__(self, repo_id: str):
+            self.id = repo_id
+
+    class _FakeApi:
+        def list_models(self, **_kwargs):
+            return [
+                _FakeModelInfo("materialyze/Zeta"),
+                _FakeModelInfo("materialyze/Alpha"),
+                _FakeModelInfo("no-slash-id"),  # malformed entries are silently skipped
+            ]
+
+    with patch.object(matgl_io, "HfApi", return_value=_FakeApi()):
+        names = get_available_pretrained_models()
+
+    assert names == ["Alpha", "Zeta"]

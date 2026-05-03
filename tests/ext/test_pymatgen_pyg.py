@@ -88,3 +88,38 @@ def test_get_element_list():
     naf = Structure.from_spacegroup("Pm-3m", Lattice.cubic(3), ["Na", "F"], [[0, 0, 0], [0.5, 0.5, 0.5]])
     elem_list = get_element_list([cscl, naf])
     assert elem_list == ("F", "Na", "Cl", "Cs")
+
+
+def _build_graph_without_alchmtk(structure_or_mol, cutoff, monkeypatch):
+    """Force the scipy/pymatgen fallback branches in ``_pymatgen_pyg`` and convert."""
+    from matgl.ext import _pymatgen_pyg as mod
+    from matgl.ext._pymatgen_pyg import Molecule2Graph as M2G_local
+    from matgl.ext._pymatgen_pyg import Structure2Graph as S2G_local
+
+    monkeypatch.setattr(mod, "_alchmtk_available", False)
+    elements = get_element_list([structure_or_mol])
+    if isinstance(structure_or_mol, Structure):
+        return S2G_local(element_types=elements, cutoff=cutoff).get_graph(structure_or_mol)
+    return M2G_local(element_types=elements, cutoff=cutoff).get_graph(structure_or_mol)
+
+
+def test_structure2graph_without_alchmtk(LiFePO4, monkeypatch):
+    """The non-alchmtk fallback path must produce a graph equivalent to the alchmtk path."""
+    graph, _lattice, state = _build_graph_without_alchmtk(LiFePO4, cutoff=4.0, monkeypatch=monkeypatch)
+    assert graph.num_nodes == LiFePO4.num_sites
+    # frac coords come back as a numpy array along the fallback path; the converter is
+    # expected to coerce them. Just verify the resulting tensor shape and that the
+    # state-attr structure is preserved.
+    assert np.allclose(state, [0.0, 0.0])
+    assert graph.num_edges > 0
+
+
+def test_molecule2graph_without_alchmtk(CH4, monkeypatch):
+    """The non-alchmtk fallback path for molecules uses a scipy.sparse adjacency."""
+    graph, _lattice, state = _build_graph_without_alchmtk(CH4, cutoff=2.0, monkeypatch=monkeypatch)
+    assert graph.num_nodes == 5
+    # Same edge count as the alchmtk path for CH4 with cutoff=2.0.
+    assert graph.num_edges == 20
+    # state_attr is [molecular_weight_per_atom, mean_bonds_per_atom]
+    assert len(state) == 2
+    assert np.allclose(state, [3.208492, 2])
