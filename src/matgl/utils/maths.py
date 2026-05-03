@@ -246,6 +246,66 @@ def _scatter_add(x: torch.Tensor, idx_i: torch.Tensor, dim_size: int, dim: int =
     return y
 
 
+def scatter_mean(
+    x: torch.Tensor,
+    idx_i: torch.Tensor,
+    dim_size: int,
+    dim: int = 0,
+) -> torch.Tensor:
+    """Average over values with the same indices.
+
+    Args:
+        x: input values
+        idx_i: index of central atom i
+        dim_size: size of the dimension after reduction
+        dim: the dimension to reduce
+
+    Returns:
+        resulting output from _scatter_mean
+    """
+    return _scatter_mean(x, idx_i, dim_size, dim)
+
+
+@torch.jit.script
+def _scatter_mean(
+    x: torch.Tensor,
+    idx_i: torch.Tensor,
+    dim_size: int,
+    dim: int = 0,
+) -> torch.Tensor:
+    """Average over values with the same indices.
+
+    Args:
+        x: input values
+        idx_i: index of central atom i
+        dim_size: size of the dimension after reduction
+        dim: the dimension to reduce
+
+    Returns:
+        y: resulting tensors
+    """
+    shape = list(x.shape)
+    shape[dim] = dim_size
+
+    tmp = torch.zeros(shape, dtype=x.dtype, device=x.device)
+    y = tmp.index_add(dim, idx_i, x)
+
+    count_shape = [1 for _ in range(x.dim())]
+    count_shape[dim] = dim_size
+
+    count_tmp = torch.zeros(count_shape, dtype=x.dtype, device=x.device)
+    ones_shape = [1 for _ in range(x.dim())]
+    ones_shape[dim] = x.shape[dim]
+    ones = torch.ones(ones_shape, dtype=x.dtype, device=x.device)
+
+    count = count_tmp.index_add(dim, idx_i, ones)
+    count = torch.clamp(count, min=1.0)
+
+    y = y / count
+
+    return y
+
+
 def unsorted_segment_fraction(data: torch.Tensor, segment_ids: torch.Tensor, num_segments: int):
     """Compute the segment fraction of each element.
 

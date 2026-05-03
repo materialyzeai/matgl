@@ -16,6 +16,7 @@ from matgl.utils.maths import (
     new_radial_tensor,
     repeat_with_n,
     scatter_add,
+    scatter_mean,
     scatter_sum,
     spherical_bessel_roots,
     tensor_norm,
@@ -91,6 +92,30 @@ def test_scatter_add():
     # Check the correctness of the result
     expected_result = torch.tensor([3, 7, 11], dtype=x.dtype)
     assert torch.equal(result, expected_result)
+
+
+def test_scatter_mean():
+    """Test scatter_mean for a simple 2D tensor reduced along dim=0."""
+    x = torch.tensor(
+        [
+            [1.0, 2.0],
+            [3.0, 4.0],
+            [5.0, 6.0],
+        ]
+    )
+    idx_i = torch.tensor([0, 0, 1])
+
+    out = scatter_mean(x, idx_i, dim_size=3, dim=0)
+
+    expected = torch.tensor(
+        [
+            [2.0, 3.0],
+            [5.0, 6.0],
+            [0.0, 0.0],
+        ]
+    )
+
+    assert torch.allclose(out, expected)
 
 
 def test_binom():
