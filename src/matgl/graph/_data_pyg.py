@@ -22,8 +22,7 @@ if TYPE_CHECKING:
 
 
 def ensure_batch_attribute(data: Data) -> Data:
-    """
-    Ensure a PyG Data object has a batch attribute.
+    """Ensure a PyG Data object has a batch attribute.
 
     Args:
         data: PyG Data object.
@@ -60,8 +59,7 @@ def split_dataset(
 def collate_fn_graph(
     batch: list, multiple_values_per_target: bool = False
 ) -> tuple[Batch | Data, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Merge a list of PyG graphs to form a batch.
+    """Merge a list of PyG graphs to form a batch.
 
     Args:
         batch: List of tuples, each containing (graph, lattice, [line_graph,] state_attr, labels).
@@ -177,7 +175,8 @@ class MGLDataset(Dataset):
         pre_transform=None,
         pre_filter=None,
     ):
-        """
+        """Initialize the MGLDataset.
+
         Args:
             filename: File name for storing PyG graphs.
             filename_lattice: File name for storing lattice matrices.
@@ -191,7 +190,7 @@ class MGLDataset(Dataset):
             root: Root directory where the dataset should be saved.
             transform: A function/transform that takes in a Data or HeteroData object and returns a transformed version.
             pre_transform: A function/transform that takes in a Data or HeteroData object
-                           and returns a transformed version.
+                and returns a transformed version.
             pre_filter: A function that takes in a Data or HeteroData object and returns a boolean value.
             directory_name: Name of the directory to store the dataset.
             graph_labels: State attributes.

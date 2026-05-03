@@ -90,7 +90,8 @@ class CHGNet(MatGLModel):
         error_handling: bool = True,
         **kwargs,
     ):
-        """
+        """Initialize the CHGNet model.
+
         Args:
             element_types (list(str)): List of element types to consider in the model.
                 If None, defaults to DEFAULT_ELEMENTS.

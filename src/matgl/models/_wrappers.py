@@ -13,18 +13,21 @@ if TYPE_CHECKING:
 
 
 class TransformedTargetModel(MatGLModel):
-    """A model where the target is first transformed prior to training and the reverse transformation is performed for
-    predictions. This is modelled after scikit-learn's TransformedTargetRegressor. It should be noted that this model
-    is almost never used for training since the general idea is to use the transformed target for loss computation.
-    Instead, it is created after a model has been fitted for serialization for end user to call the model to perform
-    predictions without having to worry about what target transformations have been performed.
+    """Model that transforms the target prior to training and inverts the transform for predictions.
+
+    Modelled after scikit-learn's TransformedTargetRegressor. This wrapper is almost never used for
+    training (the general idea is to use the transformed target for loss computation); instead, it
+    is created after a model has been fitted for serialization, so end users can call the model to
+    perform predictions without having to worry about what target transformations have been
+    performed.
     """
 
     # Model version number.
     __version__ = 1
 
     def __init__(self, model: nn.Module, target_transformer: Transformer):
-        """
+        """Initialize the TransformedTargetModel.
+
         Args:
             model (nn.Module): Model to wrap.
             target_transformer (Transformer): Transformer to use for target transformation.
@@ -35,7 +38,9 @@ class TransformedTargetModel(MatGLModel):
         self.transformer = target_transformer
 
     def forward(self, *args, **kwargs):
-        """Args:
+        """Run the wrapped model and inverse-transform the output.
+
+        Args:
             *args: Passthrough to parent model.forward method.
             **kwargs: Passthrough to parent model.forward method.
 

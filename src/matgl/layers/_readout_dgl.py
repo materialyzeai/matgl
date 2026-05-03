@@ -29,7 +29,8 @@ class Set2SetReadOut(nn.Module):
         n_layers: int,
         field: Literal["node_feat", "edge_feat"],
     ):
-        """
+        """Initialize the Set2SetReadOut.
+
         Args:
             in_feats (int): length of input feature vector
             n_iters (int): Number of LSTM steps
@@ -55,11 +56,13 @@ class Set2SetReadOut(nn.Module):
 
 class ReduceReadOut(nn.Module):
     """Reduce atom or bond attributes into lower dimensional tensors as readout.
+
     This could be summing up the atoms or bonds, or taking the mean, etc.
     """
 
     def __init__(self, op: str = "mean", field: Literal["node_feat", "edge_feat"] = "node_feat"):
-        """
+        """Initialize the ReduceReadOut.
+
         Args:
             op (str): op for the reduction
             field (str): Field of graph to perform the reduction.
@@ -69,7 +72,9 @@ class ReduceReadOut(nn.Module):
         self.field = field
 
     def forward(self, g: dgl.DGLGraph):
-        """Args:
+        """Reduce attributes over a graph.
+
+        Args:
             g: DGL graph.
 
         Returns:
@@ -84,7 +89,8 @@ class WeightedReadOut(nn.Module):
     """Feed node features into Gated MLP as readout for atomic properties."""
 
     def __init__(self, in_feats: int, dims: Sequence[int], num_targets: int):
-        """
+        """Initialize the WeightedReadOut.
+
         Args:
             in_feats: input features (nodes)
             dims: NN architecture for Gated MLP
@@ -96,7 +102,9 @@ class WeightedReadOut(nn.Module):
         self.gated = GatedMLP(in_feats=in_feats, dims=self.dims, activate_last=False)
 
     def forward(self, g: dgl.DGLGraph):
-        """Args:
+        """Run the weighted readout.
+
+        Args:
             g: DGL graph.
 
         Returns:
@@ -110,7 +118,8 @@ class WeightedAtomReadOut(nn.Module):
     """Weighted atom readout for graph properties."""
 
     def __init__(self, in_feats: int, dims: Sequence[int], activation: nn.Module):
-        """
+        """Initialize the WeightedAtomReadOut.
+
         Args:
             in_feats: input features (nodes)
             dims: NN architecture for Gated MLP
@@ -123,7 +132,9 @@ class WeightedAtomReadOut(nn.Module):
         self.weight = nn.Sequential(nn.Linear(in_feats, 1), nn.Sigmoid())
 
     def forward(self, g: dgl.DGLGraph):
-        """Args:
+        """Run the weighted atom readout.
+
+        Args:
             g: DGL graph.
 
         Returns:
@@ -159,8 +170,7 @@ class WeightedReadOutPair(nn.Module):
 
 
 class GlobalPool(nn.Module):
-    """
-    One-step readout in AttentiveFP. Token from dgllife.model.readout.attentivefp_readout.
+    """One-step readout in AttentiveFP. Token from dgllife.model.readout.attentivefp_readout.
 
     Parameters
     ----------
@@ -179,8 +189,7 @@ class GlobalPool(nn.Module):
         self.gru = nn.GRUCell(feat_size, feat_size)
 
     def forward(self, g, node_feats, g_feats, get_node_weight=False):
-        """
-        Perform one-step readout.
+        """Perform one-step readout.
 
         Args:
         ----------

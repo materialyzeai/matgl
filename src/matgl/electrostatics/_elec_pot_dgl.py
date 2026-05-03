@@ -16,8 +16,7 @@ if TYPE_CHECKING:
 
 
 class ElectrostaticPotential(nn.Module):
-    r"""
-    Compute electrostatic potentials for atoms within a molecular graph.
+    r"""Compute electrostatic potentials for atoms within a molecular graph.
 
     This module calculates the electrostatic potential at each atomic site
     based on pairwise Coulomb interactions between charged atoms.
@@ -67,8 +66,7 @@ class ElectrostaticPotential(nn.Module):
         self.cutoff = cutoff
 
     def message_func(self, edges: dgl.udf.EdgeBatch):
-        """
-        Compute the pairwise electrostatic potential contribution along each edge.
+        """Compute the pairwise electrostatic potential contribution along each edge.
 
         Parameters
         ----------
@@ -98,8 +96,7 @@ class ElectrostaticPotential(nn.Module):
         return {"m_elec_pot": elec_pot * COULOMB_CONSTANT}
 
     def forward(self, g: dgl.DGLGraph) -> dgl.DGLGraph:
-        """
-        Aggregate electrostatic potential contributions for all atoms in the graph.
+        """Aggregate electrostatic potential contributions for all atoms in the graph.
 
         This function performs a message-passing operation over the molecular graph:
         each atom receives the summed electrostatic potential contributions

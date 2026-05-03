@@ -18,11 +18,13 @@ if TYPE_CHECKING:
 
 class ReduceReadOut(nn.Module):
     """Reduce node or edge attributes into lower dimensional tensors as readout in PyTorch Geometric.
+
     This could be summing up the nodes or edges, or taking the mean, etc.
     """
 
     def __init__(self, op: str = "mean", field: str = "node_feat"):
-        """
+        """Initialize the ReduceReadOut.
+
         Args:
             op (str): Operation for the reduction ('mean', 'sum', or 'max').
             field (str): Field to perform the reduction ('node_feat' or 'edge_feat').
@@ -56,7 +58,8 @@ class WeightedReadOut(nn.Module):
     """Feed node features into Gated MLP as readout for atomic properties."""
 
     def __init__(self, in_feats: int, dims: Sequence[int], num_targets: int):
-        """
+        """Initialize the WeightedReadOut.
+
         Args:
             in_feats: input features (nodes).
             dims: NN architecture for Gated MLP.
@@ -71,14 +74,12 @@ class WeightedReadOut(nn.Module):
         """Forward pass.
 
         Args:
-        node_feat (torch.Tensor):
-            Per-node input features.
-            Shape: (num_nodes, num_node_features).
+            node_feat (torch.Tensor): Per-node input features.
+                Shape: (num_nodes, num_node_features).
 
         Returns:
-        atomic_properties (torch.Tensor):
-            Per-node atomic properties.
-            Shape: (num_nodes, num_targets).
+            atomic_properties (torch.Tensor): Per-node atomic properties.
+                Shape: (num_nodes, num_targets).
         """
         atomic_properties = self.gated(node_feat)
         return atomic_properties
@@ -88,7 +89,8 @@ class WeightedAtomReadOut(nn.Module):
     """Weighted atom readout for graph properties in PyTorch Geometric."""
 
     def __init__(self, in_feats: int, dims: Sequence[int], activation: nn.Module):
-        """
+        """Initialize the WeightedAtomReadOut.
+
         Args:
             in_feats: Input features (nodes).
             dims: NN architecture for Gated MLP.
@@ -101,7 +103,8 @@ class WeightedAtomReadOut(nn.Module):
         self.weight = nn.Sequential(nn.Linear(in_feats, 1), nn.Sigmoid())
 
     def forward(self, graph: Data) -> torch.Tensor:
-        """
+        """Run the weighted atom readout.
+
         Args:
             graph: PyG graph Data object.
 

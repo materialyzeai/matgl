@@ -83,7 +83,8 @@ class M3GNet(MatGLModel):
         dropout: float | None = None,
         **kwargs,
     ):
-        """
+        """Initialize the M3GNet model.
+
         Args:
             element_types (tuple): List of elements appearing in the dataset. Default to DEFAULT_ELEMENTS.
             dim_node_embedding (int): Number of embedded atomic features

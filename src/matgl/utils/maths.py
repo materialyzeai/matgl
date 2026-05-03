@@ -23,17 +23,20 @@ SPHERICAL_BESSEL_ROOTS = torch.tensor(np.load(os.path.join(CWD, "sb_roots.npy"))
 
 @lru_cache(maxsize=128)
 def spherical_bessel_roots(max_l: int, max_n: int):
-    """Calculate the spherical Bessel roots. The n-th root of the l-th
-    spherical bessel function is the `[l, n]` entry of the return matrix.
-    The calculation is based on the fact that the n-root for l-th
-    spherical Bessel function `j_l`, i.e., `z_{j, n}` is in the range
+    """Calculate the spherical Bessel roots.
+
+    The n-th root of the l-th spherical Bessel function is the `[l, n]` entry of the
+    return matrix. The calculation is based on the fact that the n-root for l-th
+    spherical Bessel function `j_l`, i.e., `z_{j, n}`, is in the range
     `[z_{j-1,n}, z_{j-1, n+1}]`. On the other hand we know precisely the
     roots for j0, i.e., sinc(x).
 
     Args:
         max_l: max order of spherical bessel function
         max_n: max number of roots
-    Returns: root matrix of size [max_l, max_n]
+
+    Returns:
+        root matrix of size [max_l, max_n]
     """
     temp_zeros = np.arange(1, max_l + max_n + 1) * pi  # j0
     roots = [temp_zeros[:max_n]]
@@ -94,8 +97,9 @@ def _get_lambda_func(max_n, cutoff: float = 5.0):
 
 
 def get_segment_indices_from_n(ns):
-    """Get segment indices from number array. For example if
-    ns = [2, 3], then the function will return [0, 0, 1, 1, 1].
+    """Get segment indices from a number array.
+
+    For example, if ``ns = [2, 3]``, the function returns ``[0, 0, 1, 1, 1]``.
 
     Args:
         ns: torch.Tensor, the number of atoms/bonds array
@@ -109,12 +113,13 @@ def get_segment_indices_from_n(ns):
 
 
 def get_range_indices_from_n(ns: torch.Tensor):
-    """Give ns = [2, 3], return [0, 1, 0, 1, 2].
+    """Give ``ns = [2, 3]``, return ``[0, 1, 0, 1, 2]``.
 
     Args:
         ns: torch.Tensor, the number of atoms/bonds array
 
-    Returns: range indices
+    Returns:
+        range indices
     """
     max_n = int(torch.max(ns))
     n = ns.size(dim=0)
@@ -135,42 +140,47 @@ def repeat_with_n(ns, n):
         ns (torch.tensor): tensor
         n (torch.tensor): a list of replications
 
-    Returns: repeated tensor
-
+    Returns:
+        repeated tensor
     """
     return torch.repeat_interleave(ns, n, dim=0)
 
 
 def broadcast_states_to_bonds(g, state_feat):
-    """Broadcast state attributes of shape [Ns, Nstate] to
-    bond attributes shape [Nb, Nstate].
+    """Broadcast state attributes to bond attributes.
+
+    Maps shape ``[Ns, Nstate]`` to ``[Nb, Nstate]``.
 
     Args:
         g: DGL graph
         state_feat: state_feature
 
-    Returns: broadcasted state attributes
+    Returns:
+        broadcasted state attributes
     """
     return state_feat.repeat((g.num_edges(), 1))
 
 
 def broadcast_states_to_atoms(g, state_feat):
-    """Broadcast state attributes of shape [Ns, Nstate] to
-    bond attributes shape [Nb, Nstate].
+    """Broadcast state attributes to atom (node) attributes.
+
+    Maps shape ``[Ns, Nstate]`` to ``[Nn, Nstate]``.
 
     Args:
         g: DGL graph
         state_feat: state_feature
 
-    Returns: broadcasted state attributes
-
+    Returns:
+        broadcasted state attributes
     """
     return state_feat.repeat((g.num_nodes(), 1))
 
 
 def scatter_sum(input_tensor: torch.Tensor, segment_ids: torch.Tensor, num_segments: int, dim: int) -> torch.Tensor:
-    """Scatter sum operation along the specified dimension. Modified from the
-    torch_scatter library (https://github.com/rusty1s/pytorch_scatter).
+    """Scatter sum operation along the specified dimension.
+
+    Modified from the torch_scatter library
+    (https://github.com/rusty1s/pytorch_scatter).
 
     Args:
         input_tensor (torch.Tensor): The input tensor to be scattered.
@@ -194,9 +204,11 @@ def scatter_sum(input_tensor: torch.Tensor, segment_ids: torch.Tensor, num_segme
 
 
 def scatter_add(x: torch.Tensor, idx_i: torch.Tensor, dim_size: int, dim: int = 0) -> torch.Tensor:
-    """
-    Sum over values with the same indices. This implementation is token from Schnetpack2.0
-    (https://github.com/atomistic-machine-learning/schnetpack in schnetpack/src/schnetpack/nn/scatter.py).
+    """Sum over values with the same indices.
+
+    Implementation taken from Schnetpack2.0
+    (https://github.com/atomistic-machine-learning/schnetpack in
+    schnetpack/src/schnetpack/nn/scatter.py).
 
     Args:
         x: input values
@@ -206,22 +218,23 @@ def scatter_add(x: torch.Tensor, idx_i: torch.Tensor, dim_size: int, dim: int = 
 
     Returns:
         resulting output from _scatter_add
-
     """
     return _scatter_add(x, idx_i, dim_size, dim)
 
 
 @torch.jit.script
 def _scatter_add(x: torch.Tensor, idx_i: torch.Tensor, dim_size: int, dim: int = 0) -> torch.Tensor:
-    """
-    This implementation is token from Schnetpack2.0
-    (https://github.com/atomistic-machine-learning/schnetpack in schnetpack/src/schnetpack/nn/scatter.py).
+    """Sum over values with the same indices (jit-compiled implementation).
+
+    Implementation taken from Schnetpack2.0
+    (https://github.com/atomistic-machine-learning/schnetpack in
+    schnetpack/src/schnetpack/nn/scatter.py).
 
     Args:
         x: input values
         idx_i: index of central atom i
         dim_size: size of the dimension after reduction
-        dim:  the dimension to redice
+        dim: the dimension to reduce
 
     Returns:
         y: resulting tensors
@@ -234,11 +247,13 @@ def _scatter_add(x: torch.Tensor, idx_i: torch.Tensor, dim_size: int, dim: int =
 
 
 def unsorted_segment_fraction(data: torch.Tensor, segment_ids: torch.Tensor, num_segments: int):
-    """Segment fraction
+    """Compute the segment fraction of each element.
+
     Args:
         data (torch.tensor): original data
         segment_ids (torch.tensor): segment ids
         num_segments (int): number of segments
+
     Returns:
         data (torch.tensor): data after fraction.
     """
@@ -249,7 +264,9 @@ def unsorted_segment_fraction(data: torch.Tensor, segment_ids: torch.Tensor, num
 
 def broadcast(input_tensor: torch.Tensor, target_tensor: torch.Tensor, dim: int):
     """Broadcast input tensor along a given dimension to match the shape of the target tensor.
-    Modified from torch_scatter library (https://github.com/rusty1s/pytorch_scatter).
+
+    Modified from the torch_scatter library
+    (https://github.com/rusty1s/pytorch_scatter).
 
     Args:
         input_tensor: The tensor to broadcast.
@@ -270,8 +287,11 @@ def broadcast(input_tensor: torch.Tensor, target_tensor: torch.Tensor, dim: int)
 
 
 def binom(n: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
-    """Compute binomial coefficients (n k). Token from Schnetpack2.0
-    (https://github.com/atomistic-machine-learning/schnetpack in schnetpack/src/schnetpack/nn/ops/math.py.
+    """Compute binomial coefficients ``(n k)``.
+
+    Taken from Schnetpack2.0
+    (https://github.com/atomistic-machine-learning/schnetpack in
+    schnetpack/src/schnetpack/nn/ops/math.py).
     """
     return torch.exp(torch.lgamma(n + 1) - torch.lgamma((n - k) + 1) - torch.lgamma(k + 1))
 

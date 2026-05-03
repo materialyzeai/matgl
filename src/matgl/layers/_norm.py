@@ -19,8 +19,7 @@ class GraphNorm(nn.Module):
     """
 
     def __init__(self, input_dim: int, eps: float = 1e-5, batched_field: Literal["node", "edge"] = "node"):
-        """
-        Init GraphNorm layer.
+        """Init GraphNorm layer.
 
         Args:
             input_dim: dimension of input features

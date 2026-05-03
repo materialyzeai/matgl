@@ -24,7 +24,8 @@ class TensorNetInteraction(nn.Module):
         equivariance_invariance_group: str,
         dtype: torch.dtype = torch.float32,
     ):
-        """
+        """Initialize the TensorNetInteraction.
+
         Args:
             num_rbf: Number of radial basis functions.
             units: Number of hidden neurons.
@@ -66,28 +67,21 @@ class TensorNetInteraction(nn.Module):
     def forward(
         self, edge_index: torch.Tensor, edge_weight: torch.Tensor, edge_attr: torch.Tensor, X: torch.Tensor
     ) -> torch.Tensor:
-        """
+        """Run the TensorNet interaction.
+
         Args:
-        edge_index (torch.Tensor):
-            Graph connectivity in COO format specifying source and target nodes.
-            Shape: (2, num_edges).
-
-        edge_weight (torch.Tensor):
-            Edge distance between source and target nodes.
-            Shape: (num_edges,) or (num_edges, 1).
-
-        edge_attr (torch.Tensor):
-            Edge-wise attributes encoding geometric or chemical information.
-            Shape: (num_edges, num_edge_features).
-
-        X (torch.Tensor):
-            Node feature representations.
-            Shape: (num_nodes, hidden_channels).
+            edge_index (torch.Tensor): Graph connectivity in COO format specifying source and target nodes.
+                Shape: (2, num_edges).
+            edge_weight (torch.Tensor): Edge distance between source and target nodes.
+                Shape: (num_edges,) or (num_edges, 1).
+            edge_attr (torch.Tensor): Edge-wise attributes encoding geometric or chemical information.
+                Shape: (num_edges, num_edge_features).
+            X (torch.Tensor): Node feature representations.
+                Shape: (num_nodes, hidden_channels).
 
         Returns:
-        X (torch.Tensor):
-            Updated node feature representations after message passing.
-            Shape: (num_nodes, hidden_channels).
+            X (torch.Tensor): Updated node feature representations after message passing.
+                Shape: (num_nodes, hidden_channels).
         """
         # Process edge attributes
         C = cosine_cutoff(edge_weight, self.cutoff)

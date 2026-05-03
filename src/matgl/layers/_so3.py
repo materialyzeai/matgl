@@ -1,4 +1,6 @@
-"""Main components in SO3Net, the implementations are token from Schnetpack2.0
+"""Main components in SO3Net.
+
+The implementations are taken from Schnetpack2.0
 (https://github.com/atomistic-machine-learning/schnetpack in schnetpack/src/schnetpack/nn/so3.py).
 """
 
@@ -24,8 +26,7 @@ __all__ = [
 
 
 class RealSphericalHarmonics(nn.Module):
-    """
-    Generates the real spherical harmonics for a batch of vectors.
+    """Generates the real spherical harmonics for a batch of vectors.
 
     Note:
         The vectors passed to this layer are assumed to be normalized to unit length.
@@ -42,7 +43,8 @@ class RealSphericalHarmonics(nn.Module):
     """
 
     def __init__(self, lmax: int):
-        """
+        """Initialize the RealSphericalHarmonics.
+
         Args:
             lmax: maximum angular momentum.
         """
@@ -72,17 +74,17 @@ class RealSphericalHarmonics(nn.Module):
         self.register_buffer("flidx", self.lidx.to(dtype=dtype), False)
 
     def _generate_Ylm_coefficients(self, lmax: int):
-        """
+        """Generate the spherical-harmonics coefficient tensors.
 
         Args:
             lmax (int): maximum angular momentum.
 
         Returns:
-        powers (torch.Tensor): Tensor containing powers for the spherical harmonics.
-        zpow (torch.Tensor): Tensor containing powers for Legendre polynomials.
-        CAm (torch.Tensor): Coefficients for cosine terms in spherical harmonics.
-        CBm (torch.Tensor): Coefficients for sine terms in spherical harmonics.
-        CPi (torch.Tensor): Coefficients for Legendre polynomials.
+            powers (torch.Tensor): Tensor containing powers for the spherical harmonics.
+            zpow (torch.Tensor): Tensor containing powers for Legendre polynomials.
+            CAm (torch.Tensor): Coefficients for cosine terms in spherical harmonics.
+            CBm (torch.Tensor): Coefficients for sine terms in spherical harmonics.
+            CPi (torch.Tensor): Coefficients for Legendre polynomials.
         """
         # see: https://en.wikipedia.org/wiki/Spherical_harmonics#Real_forms
 
@@ -118,7 +120,8 @@ class RealSphericalHarmonics(nn.Module):
         return powers, zpow, cAm, cBm, cPi
 
     def forward(self, directions: torch.Tensor) -> torch.Tensor:
-        """
+        """Compute real spherical harmonics for a batch of unit vectors.
+
         Args:
             directions: batch of unit-length 3D vectors (Nx3).
 
@@ -178,8 +181,7 @@ class RealSphericalHarmonics(nn.Module):
 
 
 def scalar2rsh(x: torch.Tensor, lmax: int) -> torch.Tensor:
-    """
-    Expand scalar tensor to spherical harmonics shape with angular momentum up to `lmax`.
+    """Expand scalar tensor to spherical harmonics shape with angular momentum up to `lmax`.
 
     Args:
         x: tensor of shape [N, *].
@@ -203,8 +205,7 @@ def scalar2rsh(x: torch.Tensor, lmax: int) -> torch.Tensor:
 
 
 class SO3TensorProduct(nn.Module):
-    r"""
-    SO3-equivariant Clebsch-Gordon tensor product.
+    r"""SO3-equivariant Clebsch-Gordon tensor product.
 
     With combined indexing s=(l,m), this can be written as:
 
@@ -215,7 +216,7 @@ class SO3TensorProduct(nn.Module):
     """
 
     def __init__(self, lmax: int):
-        """
+        """Initialize the SO3TensorProduct.
 
         Args:
             lmax: maximum angular momentum in spherical harmonics.
@@ -235,14 +236,14 @@ class SO3TensorProduct(nn.Module):
         x1: torch.Tensor,
         x2: torch.Tensor,
     ) -> torch.Tensor:
-        """
+        """Compute the SO3 tensor product.
+
         Args:
             x1: atom-wise SO3 features, shape: [n_atoms, (l_max+1)^2, n_features].
             x2: atom-wise SO3 features, shape: [n_atoms, (l_max+1)^2, n_features].
 
         Returns:
             y: product of SO3 features.
-
         """
         idx_in_1 = torch.as_tensor(self.idx_in_1)  # type: ignore[assignment]
         idx_in_2 = torch.as_tensor(self.idx_in_2)  # type: ignore[assignment]
@@ -257,8 +258,7 @@ class SO3TensorProduct(nn.Module):
 
 
 class SO3Convolution(nn.Module):
-    r"""
-    SO3-equivariant convolution using Clebsch-Gordon tensor product.
+    r"""SO3-equivariant convolution using Clebsch-Gordon tensor product.
 
     With combined indexing s=(l,m), this can be written as:
 
@@ -269,7 +269,7 @@ class SO3Convolution(nn.Module):
     """
 
     def __init__(self, lmax: int, n_atom_basis: int, n_radial: int):
-        """
+        """Initialize the SO3Convolution.
 
         Args:
             lmax: maximum angular momentum.
@@ -300,8 +300,7 @@ class SO3Convolution(nn.Module):
         self.register_buffer("Widx", lidx[idx_in_1])
 
     def _compute_radial_filter(self, radial_ij: torch.Tensor, cutoff_ij: torch.Tensor) -> torch.Tensor:
-        """
-        Compute radial (rotationally-invariant) filter.
+        """Compute radial (rotationally-invariant) filter.
 
         Args:
             radial_ij: radial basis functions with shape [n_neighbors, n_radial_basis]
@@ -325,7 +324,8 @@ class SO3Convolution(nn.Module):
         idx_i: torch.Tensor,
         idx_j: torch.Tensor,
     ) -> torch.Tensor:
-        """
+        """Compute the SO3 convolution.
+
         Args:
             x: atom-wise SO3 features, shape: [n_atoms, (l_max+1)^2, n_atom_basis].
             radial_ij: radial basis functions with shape [n_neighbors, n_radial_basis].
@@ -337,7 +337,6 @@ class SO3Convolution(nn.Module):
 
         Returns:
             y: convolved SO3 features.
-
         """
         idx_in_1 = torch.as_tensor(self.idx_in_1)  # type: ignore[assignment]
         idx_in_2 = torch.as_tensor(self.idx_in_2)  # type: ignore[assignment]
@@ -353,8 +352,7 @@ class SO3Convolution(nn.Module):
 
 
 class SO3ParametricGatedNonlinearity(nn.Module):
-    r"""
-    SO3-equivariant parametric gated nonlinearity.
+    r"""SO3-equivariant parametric gated nonlinearity.
 
     With combined indexing s=(l,m), this can be written as:
 
@@ -365,7 +363,7 @@ class SO3ParametricGatedNonlinearity(nn.Module):
     """
 
     def __init__(self, n_in: int, lmax: int):
-        """
+        """Initialize the SO3ParametricGatedNonlinearity.
 
         Args:
             n_in: number of input channels.
@@ -386,8 +384,7 @@ class SO3ParametricGatedNonlinearity(nn.Module):
 
 
 class SO3GatedNonlinearity(nn.Module):
-    r"""
-    SO3-equivariant gated nonlinearity.
+    r"""SO3-equivariant gated nonlinearity.
 
     With combined indexing s=(l,m), this can be written as:
 

@@ -19,8 +19,7 @@ class ThreeBodyInteractions(nn.Module):
     """Include 3D interactions to the bond update."""
 
     def __init__(self, update_network_atom: nn.Module, update_network_bond: nn.Module, **kwargs):
-        """
-        Initialize ThreeBodyInteractions.
+        """Initialize ThreeBodyInteractions.
 
         Args:
             update_network_atom: MLP for node features in Eq.2
@@ -40,8 +39,7 @@ class ThreeBodyInteractions(nn.Module):
         node_feat: torch.Tensor,
         edge_feat: torch.Tensor,
     ):
-        """
-        Forward function for ThreeBodyInteractions.
+        """Forward function for ThreeBodyInteractions.
 
         Args:
             graph: dgl graph

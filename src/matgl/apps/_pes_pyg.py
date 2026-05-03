@@ -94,7 +94,9 @@ class Potential(nn.Module, IOMixIn):
         state_attr: torch.Tensor | np.ndarray | None = None,
         l_g: Data | None = None,
     ) -> tuple[torch.Tensor, ...]:
-        """Args:
+        """Compute energies, forces, stresses, and (optionally) the Hessian.
+
+        Args:
             g: PyG graph
             lat: lattice
             state_attr: State attrs

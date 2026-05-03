@@ -1,5 +1,8 @@
-"""Math modules for SO3Net, the implementations are token from Schnetpack2.0
-(https://github.com/atomistic-machine-learning/schnetpack in schnetpack/src/schnetpack/nn/ops/so3.py.
+"""Math modules for SO3Net.
+
+The implementations are taken from Schnetpack2.0
+(https://github.com/atomistic-machine-learning/schnetpack in
+schnetpack/src/schnetpack/nn/ops/so3.py).
 """
 
 from __future__ import annotations
@@ -15,8 +18,7 @@ import matgl
 
 @lru_cache(maxsize=10)
 def sh_indices(lmax: int) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Build index arrays for spherical harmonics.
+    """Build index arrays for spherical harmonics.
 
     Args:
         lmax: maximum angular momentum.
@@ -30,8 +32,7 @@ def sh_indices(lmax: int) -> tuple[torch.Tensor, torch.Tensor]:
 
 @lru_cache(maxsize=10)
 def generate_sh_to_rsh(lmax: int) -> torch.Tensor:
-    """
-    Generate transformation matrix to convert (complex) spherical harmonics to real form.
+    """Generate transformation matrix to convert (complex) spherical harmonics to real form.
 
     Args:
         lmax: maximum angular momentum.
@@ -53,8 +54,7 @@ def generate_sh_to_rsh(lmax: int) -> torch.Tensor:
 
 @lru_cache(maxsize=10)
 def generate_clebsch_gordan(lmax: int) -> torch.Tensor:
-    """
-    Generate standard Clebsch-Gordan coefficients for complex spherical harmonics.
+    """Generate standard Clebsch-Gordan coefficients for complex spherical harmonics.
 
     Args:
         lmax: maximum angular momentum.
@@ -79,8 +79,7 @@ def generate_clebsch_gordan(lmax: int) -> torch.Tensor:
 
 @lru_cache(maxsize=10)
 def generate_clebsch_gordan_rsh(lmax: int, parity_invariance: bool = True) -> torch.Tensor:
-    """
-    Generate Clebsch-Gordan coefficients for real spherical harmonics.
+    """Generate Clebsch-Gordan coefficients for real spherical harmonics.
 
     Args:
         lmax: maximum angular momentum
@@ -115,8 +114,7 @@ def generate_clebsch_gordan_rsh(lmax: int, parity_invariance: bool = True) -> to
 def sparsify_clebsch_gordon(
     cg: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Convert Clebsch-Gordon tensor to sparse format.
+    """Convert Clebsch-Gordon tensor to sparse format.
 
     Args:
         cg: dense tensor Clebsch-Gordon coefficients
@@ -140,7 +138,7 @@ def sparsify_clebsch_gordon(
 
 
 def round_cmp(x: torch.Tensor, decimals: int = 1):
-    """
+    """Round real and imaginary parts of a complex tensor.
 
     Args:
         x (Tensor): Input tensor.

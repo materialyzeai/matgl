@@ -51,13 +51,14 @@ class IOMixIn:
     """
 
     def save_args(self, locals: dict, kwargs: dict | None = None) -> None:
-        """
-        This method saves the arguments passed to the class initializer. It collects the arguments
-        from the `__init__` method of the class, excluding `self` and `__class__`. If an additional
-        `kwargs` dictionary is provided, it is merged into the collected arguments. If any of the
-        collected arguments are instances of a subclass of `IOMixIn`, those arguments are serialized
-        into a dictionary representation that includes class metadata and initialization arguments.
-        Finally, the arguments are stored as an instance variable `_init_args`.
+        """Save the arguments passed to the class initializer.
+
+        Collects the arguments from the `__init__` method of the class, excluding `self` and
+        `__class__`. If an additional `kwargs` dictionary is provided, it is merged into the
+        collected arguments. If any of the collected arguments are instances of a subclass of
+        `IOMixIn`, those arguments are serialized into a dictionary representation that includes
+        class metadata and initialization arguments. Finally, the arguments are stored as an
+        instance variable `_init_args`.
 
         Args:
             locals (dict): A dictionary containing the local variables passed to the class
@@ -85,8 +86,7 @@ class IOMixIn:
         self._init_args = d
 
     def save(self, path: str | Path = ".", metadata: dict | None = None, makedirs: bool = True):
-        """
-        Saves the state and configuration of the model to the specified path.
+        """Saves the state and configuration of the model to the specified path.
 
         This method saves the model's initialization arguments, model weights,
         and additional metadata into the specified directory. It also creates

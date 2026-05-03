@@ -40,9 +40,10 @@ logger = logging.getLogger(__file__)
 
 
 class SO3Net(MatGLModel):
-    """
-    A simple SO3-equivariant representation using spherical harmonics and
-    Clebsch-Gordon tensor products. The official implementation can be found in https://github.com/atomistic-machine-learning/schnetpack.
+    """A simple SO3-equivariant representation using spherical harmonics and Clebsch-Gordon tensor products.
+
+    The official implementation can be found in
+    https://github.com/atomistic-machine-learning/schnetpack.
 
     __version__ = 1
     """
@@ -76,7 +77,8 @@ class SO3Net(MatGLModel):
         return_vector_representation: bool = False,
         **kwargs,
     ):
-        """
+        """Initialize the SO3Net model.
+
         Args:
             element_types (tuple): List of elements appearing in the dataset. Default to DEFAULT_ELEMENTS.
             dim_node_embedding (int): Number of embedded atomic features.
@@ -105,7 +107,6 @@ class SO3Net(MatGLModel):
             ntargets (int): Number of target properties.
             return_vector_representation (bool): Whether to return the output node vectors.
             **kwargs: For future flexibility. Not used at the moment.
-
         """
         super().__init__()
 

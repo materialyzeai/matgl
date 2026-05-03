@@ -74,7 +74,7 @@ class QET(TensorNet):
         use_warp: bool | None = None,
         **kwargs,
     ):
-        r"""
+        r"""Initialize the QET (PyG) model.
 
         Args:
             element_types (tuple): List of elements appearing in the dataset. Default to DEFAULT_ELEMENTS.
@@ -98,7 +98,7 @@ class QET(TensorNet):
             equivariance_invariance_group (string, optional): Group under whose action on input
                 positions internal tensor features will be equivariant and scalar predictions
                 will be invariant. O(3) or SO(3).
-               (default :obj:`"O(3)"`)
+                (default :obj:`"O(3)"`)
             dtype (torch.dtype): data type for all variables
             width (float): the width of Gaussian radial basis functions
             ntargets (int): Number of target properties
@@ -109,7 +109,6 @@ class QET(TensorNet):
             use_warp (bool | None): Whether to use warp-accelerated kernels from ``nvalchemi-toolkit-ops``.
                 Same semantics as :class:`TensorNet`.
             **kwargs: For future flexibility. Not used at the moment.
-
         """
         # QET ignores intensive / readout-shape kwargs — it is always extensive
         # and always applies a WeightedReadOut over the wider concatenated
@@ -184,7 +183,7 @@ class QET(TensorNet):
         ext_pot: torch.Tensor | None = None,
         **kwargs,
     ):
-        """
+        """Forward pass for QET (PyG).
 
         Args:
             g: PyG ``Data`` / ``Batch``-like object with ``node_type`` (or ``z``),

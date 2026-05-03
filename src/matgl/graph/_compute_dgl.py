@@ -85,8 +85,7 @@ def create_line_graph(
     error_handling: bool = False,
     numerical_noise: float = 1e-6,
 ) -> dgl.DGLGraph:
-    """
-    Calculate the three body indices from pair atom indices.
+    """Calculate the three body indices from pair atom indices.
 
     Args:
         g: DGL graph

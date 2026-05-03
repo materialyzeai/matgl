@@ -32,8 +32,7 @@ int_th = torch.int32
 
 
 def set_default_dtype(type_: str = "float", size: int = 32) -> None:
-    """
-    Set the default dtype size (16, 32 or 64) for int or float used throughout matgl.
+    """Set the default dtype size (16, 32 or 64) for int or float used throughout matgl.
 
     Args:
         type_: "float" or "int"
@@ -53,8 +52,7 @@ def set_default_dtype(type_: str = "float", size: int = 32) -> None:
 
 
 def set_backend(backend: Literal["DGL", "PYG"] = "PYG") -> None:
-    """
-    Sets the computational backend for the application.
+    """Sets the computational backend for the application.
 
     This function allows you to set the backend used for computations, which could
     be either "DGL" (Deep Graph Library) or "PYG" (PyTorch Geometric). The selected
@@ -77,3 +75,12 @@ def set_backend(backend: Literal["DGL", "PYG"] = "PYG") -> None:
         raise ValueError("Invalid backend")
     ensure_backend(backend)
     matgl.config.BACKEND = backend
+
+
+def get_best_device() -> Literal["cpu", "cuda", "mps"]:
+    """Get the best device for the current system."""
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"

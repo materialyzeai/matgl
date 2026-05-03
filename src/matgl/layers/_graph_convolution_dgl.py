@@ -30,7 +30,8 @@ class MEGNetGraphConv(Module):
         node_func: Module,
         state_func: Module,
     ) -> None:
-        """
+        """Initialize the MEGNetGraphConv.
+
         Args:
             edge_func: Edge update function.
             node_func: Node update function.
@@ -159,8 +160,7 @@ class MEGNetBlock(Module):
     def __init__(
         self, dims: list[int], conv_hiddens: list[int], act: Module, dropout: float | None = None, skip: bool = True
     ) -> None:
-        """
-        Init the MEGNet block with key parameters.
+        """Init the MEGNet block with key parameters.
 
         Args:
             dims: Dimension of dense layers before graph convolution.
@@ -252,13 +252,15 @@ class M3GNetGraphConv(Module):
         node_weight_func: Module,
         state_update_func: Module | None,
     ):
-        """Parameters:
-        include_state (bool): Whether including state
-        edge_update_func (Module): Update function for edges (Eq. 4)
-        edge_weight_func (Module): Weight function for radial basis functions (Eq. 4)
-        node_update_func (Module): Update function for nodes (Eq. 5)
-        node_weight_func (Module): Weight function for radial basis functions (Eq. 5)
-        state_update_func (Module): Update function for state feats (Eq. 6).
+        """Initialize the M3GNetGraphConv.
+
+        Args:
+            include_state (bool): Whether including state
+            edge_update_func (Module): Update function for edges (Eq. 4)
+            edge_weight_func (Module): Weight function for radial basis functions (Eq. 4)
+            node_update_func (Module): Update function for nodes (Eq. 5)
+            node_weight_func (Module): Weight function for radial basis functions (Eq. 5)
+            state_update_func (Module): Update function for state feats (Eq. 6).
         """
         super().__init__()
         self.include_state = include_state
@@ -304,10 +306,10 @@ class M3GNetGraphConv(Module):
         """Edge update functions.
 
         Args:
-        edges (DGL g): edges in dgl g
+            edges (DGL g): edges in dgl g
 
         Returns:
-        mij: message passing between node i and j
+            mij: message passing between node i and j
         """
         vi = edges.src["v"]
         vj = edges.dst["v"]
@@ -382,8 +384,7 @@ class M3GNetGraphConv(Module):
         node_feat: Tensor,
         state_feat: Tensor,
     ) -> tuple[Tensor, Tensor, Tensor]:
-        """
-        Perform sequence of edge->node->states updates.
+        """Perform sequence of edge->node->states updates.
 
         Args:
             graph: Input g
@@ -424,7 +425,7 @@ class M3GNetBlock(Module):
         include_state: bool = False,
         dropout: float | None = None,
     ) -> None:
-        """
+        """Initialize the M3GNet block.
 
         Args:
             degree: Number of radial basis functions
@@ -433,7 +434,6 @@ class M3GNetBlock(Module):
             dim_edge_feats: Number of edge features
             dim_state_feats: Number of state features
             conv_hiddens: Dimension of hidden layers
-            activation: Activation type
             include_state: Including state features or not
             dropout: Probability of an element to be zero in dropout layer.
         """
@@ -475,7 +475,8 @@ class M3GNetBlock(Module):
         node_feat: Tensor,
         state_feat: Tensor,
     ) -> tuple:
-        """
+        """Run the M3GNet block.
+
         Args:
             graph: DGL g
             edge_feat: Edge features
@@ -497,7 +498,10 @@ class M3GNetBlock(Module):
 
 
 class TensorNetInteraction(nn.Module):
-    """A Graph Convolution block for TensorNet. The official implementation can be found in https://github.com/torchmd/torchmd-net."""
+    """A Graph Convolution block for TensorNet.
+
+    The official implementation can be found in https://github.com/torchmd/torchmd-net.
+    """
 
     def __init__(
         self,
@@ -508,7 +512,7 @@ class TensorNetInteraction(nn.Module):
         equivariance_invariance_group: str,
         dtype: torch.dtype = matgl.float_th,
     ):
-        """
+        """Initialize the TensorNetInteraction.
 
         Args:
             num_rbf: Number of radial basis functions.
@@ -543,10 +547,10 @@ class TensorNetInteraction(nn.Module):
         """Edge update functions.
 
         Args:
-        edges (DGL g): edges in dgl g
+            edges (DGL g): edges in dgl g
 
         Returns:
-        mij: message passing between node i and j
+            mij: message passing between node i and j
         """
         I_j = edges.dst["I"]
         A_j = edges.dst["A"]
@@ -585,7 +589,7 @@ class TensorNetInteraction(nn.Module):
         return scalars, skew_matrices, traceless_tensors
 
     def forward(self, g: dgl.DGLGraph, X: Tensor):
-        """
+        """Run the TensorNet interaction.
 
         Args:
             g: dgl g.
@@ -648,7 +652,8 @@ class CHGNetGraphConv(nn.Module):
         edge_weight_func: Module | None,
         state_update_func: Module | None,
     ):
-        """
+        """Initialize the CHGNetGraphConv.
+
         Args:
             node_update_func: Update function for message between nodes (atoms)
             node_out_func: Output function for nodes (atoms), after message aggregation
@@ -902,9 +907,10 @@ class CHGNetGraphConv(nn.Module):
 
 
 class CHGNetAtomGraphBlock(nn.Module):
-    """
-    A CHGNet atom graph block as a sequence of operations
-    involving a message passing layer over the atom graph.
+    """A CHGNet atom graph block.
+
+    Implements a sequence of operations involving a message passing layer over the
+    atom graph.
     """
 
     def __init__(
@@ -1028,7 +1034,8 @@ class CHGNetLineGraphConv(nn.Module):
         edge_update_func: Module | None,
         node_weight_func: Module | None,
     ):
-        """
+        """Initialize the CHGNetLineGraphConv.
+
         Args:
             node_update_func: Update function for message between nodes (bonds)
             node_out_func: Output function for nodes (bonds), after message aggregation
@@ -1052,7 +1059,8 @@ class CHGNetLineGraphConv(nn.Module):
         normalize_hidden: bool = False,
         node_weight_input_dims: int = 0,
     ) -> CHGNetLineGraphConv:
-        """
+        """Build a CHGNetLineGraphConv from layer dimensions.
+
         Args:
             node_dims: NN architecture for node update function given as a list of
                 dimensions of each layer.

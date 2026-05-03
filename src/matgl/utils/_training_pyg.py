@@ -112,8 +112,7 @@ class MatglLightningModuleMixin:
         ]
 
     def on_test_model_eval(self, *args: Any, **kwargs: Any) -> None:
-        """
-        Executed on model testing.
+        """Executed on model testing.
 
         Args:
             *args: Pass-through
@@ -122,8 +121,7 @@ class MatglLightningModuleMixin:
         super().on_test_model_eval(*args, **kwargs)  # type: ignore[misc]
 
     def predict_step(self, batch: tuple, batch_idx: int, dataloader_idx: int = 0) -> Any:
-        """
-        Prediction step.
+        """Prediction step.
 
         Args:
             batch: Data batch.
@@ -156,8 +154,7 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         sync_dist: bool = False,
         **kwargs,
     ):
-        """
-        Init ModelLightningModule with key parameters.
+        """Init ModelLightningModule with key parameters.
 
         Args:
             model: Which type of the model for training
@@ -242,7 +239,9 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         return self.model(g, state_attr=state_attr)
 
     def step(self, batch: tuple) -> tuple[dict[str, Any], int]:
-        """Args:
+        """Run a single training/validation step.
+
+        Args:
             batch: Batch of training data.
 
         Returns:
@@ -259,7 +258,9 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         return results, batch_size
 
     def loss_fn(self, loss: nn.Module, labels: torch.Tensor, preds: torch.Tensor) -> dict[str, Any]:
-        """Args:
+        """Compute training loss and metrics.
+
+        Args:
             loss: Loss function.
             labels: Labels to compute the loss.
             preds: Predictions.
@@ -304,8 +305,7 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         magmom_target: Literal["absolute", "symbreak"] | None = "absolute",
         **kwargs,
     ):
-        """
-        Init PotentialLightningModule with key parameters.
+        """Init PotentialLightningModule with key parameters.
 
         Args:
             model: Which type of the model for training
@@ -377,8 +377,9 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         self.save_hyperparameters(ignore=["model"])
 
     def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
-        """# noqa: D200
-        hacky hacky hack to add missing keys to the state dict when changes are made.
+        """Add missing keys to the checkpoint state dict.
+
+        Hacky workaround for state-dict drift when model fields are added.
         """
         for key in self.state_dict():
             if key not in checkpoint["state_dict"]:
@@ -391,7 +392,9 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         l_g: Data | None = None,
         state_attr: torch.Tensor | None = None,
     ) -> tuple:
-        """Args:
+        """Run the wrapped potential model.
+
+        Args:
             g: dgl Graph
             lat: lattice
             l_g: Line graph
@@ -414,7 +417,9 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             return e, f, s, h
 
     def step(self, batch: tuple) -> tuple[dict[str, Any], int]:
-        """Args:
+        """Run a single training/validation step.
+
+        Args:
             batch: Batch of training data.
 
         Returns:

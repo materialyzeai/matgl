@@ -78,7 +78,7 @@ class QET(TensorNet):
         return_features: bool = False,
         **kwargs,
     ):
-        r"""
+        r"""Initialize the QET model.
 
         Args:
             element_types (tuple): List of elements appearing in the dataset. Default to DEFAULT_ELEMENTS.
@@ -102,7 +102,7 @@ class QET(TensorNet):
             equivariance_invariance_group (string, optional): Group under whose action on input
                 positions internal tensor features will be equivariant and scalar predictions
                 will be invariant. O(3) or SO(3).
-               (default :obj:`"O(3)"`)
+                (default :obj:`"O(3)"`)
             dtype (torch.dtype): data type for all variables
             width (float): the width of Gaussian radial basis functions
             readout_type (str): Accepted for IOMixIn compatibility; QET always uses an
@@ -118,7 +118,6 @@ class QET(TensorNet):
             is_sigma_train (bool): Whether the sigma is trainable
             return_features (bool): Whether the atomic features are returned
             **kwargs: For future flexibility. Not used at the moment.
-
         """
         # Defer reset_parameters until after QET-specific heads are built so the
         # random init stream order matches the pre-subclass implementation
@@ -198,10 +197,12 @@ class QET(TensorNet):
         self.reset_parameters()
 
     def _build_readout(self, *args, **kwargs) -> None:
-        """Skip the parent's readout build; QET constructs its own ``final_layer``
-        in :meth:`__init__` over the wider concatenated feature. Suppressing the
-        parent build also keeps the random init order identical to the original
-        non-subclassed QET, so saved checkpoints / regression tests still match.
+        """Skip the parent's readout build.
+
+        QET constructs its own ``final_layer`` in :meth:`__init__` over the wider
+        concatenated feature. Suppressing the parent build also keeps the random init
+        order identical to the original non-subclassed QET, so saved checkpoints /
+        regression tests still match.
         """
         return
 
@@ -226,10 +227,10 @@ class QET(TensorNet):
         ext_pot: torch.Tensor | None = None,
         **kwargs,
     ):
-        """
+        """Forward pass for QET.
 
         Args:
-            g : DGLGraph for a batch of graphs.
+            g: DGLGraph for a batch of graphs.
             total_charge: total charge for a batch of graphs.
             state_attr: State attrs for a batch of graphs.
             ext_pot: External potential for a batch of graphs (N_batch, Natoms).

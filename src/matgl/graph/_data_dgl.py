@@ -159,7 +159,8 @@ class MGLDataset(DGLDataset):
         raw_dir: str = "./",
         save_dir: str = "./",
     ):
-        """
+        """Initialize the MGLDataset.
+
         Args:
             filename: file name for storing dgl graphs.
             filename_lattice: file name for storing lattice matrixs.
@@ -182,10 +183,10 @@ class MGLDataset(DGLDataset):
                 Setting this to True will delete the structures from memory.
             save_cache: whether to save the processed dataset. The dataset can be reloaded from save_dir
                 Default: True
-            raw_dir : str specifying the directory that will store the downloaded data or the directory that already
+            raw_dir: str specifying the directory that will store the downloaded data or the directory that already
                 stores the input data.
                 Default: current working directory
-            save_dir : directory to save the processed dataset. Default: same as raw_dir.
+            save_dir: directory to save the processed dataset. Default: same as raw_dir.
         """
         self.filename = filename
         self.filename_lattice = filename_lattice

@@ -174,8 +174,7 @@ class PESCalculator(Calculator):
         use_voigt: bool = False,
         **kwargs,
     ):
-        """
-        Init PESCalculator with a Potential from matgl.
+        """Init PESCalculator with a Potential from matgl.
 
         Args:
             potential (Potential): matgl.apps.pes.Potential
@@ -230,8 +229,7 @@ class PESCalculator(Calculator):
         properties: list | None = None,
         system_changes: list | None = None,
     ):
-        """
-        Perform calculation for an input Atoms.
+        """Perform calculation for an input Atoms.
 
         Args:
             atoms (ase.Atoms): ase Atoms object
@@ -277,8 +275,7 @@ class M3GNetCalculator(PESCalculator):
         stress_weight: float = 1.0,
         **kwargs,
     ):
-        """
-        Init M3GNetCalculator with a M3GNet Potential.
+        """Init M3GNetCalculator with a M3GNet Potential.
 
         Args:
             potential (Potential): matgl.apps.pes.Potential
@@ -301,13 +298,14 @@ class Relaxer:
         relax_cell: bool = True,
         **kwargs,
     ):
-        """
+        """Initialize the Relaxer.
+
         Args:
             potential (Potential): a M3GNet potential, a str path to a saved model or a short name for saved model
-            that comes with M3GNet distribution
+                that comes with M3GNet distribution
             state_attr (torch.Tensor): State attr.
             optimizer (str or ase Optimizer): the optimization algorithm.
-            Defaults to "FIRE"
+                Defaults to "FIRE"
             relax_cell (bool): whether to relax the lattice cell
             **kwargs: Kwargs pass through to super().__init__().
         """
@@ -341,8 +339,7 @@ class Relaxer:
         params_asecellfilter: dict | None = None,
         **kwargs,
     ):
-        """
-        Relax an input Atoms.
+        """Relax an input Atoms.
 
         Args:
             atoms (Atoms | Structure | Molecule): the atoms for relaxation
@@ -395,13 +392,13 @@ class Relaxer:
 
 
 class TrajectoryObserver(collections.abc.Sequence):
-    """Trajectory observer is a hook in the relaxation process that saves the
-    intermediate structures.
+    """Trajectory observer hook for the relaxation process.
+
+    Saves the intermediate structures.
     """
 
     def __init__(self, atoms: Atoms) -> None:
-        """
-        Init the Trajectory Observer from a Atoms.
+        """Init the Trajectory Observer from a Atoms.
 
         Args:
             atoms (Atoms): Structure to observe.
@@ -497,8 +494,7 @@ class MolecularDynamics:
         mask: tuple | np.ndarray | None = None,
         **kwargs,
     ):
-        """
-        Init the MD simulation.
+        """Init the MD simulation.
 
         Args:
             atoms (Atoms): atoms to run the MD
@@ -729,6 +725,7 @@ class MolecularDynamics:
 
     def upper_triangular_cell(self, verbose: bool | None = False) -> None:
         """Transform to upper-triangular cell.
+
         ASE Nose-Hoover implementation only supports upper-triangular cell
         while ASE's canonical description is lower-triangular cell.
 

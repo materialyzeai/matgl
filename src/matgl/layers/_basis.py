@@ -26,7 +26,8 @@ class GaussianExpansion(nn.Module):
         num_centers: int = 20,
         width: None | float = 0.5,
     ):
-        """
+        """Initialize the GaussianExpansion.
+
         Args:
             initial: Location of initial Gaussian basis center.
             final: Location of final Gaussian basis center
@@ -62,11 +63,13 @@ class SphericalBesselFunction(nn.Module):
     """Calculate the spherical Bessel function based on sympy + pytorch implementations."""
 
     def __init__(self, max_l: int, max_n: int = 5, cutoff: float = 5.0, smooth: bool = False):
-        """Args:
-        max_l: int, max order (excluding l)
-        max_n: int, max number of roots used in each l
-        cutoff: float, cutoff radius
-        smooth: Whether to smooth the function.
+        """Initialize the SphericalBesselFunction.
+
+        Args:
+            max_l: int, max order (excluding l)
+            max_n: int, max number of roots used in each l
+            cutoff: float, cutoff radius
+            smooth: Whether to smooth the function.
         """
         super().__init__()
         self.max_l = max_l
@@ -80,11 +83,10 @@ class SphericalBesselFunction(nn.Module):
 
     @lru_cache(maxsize=128)
     def _calculate_symbolic_funcs(self) -> list:
-        """Spherical basis functions based on Rayleigh formula. This function
-        generates
-        symbolic formula.
+        """Generate spherical basis functions based on Rayleigh formula.
 
-        Returns: list of symbolic functions
+        Returns:
+            list of symbolic functions
         """
         x = sympy.symbols("x")
         funcs = [sympy.expand_func(sympy.functions.special.bessel.jn(i, x)) for i in range(self.max_l + 1)]
@@ -95,7 +97,9 @@ class SphericalBesselFunction(nn.Module):
         return _get_lambda_func(max_n=self.max_n, cutoff=self.cutoff)
 
     def forward(self, r: torch.Tensor) -> torch.Tensor:
-        """Args:
+        """Compute the spherical Bessel function values.
+
+        Args:
             r: torch.Tensor, distance tensor, 1D.
 
         Returns:
@@ -129,8 +133,9 @@ class SphericalBesselFunction(nn.Module):
 
     @staticmethod
     def rbf_j0(r, cutoff: float = 5.0, max_n: int = 3):
-        """Spherical Bessel function of order 0, ensuring the function value
-        vanishes at cutoff.
+        """Spherical Bessel function of order 0.
+
+        Ensures the function value vanishes at cutoff.
 
         Args:
             r: torch.Tensor pytorch tensors
@@ -158,7 +163,8 @@ class RadialBesselFunction(nn.Module):
     """
 
     def __init__(self, max_n: int, cutoff: float, learnable: bool = False):
-        """
+        """Initialize the RadialBesselFunction.
+
         Args:
             max_n: int, max number of roots (including max_n)
             cutoff: float, cutoff radius
@@ -190,14 +196,16 @@ class FourierExpansion(nn.Module):
     """Fourier Expansion of a (periodic) scalar feature."""
 
     def __init__(self, max_f: int = 5, interval: float = pi, scale_factor: float = 1.0, learnable: bool = False):
-        """Args:
-        max_f (int): the maximum frequency of the Fourier expansion.
-            Default = 5
-        interval (float): the interval of the Fourier expansion, such that functions
-            are orthonormal over [-interval, interval]. Default = pi
-        scale_factor (float): pre-factor to scale all values.
-            learnable (bool): whether to set the frequencies as learnable parameters
-            Default = False.
+        """Initialize the FourierExpansion.
+
+        Args:
+            max_f (int): the maximum frequency of the Fourier expansion.
+                Default = 5
+            interval (float): the interval of the Fourier expansion, such that functions
+                are orthonormal over [-interval, interval]. Default = pi
+            scale_factor (float): pre-factor to scale all values.
+            learnable (bool): whether to set the frequencies as learnable parameters.
+                Default = False.
         """
         super().__init__()
         self.max_f = max_f
@@ -225,11 +233,12 @@ class SphericalHarmonicsFunction(nn.Module):
     """Spherical Harmonics function."""
 
     def __init__(self, max_l: int, use_phi: bool = True):
-        """
+        """Initialize the SphericalHarmonicsFunction.
+
         Args:
             max_l: int, max l (excluding l)
             use_phi: bool, whether to use the polar angle. If not,
-            the function will compute `Y_l^0`.
+                the function will compute `Y_l^0`.
         """
         super().__init__()
         self.max_l = max_l
@@ -249,7 +258,9 @@ class SphericalHarmonicsFunction(nn.Module):
         self.funcs[0] = _y00
 
     def __call__(self, cos_theta, phi=None):
-        """Args:
+        """Compute spherical harmonics values.
+
+        Args:
             cos_theta: Cosine of the azimuthal angle
             phi: torch.Tensor, the polar angle.
 
@@ -281,10 +292,10 @@ def _y00(theta, phi):
 
 
 def spherical_bessel_smooth(r: Tensor, cutoff: float = 5.0, max_n: int = 10) -> Tensor:
-    """This is an orthogonal basis with first
-    and second derivative at the cutoff
-    equals to zero. The function was derived from the order 0 spherical Bessel
-    function, and was expanded by the different zero roots.
+    """Orthogonal basis with first and second derivative vanishing at the cutoff.
+
+    The function was derived from the order 0 spherical Bessel function, and was
+    expanded by the different zero roots.
 
     Ref:
         https://arxiv.org/pdf/1907.02374.pdf
@@ -294,8 +305,8 @@ def spherical_bessel_smooth(r: Tensor, cutoff: float = 5.0, max_n: int = 10) -> 
         cutoff: float, cutoff radius
         max_n: int, max number of basis, expanded by the zero roots
 
-    Returns: expanded spherical harmonics with derivatives smooth at boundary
-
+    Returns:
+        expanded spherical harmonics with derivatives smooth at boundary
     """
     n = torch.arange(max_n).type(dtype=matgl.float_th)[None, :]
     r = r[:, None]
@@ -331,8 +342,7 @@ class SphericalBesselWithHarmonics(nn.Module):
     """Expansion of basis using Spherical Bessel and Harmonics."""
 
     def __init__(self, max_n: int, max_l: int, cutoff: float, use_smooth: bool, use_phi: bool):
-        """
-        Init SphericalBesselWithHarmonics.
+        """Init SphericalBesselWithHarmonics.
 
         Args:
             max_n: Degree of radial basis functions.
@@ -367,8 +377,7 @@ class ExpNormalFunction(nn.Module):
     """Implementation of radial basis function using exponential normal smearing."""
 
     def __init__(self, cutoff: float = 5.0, num_rbf: int = 50, learnable: bool = True):
-        """
-        Initialize ExpNormalSmearing.
+        """Initialize ExpNormalSmearing.
 
         Args:
             cutoff (float): The cutoff distance beyond which interactions are considered negligible. Default is 5.0.
@@ -399,8 +408,7 @@ class ExpNormalFunction(nn.Module):
         return means, betas
 
     def forward(self, r: torch.Tensor):
-        """
-        Compute the radial basis function for the input distances.
+        """Compute the radial basis function for the input distances.
 
         Args:
             r (torch.Tensor): Input distances.

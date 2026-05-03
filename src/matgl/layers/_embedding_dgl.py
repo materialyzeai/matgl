@@ -27,7 +27,8 @@ class EmbeddingBlock(nn.Module):
         ntypes_state: int | None = None,
         dim_state_embedding: int | None = None,
     ):
-        """
+        """Initialize the embedding block.
+
         Args:
             degree_rbf (int): number of rbf
             activation (nn.Module): activation type
@@ -102,6 +103,7 @@ class EmbeddingBlock(nn.Module):
 
 class TensorEmbedding(nn.Module):
     """Embedding block for TensorNet to generate node, edge and optional state features.
+
     The official implementation can be found in https://github.com/torchmd/torchmd-net.
     """
 
@@ -118,7 +120,8 @@ class TensorEmbedding(nn.Module):
         dim_state_feats: int | None = None,
         dim_state_embedding: int = 0,
     ):
-        """
+        """Initialize the TensorEmbedding.
+
         Args:
             units (int): number of hidden neurons
             degree_rbf (int): number of rbf
@@ -208,8 +211,11 @@ class TensorEmbedding(nn.Module):
     def edge_update_(self, graph: dgl.DGLGraph) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform edge update.
 
-        :param graph: Input graph
-        :return: Output tensor for edges.
+        Args:
+            graph: Input graph
+
+        Returns:
+            Output tensor for edges.
         """
         graph.apply_edges(self._edge_udf)
         scalars = graph.edata.pop("I")
@@ -232,7 +238,7 @@ class TensorEmbedding(nn.Module):
         return scalars, skew_matrices, traceless_tensors
 
     def forward(self, g: dgl.DGLGraph, state_attr: torch.Tensor | None = None):
-        """
+        """Compute embedded node tensors and edge/state features.
 
         Args:
             g: dgl graph.
@@ -312,15 +318,15 @@ class NeighborEmbedding(nn.Module):
         cutoff: float,
         dtype: torch.dtype = matgl.float_th,
     ):
-        """
-        The ET architecture assigns two  learned vectors to each atom type
-        zi. One  is used to  encode information  specific to an  atom, the
-        other (this  class) takes  the role  of a  neighborhood embedding.
-        The neighborhood embedding, which is  an embedding of the types of
+        """Initialize the NeighborEmbedding.
+
+        The ET architecture assigns two learned vectors to each atom type
+        zi. One is used to encode information specific to an atom, the
+        other (this class) takes the role of a neighborhood embedding.
+        The neighborhood embedding, which is an embedding of the types of
         neighboring atoms, is multiplied by a distance filter.
 
-
-        This embedding allows  the network to store  information about the
+        This embedding allows the network to store information about the
         interaction of atom pairs.
 
         See eq. 3 in https://arxiv.org/pdf/2202.02541.pdf for more details.
@@ -348,7 +354,8 @@ class NeighborEmbedding(nn.Module):
         edge_weight: torch.Tensor,
         edge_attr: torch.Tensor,
     ) -> torch.Tensor:
-        """
+        """Compute the neighbor embeddings.
+
         Args:
             z (Tensor): Atomic numbers of shape [num_nodes].
             node_feat (Tensor): graph-convoluted node features [num_nodes, hidden_channels].
