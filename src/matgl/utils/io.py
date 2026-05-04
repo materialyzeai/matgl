@@ -23,6 +23,14 @@ logger = logging.getLogger(__file__)
 # Files that comprise a serialized matgl model on disk and on Hugging Face Hub.
 _MODEL_FILES = ("model.pt", "state.pt", "model.json")
 
+# Maps stale ``@module`` strings in older saved checkpoints to their current
+# location. Used at load time so checkpoints serialized before the
+# ``_m3gnet`` / ``_megnet`` rename to ``*_dgl`` keep loading.
+_RENAMED_MODULES: dict[str, str] = {
+    "matgl.models._m3gnet": "matgl.models._m3gnet_dgl",
+    "matgl.models._megnet": "matgl.models._megnet_dgl",
+}
+
 # Loose validation pattern for a Hugging Face repo_id ("owner/name" or "owner/name/subfolder"-like).
 _HF_REPO_ID_RE = re.compile(r"^[A-Za-z0-9][\w\-.]*/[\w\-.]+$")
 
@@ -162,7 +170,8 @@ class IOMixIn:
         # Deserialize any args that are IOMixIn subclasses.
         for k, v in d.items():
             if isinstance(v, dict) and "@class" in v and "@module" in v:
-                modname = v["@module"]
+                modname_raw: str = v["@module"]
+                modname = _RENAMED_MODULES.get(modname_raw, modname_raw)
                 classname = v["@class"]
                 cls_lower = classname.lower()
 
@@ -323,7 +332,7 @@ def load_model(path: str | Path, **kwargs):
         fpaths = _get_file_paths(path, str_path=str_path, **kwargs)
         with open(fpaths["model.json"]) as f:
             d = json.load(f)
-            modname = d["@module"]
+            modname = _RENAMED_MODULES.get(d["@module"], d["@module"])
             classname = d["@class"]
 
             mod = __import__(modname, globals(), locals(), [classname], 0)
