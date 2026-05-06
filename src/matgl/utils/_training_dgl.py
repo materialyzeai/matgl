@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import lightning as pl
 import torch
 import torch.nn.functional as F
+from pathlib import Path
 import torchmetrics
 from torch import nn
 
@@ -289,6 +290,10 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         sync_dist: bool = False,
         allow_missing_labels: bool = False,
         magmom_target: Literal["absolute", "symbreak"] | None = "absolute",
+        save_predictions: bool = False,
+        save_forces: bool = False,
+        save_train_predictions: bool = False,
+        prediction_save_dir: str | Path = "predictions",
         **kwargs,
     ):
         """Init PotentialLightningModule with key parameters.
@@ -316,6 +321,10 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
                 These should be present in the dataset as torch.nans and will be skipped in computing the loss.
             magmom_target: Whether to predict the absolute site-wise value of magmoms or adapt the loss function
                 to predict the signed value breaking symmetry. If None given the loss function will be adapted.
+            save_predictions: If True, save per-epoch predicted energies (and optionally forces) to disk.
+            save_forces: If True, also save per-atom force predictions each epoch (requires save_predictions=True).
+            save_train_predictions: If True, also save training-set predictions each epoch.
+            prediction_save_dir: Directory for saved prediction .pt files. Defaults to "predictions".
             **kwargs: Passthrough to parent init.
         """
         assert energy_weight >= 0, f"energy_weight has to be >=0. Got {energy_weight}!"
@@ -365,6 +374,13 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         self.sync_dist = sync_dist
         self.allow_missing_labels = allow_missing_labels
         self.magmom_target = magmom_target
+        self.save_predictions = save_predictions
+        self.save_forces = save_forces
+        self.save_train_predictions = save_train_predictions
+        self.prediction_save_dir = str(prediction_save_dir)
+        self._raw_predictions: dict | None = None
+        self._val_indices_saved = False
+        self._train_indices_saved = False
         self.save_hyperparameters(ignore=["model"])
 
     def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
@@ -459,7 +475,98 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         )
         batch_size = preds[0].numel()
 
+        if self._raw_predictions is not None:
+            self._raw_predictions["energies_pred"].append(e.detach().cpu())
+            self._raw_predictions["num_atoms"].append(num_atoms.detach().cpu())
+            if self.save_forces:
+                self._raw_predictions["forces_pred"].append(f.detach().cpu())
+
         return results, batch_size
+
+    def on_train_epoch_start(self) -> None:
+        """Initialise prediction buffer at the start of each training epoch."""
+        if self.save_predictions and self.save_train_predictions:
+            self._raw_predictions = {"energies_pred": [], "num_atoms": [], "forces_pred": []}
+
+    def on_train_epoch_end(self) -> None:
+        """Save training predictions (if enabled) then step the LR scheduler."""
+        if self._raw_predictions is not None:
+            save_dir = Path(self.prediction_save_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            if not self._train_indices_saved:
+                dataset = self.trainer.train_dataloader.dataset
+                if hasattr(dataset, "indices"):
+                    torch.save(torch.tensor(dataset.indices), save_dir / "train_indices.pt")
+                torch.save(torch.cat(self._raw_predictions["num_atoms"]), save_dir / "train_num_atoms.pt")
+                self._train_indices_saved = True
+            data: dict[str, torch.Tensor] = {
+                "energies_pred": torch.cat(self._raw_predictions["energies_pred"])
+            }
+            if self.save_forces:
+                data["forces_pred"] = torch.cat(self._raw_predictions["forces_pred"])
+            torch.save(data, save_dir / f"epoch={self.trainer.current_epoch:04d}_train.pt")
+            self._raw_predictions = None
+        super().on_train_epoch_end()
+
+    def on_validation_epoch_start(self) -> None:
+        """Initialise prediction buffer at the start of each validation epoch (skips sanity check)."""
+        if self.save_predictions and not self.trainer.sanity_checking:
+            if isinstance(self.trainer.val_dataloaders, (list, tuple)) and len(self.trainer.val_dataloaders) > 1:
+                raise ValueError(
+                    "save_predictions=True does not support multiple validation dataloaders. "
+                    "Pass a single val dataloader to trainer.fit()."
+                )
+            self._raw_predictions = {"energies_pred": [], "num_atoms": [], "forces_pred": []}
+
+    def on_validation_epoch_end(self) -> None:
+        """Save predicted energies (and forces if save_forces=True); write val indices and num_atoms once."""
+        if self._raw_predictions is None:
+            return
+        save_dir = Path(self.prediction_save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        if not self._val_indices_saved:
+            val_dl = self.trainer.val_dataloaders
+            if isinstance(val_dl, (list, tuple)):
+                val_dl = val_dl[0]
+            dataset = val_dl.dataset
+            if hasattr(dataset, "indices"):
+                torch.save(torch.tensor(dataset.indices), save_dir / "val_indices.pt")
+            torch.save(torch.cat(self._raw_predictions["num_atoms"]), save_dir / "val_num_atoms.pt")
+            self._val_indices_saved = True
+        data = {"energies_pred": torch.cat(self._raw_predictions["energies_pred"])}
+        if self.save_forces:
+            data["forces_pred"] = torch.cat(self._raw_predictions["forces_pred"])
+        torch.save(data, save_dir / f"epoch={self.trainer.current_epoch:04d}_val.pt")
+        self._raw_predictions = None
+
+    def on_test_epoch_start(self) -> None:
+        """Initialise prediction buffer at the start of the test epoch."""
+        if self.save_predictions:
+            if isinstance(self.trainer.test_dataloaders, (list, tuple)) and len(self.trainer.test_dataloaders) > 1:
+                raise ValueError(
+                    "save_predictions=True does not support multiple test dataloaders. "
+                    "Pass a single test dataloader to trainer.test()."
+                )
+            self._raw_predictions = {"energies_pred": [], "num_atoms": [], "forces_pred": []}
+
+    def on_test_epoch_end(self) -> None:
+        """Save predicted energies (and forces if save_forces=True) for the test split."""
+        if self._raw_predictions is None:
+            return
+        save_dir = Path(self.prediction_save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        test_dl = self.trainer.test_dataloaders
+        if isinstance(test_dl, (list, tuple)):
+            test_dl = test_dl[0]
+        dataset = test_dl.dataset
+        if hasattr(dataset, "indices"):
+            torch.save(torch.tensor(dataset.indices), save_dir / "test_indices.pt")
+        torch.save(torch.cat(self._raw_predictions["num_atoms"]), save_dir / "test_num_atoms.pt")
+        data = {"energies_pred": torch.cat(self._raw_predictions["energies_pred"])}
+        if self.save_forces:
+            data["forces_pred"] = torch.cat(self._raw_predictions["forces_pred"])
+        torch.save(data, save_dir / f"epoch={self.trainer.current_epoch:04d}_test.pt")
+        self._raw_predictions = None
 
     def loss_fn(
         self,
