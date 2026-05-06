@@ -189,6 +189,7 @@ class WeightedAtomReadOut(nn.Module):
 
         return readout
 
+
 class WeightedReadOutPair(nn.Module):
     """Feed the average of atomic features i and j into weighted readout layer."""
 

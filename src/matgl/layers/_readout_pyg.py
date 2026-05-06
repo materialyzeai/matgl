@@ -169,6 +169,7 @@ class WeightedAtomReadOut(nn.Module):
 
         return h_g_sum
 
+
 class Set2SetReadOut(PyGSet2Set):
     """Set2Set readout for nodes (PyG).
 

@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING
 import torch
 from torch import nn
 
-from ._core import MLP, GatedMLP
 from matgl.utils.maths import scatter_add
+
+from ._core import MLP, GatedMLP
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -104,6 +105,7 @@ class WeightedAtomReadOut(nn.Module):
         )  # [num_graphs, output_dim]
 
         return out
+
 
 class ReduceReadOut(nn.Module):
     """Reduce node features into graph-level representations."""
