@@ -50,7 +50,7 @@ class MatglLightningModuleMixin:
         sch = self.lr_schedulers()  # type: ignore[attr-defined]
         sch.step()
 
-    def validation_step(self, batch: tuple, batch_idx: int) -> torch.Tensor:
+    def validation_step(self, batch: tuple, batch_idx: int) -> Any:
         """Validation step.
 
         Args:
@@ -379,6 +379,8 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         self.sync_dist = sync_dist
         self.allow_missing_labels = allow_missing_labels
         self.magmom_target = magmom_target
+        self._last_preds: tuple[torch.Tensor, ...] | None = None
+        self._last_labels: tuple[torch.Tensor, ...] | None = None
         self.save_hyperparameters(ignore=["model"])
 
     def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
@@ -472,7 +474,25 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         )
         batch_size = preds[0].numel()
 
+        self._last_preds = preds
+        self._last_labels = labels
+
         return results, batch_size
+
+    def validation_step(self, batch: tuple, batch_idx: int) -> dict[str, Any]:
+        """Validation step that also exposes predictions/labels for callbacks.
+
+        Args:
+            batch: Data batch.
+            batch_idx: Batch index.
+
+        Returns:
+            Dict with the total ``loss`` plus the raw ``preds`` and ``labels`` tuples
+            ``(energies, forces, ...)`` from this batch, suitable for consumption by a
+            Lightning ``Callback`` (e.g. ``matgl.utils.callbacks.PredictionLogger``).
+        """
+        loss = super().validation_step(batch, batch_idx)
+        return {"loss": loss, "preds": self._last_preds, "labels": self._last_labels}
 
     def loss_fn(
         self,
