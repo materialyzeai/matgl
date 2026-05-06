@@ -19,11 +19,13 @@ class GraphConverter(metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def get_graph(self, structure) -> tuple[dgl.DGLGraph, torch.Tensor, list | np.ndarray]:
-        """Args:
-        structure: Input crystals or molecule.
+        """Get a graph from a structure.
+
+        Args:
+            structure: Input crystals or molecule.
 
         Returns:
-        DGLGraph object, state_attr
+            DGLGraph object, state_attr
         """
 
     def get_graph_from_processed_structure(

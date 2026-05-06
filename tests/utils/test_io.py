@@ -276,55 +276,24 @@ def test_get_file_paths_bare_name_hub_failure_raises_value_error(tmp_path):
         _get_file_paths(tmp_path / "BareName", str_path="BareName")
 
 
-def test_iomixin_load_dgl_class_under_pyg_warns():
-    """Loading a model whose nested kwargs reference a DGL-only class under PYG must warn.
+def test_resolve_module_aliases_private_modules_to_public_packages():
+    """Private ``matgl.models._*`` and ``matgl.apps._pes_*`` modules must alias to
+    ``matgl.models`` / ``matgl.apps.pes`` so backend-aware loaders pick the right
+    implementation transparently."""
+    from matgl.utils.io import _resolve_module
 
-    Triggers the branch that auto-flips the backend to DGL when a serialized model has a
-    nested component class name containing ``m3gnet`` / ``megnet`` / ``chgnet`` / ``qet``.
-    """
-    import matgl as _matgl
-
-    if _matgl.config.BACKEND != "PYG":
-        pytest.skip("Only meaningful on the PyG backend.")
-
-    # IOMixIn.load expects a dict-of-paths or a Path. Pre-build the artifacts on disk.
-    import json as _json
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir)
-        nested = {
-            "@class": "M3GNet",
-            "@module": "definitely.not.a.real.module.at.all",
-            "@model_version": 1,
-            "init_args": {},
-        }
-        init_args = {"n": 1, "submodel": nested}
-
-        torch.save(init_args, tmp_path / "model.pt")
-        torch.save({}, tmp_path / "state.pt")
-        (tmp_path / "model.json").write_text(
-            _json.dumps(
-                {
-                    "@class": "OldModel",
-                    "@module": "tests.utils.test_io",
-                    "@model_version": 1,
-                    "metadata": None,
-                    "kwargs": init_args,
-                }
-            )
-        )
-
-        # ``matgl.set_backend("DGL")`` would mutate global state and may fail if DGL
-        # isn't installed; patch it to a no-op so the test is self-contained.
-        with (
-            patch.object(_matgl, "set_backend") as mock_set_backend,
-            pytest.warns(UserWarning, match=r"Setting the backend to DGL"),
-            pytest.raises((ImportError, ValueError, ModuleNotFoundError)),
-        ):
-            OldModel.load(tmp_path)
-
-        mock_set_backend.assert_called_with("DGL")
+    assert _resolve_module("matgl.models._m3gnet_dgl") == "matgl.models"
+    assert _resolve_module("matgl.models._m3gnet_pyg") == "matgl.models"
+    assert _resolve_module("matgl.models._megnet_dgl") == "matgl.models"
+    assert _resolve_module("matgl.models._tensornet_pyg") == "matgl.models"
+    assert _resolve_module("matgl.models._chgnet") == "matgl.models"
+    assert _resolve_module("matgl.apps._pes_dgl") == "matgl.apps.pes"
+    assert _resolve_module("matgl.apps._pes_pyg") == "matgl.apps.pes"
+    # Public modules pass through unchanged.
+    assert _resolve_module("matgl.models") == "matgl.models"
+    assert _resolve_module("matgl.apps.pes") == "matgl.apps.pes"
+    # Out-of-scope modules pass through unchanged.
+    assert _resolve_module("some.other.pkg._internal") == "some.other.pkg._internal"
 
 
 def test_generate_hf_model_card_with_unserializable_metadata():

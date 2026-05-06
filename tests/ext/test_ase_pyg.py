@@ -61,7 +61,7 @@ def test_PESCalculator_and_M3GNetCalculator(MoS, caplog):
 
         np.testing.assert_allclose(
             s_ase.get_potential_energy(),
-            -10.609233,
+            -10.452658,
             atol=1e-5,
             rtol=1e-6,
         )
@@ -109,7 +109,7 @@ def test_PESCalculator_mol(AcAla3NHMe):
     mol.set_calculator(calc)
     assert isinstance(mol.get_potential_energy(), float)
     assert list(mol.get_forces().shape) == [42, 3]
-    np.testing.assert_allclose(mol.get_potential_energy(), -249.38649, atol=1e-3)
+    np.testing.assert_allclose(mol.get_potential_energy(), -249.194916, atol=1e-3)
 
 
 def test_Relaxer(MoS):

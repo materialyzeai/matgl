@@ -1,1 +1,1 @@
-"""Package for creating and manipulating graphs."""
+"""Graph construction and manipulation utilities."""

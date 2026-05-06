@@ -18,6 +18,7 @@ from matgl.utils.maths import (
 
 class TensorEmbedding(nn.Module):
     """Embedding block for TensorNet to generate node, edge, and optional state features using PyG.
+
     Adapted from the DGL implementation in https://github.com/torchmd/torchmd-net.
     """
 
@@ -30,7 +31,8 @@ class TensorEmbedding(nn.Module):
         cutoff: float,
         dtype: torch.dtype = matgl.float_th,
     ):
-        """
+        """Initialize the TensorEmbedding.
+
         Args:
             units (int): Number of hidden neurons.
             degree_rbf (int): Number of radial basis functions.
@@ -102,42 +104,27 @@ class TensorEmbedding(nn.Module):
         edge_vec: torch.Tensor,
         state_attr=None,
     ):
-        """
+        """Compute embedded node tensors and (optional) state features.
+
         Args:
-        z (torch.Tensor):
-            Node-wise features, e.g. atomic embeddings or species encodings.
-            Shape: (num_nodes, hidden_channels) or (num_nodes,).
-
-        edge_index (torch.Tensor):
-            Graph connectivity in COO format specifying source and target nodes.
-            Shape: (2, num_edges).
-
-        edge_attr (torch.Tensor):
-            Edge-wise attributes encoding geometric or chemical information
-            (e.g. radial basis expansion or bond features).
-            Shape: (num_edges, num_edge_features).
-
-        edge_weight (torch.Tensor):
-            Edge distance between source and target nodes.
-            Shape: (num_edges,) or (num_edges, 1).
-
-        edge_vec (torch.Tensor):
-            Edge direction vectors from source to target nodes.
-            Shape: (num_edges, 3).
-
-        state_attr (torch.Tensor, optional):
-            Global (graph-level) state attributes shared by all nodes
-            (e.g. external conditions or control parameters).
-            Shape: (num_graphs, state_dim).
+            z (torch.Tensor): Node-wise features, e.g. atomic embeddings or species encodings.
+                Shape: (num_nodes, hidden_channels) or (num_nodes,).
+            edge_index (torch.Tensor): Graph connectivity in COO format specifying source and target nodes.
+                Shape: (2, num_edges).
+            edge_attr (torch.Tensor): Edge-wise attributes encoding geometric or chemical information
+                (e.g. radial basis expansion or bond features). Shape: (num_edges, num_edge_features).
+            edge_weight (torch.Tensor): Edge distance between source and target nodes.
+                Shape: (num_edges,) or (num_edges, 1).
+            edge_vec (torch.Tensor): Edge direction vectors from source to target nodes.
+                Shape: (num_edges, 3).
+            state_attr (torch.Tensor, optional): Global (graph-level) state attributes shared by all nodes
+                (e.g. external conditions or control parameters). Shape: (num_graphs, state_dim).
 
         Returns:
-        x (torch.Tensor):
-            Updated node representations after message passing.
-            Shape: (num_nodes, hidden_channels).
-
-        state_feat (torch.Tensor):
-            Updated global state features.
-            Shape: (num_graphs, state_hidden_channels).
+            x (torch.Tensor): Updated node representations after message passing.
+                Shape: (num_nodes, hidden_channels).
+            state_feat (torch.Tensor): Updated global state features.
+                Shape: (num_graphs, state_hidden_channels).
         """
         # Node embedding
         x = self.emb(z)  # Assuming node_type is integer for embedding

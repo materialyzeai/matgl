@@ -16,7 +16,7 @@ from matgl import load_model
 if matgl.config.BACKEND != "DGL":
     pytest.skip("Skipping DGL tests", allow_module_level=True)
 from matgl.ext import _ase_dgl as ase_mod
-from matgl.ext.ase import Atoms2Graph, M3GNetCalculator, MolecularDynamics, PESCalculator, Relaxer
+from matgl.ext.ase import Atoms2Graph, MolecularDynamics, PESCalculator, Relaxer
 
 
 @pytest.mark.integration
@@ -27,7 +27,7 @@ def test_PESCalculator_and_M3GNetCalculator(MoS):
     # M3GNet PES (eV/A3)
     # ============================================================
     s_ase = adaptor.get_atoms(MoS)  # type: ignore
-    ff = load_model("TensorNetDGL-PES-MatPES-PBE-2025.2")
+    ff = load_model("TensorNet-PES-MatPES-PBE-2025.2")
     ff.calc_hessian = True
 
     calc = PESCalculator(
@@ -45,7 +45,7 @@ def test_PESCalculator_and_M3GNetCalculator(MoS):
 
     np.testing.assert_allclose(
         s_ase.get_potential_energy(),
-        -8.046673,
+        -10.452658,
         atol=1e-5,
         rtol=1e-6,
     )
@@ -67,7 +67,7 @@ def test_PESCalculator_and_M3GNetCalculator(MoS):
 
     np.testing.assert_allclose(
         s_ase.get_potential_energy(),
-        -8.046673,
+        -10.452658,
         atol=1e-5,
         rtol=1e-6,
     )
@@ -97,23 +97,6 @@ def test_PESCalculator_and_M3GNetCalculator(MoS):
             stress_unit="GPa",
             stress_weight=0.5,
         )
-
-    # ============================================================
-    # M3GNetCalculator (backward compatibility)
-    # ============================================================
-    calc = M3GNetCalculator(potential=ff)
-    s_ase.set_calculator(calc)
-
-    assert list(s_ase.get_forces().shape) == [2, 3]
-    assert list(s_ase.get_stress().shape) == [6]
-    assert list(calc.results["hessian"].shape) == [6, 6]
-
-    np.testing.assert_allclose(
-        s_ase.get_potential_energy(),
-        -8.046673,
-        atol=1e-5,
-        rtol=1e-6,
-    )
 
     # ============================================================
     # QET PES (charges + stress)
@@ -168,16 +151,16 @@ def test_CHGNetCalculator(MoS):
 def test_PESCalculator_mol(AcAla3NHMe):
     adaptor = AseAtomsAdaptor()
     mol = adaptor.get_atoms(AcAla3NHMe)
-    ff = load_model("TensorNetDGL-PES-MatPES-PBE-2025.2")
+    ff = load_model("TensorNet-PES-MatPES-PBE-2025.2")
     calc = PESCalculator(potential=ff)
     mol.set_calculator(calc)
     assert isinstance(mol.get_potential_energy(), float)
     assert list(mol.get_forces().shape) == [42, 3]
-    np.testing.assert_allclose(mol.get_potential_energy(), -150.480591)
+    np.testing.assert_allclose(mol.get_potential_energy(), -249.194916, atol=1e-3)
 
 
 def test_Relaxer(MoS):
-    pot = load_model("TensorNetDGL-PES-MatPES-PBE-2025.2")
+    pot = load_model("TensorNet-PES-MatPES-PBE-2025.2")
     r = Relaxer(pot)
     results = r.relax(MoS, traj_file="MoS_relax.traj")
     s = results["final_structure"]
@@ -225,7 +208,7 @@ def test_get_graph_from_atoms_mol():
 
 @pytest.mark.skipif(True, reason="Slow; superseded by test_molecular_dynamics_branches which mocks the calculator.")
 def test_molecular_dynamics(MoS2):
-    pot = load_model("TensorNetDGL-PES-MatPES-PBE-2025.2")
+    pot = load_model("TensorNet-PES-MatPES-PBE-2025.2")
     for ensemble in [
         "nvt",
         "nve",

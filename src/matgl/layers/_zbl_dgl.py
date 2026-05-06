@@ -15,8 +15,7 @@ from matgl.utils.cutoff import polynomial_cutoff
 
 
 class NuclearRepulsion(nn.Module):
-    """
-    Ziegler-Biersack-Littmark style repulsion energy.
+    """Ziegler-Biersack-Littmark style repulsion energy.
 
     Args:
         r_cut (float): cutoff for interaction range
@@ -48,7 +47,7 @@ class NuclearRepulsion(nn.Module):
         self.exponents = nn.Parameter(exponents, requires_grad=trainable)
 
     def forward(self, element_types: tuple, graph: dgl.DGLGraph):
-        """
+        """Compute the ZBL nuclear repulsion energy.
 
         Args:
             element_types: A tuple of element types defined in the model class.

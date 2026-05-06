@@ -12,8 +12,7 @@ class LinearQeq(nn.Module):
         super().__init__()
 
     def get_charges(self, node: dgl.udf.NodeBatch):
-        r"""
-        Compute atomic charges in a structure using the charge equilibration (QEq) model.
+        r"""Compute atomic charges in a structure using the charge equilibration (QEq) model.
 
         This function analytically solves for the atomic charges `q_i` given
         the electronegativity (`chi`), hardness (`hardness`), and total molecular charge (`sum_q`).
@@ -61,8 +60,7 @@ class LinearQeq(nn.Module):
         }
 
     def forward(self, g: dgl.DGLGraph, total_charge: torch.Tensor):
-        r"""
-        Compute atomic charges in a molecule using the charge equilibration (QEq) model.
+        r"""Compute atomic charges in a molecule using the charge equilibration (QEq) model.
 
         This function analytically solves for the atomic charges `q_i` given
         the electronegativity (`chi`), hardness (`hardness`), and total molecular charge (`sum_q`).

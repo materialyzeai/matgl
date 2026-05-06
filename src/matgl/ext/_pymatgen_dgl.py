@@ -40,11 +40,12 @@ class Molecule2Graph(GraphConverter):
         element_types: tuple[str, ...],
         cutoff: float = 5.0,
     ):
-        """Parameters
-        ----------
-        element_types: List of elements present in dataset for graph conversion. This ensures all graphs are
-            constructed with the same dimensionality of features.
-        cutoff: Cutoff radius for graph representation
+        """Initialize the Molecule2Graph converter.
+
+        Args:
+            element_types: List of elements present in dataset for graph conversion. This ensures all graphs are
+                constructed with the same dimensionality of features.
+            cutoff: Cutoff radius for graph representation
         """
         self.element_types = tuple(element_types)
         self.cutoff = cutoff
@@ -52,8 +53,10 @@ class Molecule2Graph(GraphConverter):
     def get_graph(self, mol: Molecule) -> tuple[dgl.DGLGraph, torch.Tensor, list]:
         """Get a DGL graph from an input molecule.
 
-        :param mol: pymatgen molecule object
-        :return:
+        Args:
+            mol: pymatgen molecule object
+
+        Returns:
             g: DGL graph
             lat: default lattice for molecular systems (np.ones)
             state_attr: state features
@@ -89,11 +92,12 @@ class Structure2Graph(GraphConverter):
         element_types: tuple[str, ...],
         cutoff: float = 5.0,
     ):
-        """Parameters
-        ----------
-        element_types: List of elements present in dataset for graph conversion. This ensures all graphs are
-            constructed with the same dimensionality of features.
-        cutoff: Cutoff radius for graph representation
+        """Initialize the Structure2Graph converter.
+
+        Args:
+            element_types: List of elements present in dataset for graph conversion. This ensures all graphs are
+                constructed with the same dimensionality of features.
+            cutoff: Cutoff radius for graph representation
         """
         self.element_types = tuple(element_types)
         self.cutoff = cutoff
@@ -101,8 +105,10 @@ class Structure2Graph(GraphConverter):
     def get_graph(self, structure: Structure) -> tuple[dgl.DGLGraph, torch.Tensor, list | np.ndarray]:
         """Get a DGL graph from an input Structure.
 
-        :param structure: pymatgen structure object
-        :return:
+        Args:
+            structure: pymatgen structure object
+
+        Returns:
             g: DGL graph
             lat: lattice for periodic systems
             state_attr: state features

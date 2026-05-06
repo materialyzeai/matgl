@@ -1,1 +1,1 @@
-"""Implementation of various utility methods and classes."""
+"""Various utility methods and classes."""

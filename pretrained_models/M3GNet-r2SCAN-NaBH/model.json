@@ -6,7 +6,7 @@
     "kwargs": {
         "model": {
             "@class": "M3GNet",
-            "@module": "matgl.models._m3gnet",
+            "@module": "matgl.models._m3gnet_dgl",
             "@model_version": 2,
             "init_args": {
                 "element_types": [

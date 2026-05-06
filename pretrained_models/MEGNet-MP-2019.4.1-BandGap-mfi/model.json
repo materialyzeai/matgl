@@ -6,7 +6,7 @@
     "kwargs": {
         "model": {
             "@class": "MEGNet",
-            "@module": "matgl.models._megnet",
+            "@module": "matgl.models._megnet_dgl",
             "@model_version": 1,
             "init_args": {
                 "dim_node_embedding": 16,

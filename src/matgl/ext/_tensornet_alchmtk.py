@@ -148,11 +148,11 @@ class TensorNetWrapper(nn.Module, BaseModelMixin):  # type: ignore[misc]
         self.model = model
 
         # ZBL nuclear repulsion (fixed analytical potential)
-        self.repuls: NuclearRepulsionPyG | None = None  # type: ignore[name-defined]
+        self.repuls: NuclearRepulsion | None = None  # type: ignore[name-defined]
         if calc_repuls:
-            from matgl.layers._zbl_pyg import NuclearRepulsionPyG
+            from matgl.layers._zbl_pyg import NuclearRepulsion
 
-            self.repuls = NuclearRepulsionPyG(float(model.cutoff))
+            self.repuls = NuclearRepulsion(float(model.cutoff))
 
         self.model_config = ModelConfig(
             outputs=frozenset({"energy", "forces", "stress"}),

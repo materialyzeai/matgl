@@ -52,8 +52,7 @@ def _format_site_delta(formatter: Callable[[np.ndarray], str], old_site: Periodi
 
 
 def relax_structure(args: argparse.Namespace) -> int:
-    """
-    Relax one or more crystal structures using a pretrained potential.
+    """Relax one or more crystal structures using a pretrained potential.
 
     Args:
         args: Parsed CLI arguments carrying `infile`, `model`, and output options.
@@ -109,8 +108,7 @@ def _resolve_state_attributes(state_attr: Sequence[str | int] | None, expected_c
 
 
 def predict_structure(args: argparse.Namespace) -> None:
-    """
-    Predict scalar properties for structures or Materials Project IDs.
+    """Predict scalar properties for structures or Materials Project IDs.
 
     Args:
         args: Parsed CLI arguments with `model`, `infile`, or `mpids` selections.
@@ -145,8 +143,7 @@ def predict_structure(args: argparse.Namespace) -> None:
 
 
 def molecular_dynamics(args: argparse.Namespace) -> int:
-    """
-    Run molecular dynamics trajectories with MatGL potentials.
+    """Run molecular dynamics trajectories with MatGL potentials.
 
     Args:
         args: Parsed CLI arguments containing MD configuration.
@@ -193,8 +190,7 @@ def molecular_dynamics(args: argparse.Namespace) -> int:
 
 
 def clear_cache(args: argparse.Namespace) -> None:
-    """
-    Clear cache command.
+    """Clear cache command.
 
     Args:
         args: Parsed CLI arguments, honoring the `--yes` confirmation override.

@@ -115,8 +115,8 @@ class TensorEmbedding(nn.Module):
         edge_weight: torch.Tensor,
         edge_vec: torch.Tensor,
         edge_attr: torch.Tensor,
-        col_data: torch.Tensor,
-        col_indptr: torch.Tensor,
+        row_data: torch.Tensor,
+        row_indptr: torch.Tensor,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -126,8 +126,8 @@ class TensorEmbedding(nn.Module):
             edge_weight: Edge weights (distances), shape (num_edges,)
             edge_vec: Edge vectors, shape (num_edges, 3)
             edge_attr: Edge attributes (RBF), shape (num_edges, num_rbf)
-            col_data: CSC col data for destination aggregation, shape (num_edges,)
-            col_indptr: CSC col indptr for destination aggregation, shape (num_nodes+1,)
+            row_data: CSR row data for source aggregation, shape (num_edges,)
+            row_indptr: CSR row indptr for source aggregation, shape (num_nodes+1,)
 
         Returns:
             X: Tensor representation, shape (num_nodes, 3, 3, units)
@@ -143,7 +143,7 @@ class TensorEmbedding(nn.Module):
         edge_attr_processed = edge_attr.view(-1, 3, self.units) * C.view(-1, 1, 1) * Zij.view(-1, 1, self.units)
 
         edge_vec_norm = edge_vec / torch.norm(edge_vec, dim=1, keepdim=True).clamp(min=1e-6)
-        I, A, S = fn_radial_message_passing(edge_vec_norm, edge_attr_processed, col_data, col_indptr)  # noqa: E741
+        I, A, S = fn_radial_message_passing(edge_vec_norm, edge_attr_processed, row_data, row_indptr)  # noqa: E741
 
         X = fn_compose_tensor(I, A, S)  # (num_nodes, 3, 3, units)
 

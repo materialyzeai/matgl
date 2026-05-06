@@ -52,5 +52,17 @@ def test_three_body_interactions(graph_MoS):
         update_network_atom=MLP(dims=[num_node_feats, degree], activation=nn.Sigmoid(), activate_last=True),
         update_network_bond=GatedMLP(in_feats=degree, dims=[num_edge_feats], use_bias=False),
     )
-    edge_feat_updated = three_body_interactions(g1, l_g1, three_body_basis, three_body_cutoff, node_feat, edge_feat)
+    edge_dst_atom = g1.edges()[1]
+    line_edge_index = torch.stack(list(l_g1.edges()), dim=0)
+    n_triple_ij = l_g1.ndata["n_triple_ij"]
+    edge_feat_updated = three_body_interactions(
+        edge_dst_atom,
+        line_edge_index,
+        n_triple_ij,
+        g1.num_edges(),
+        three_body_basis,
+        three_body_cutoff,
+        node_feat,
+        edge_feat,
+    )
     assert [edge_feat_updated.size(dim=0), edge_feat_updated.size(dim=1)] == [28, 16]

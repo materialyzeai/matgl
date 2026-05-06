@@ -31,12 +31,13 @@ def polynomial_cutoff(r: torch.Tensor, cutoff: float, exponent: int = 3) -> torc
 
 
 def cosine_cutoff(r: torch.Tensor, cutoff: float) -> torch.Tensor:
-    """Cosine cutoff function
+    """Cosine cutoff function.
+
     Args:
         r (torch.Tensor): radius distance tensor
         cutoff (float): cutoff distance.
 
-    Returns: cosine cutoff functions
-
+    Returns:
+        cosine cutoff function
     """
     return torch.where(r <= cutoff, 0.5 * (torch.cos(pi * r / cutoff) + 1), 0.0)

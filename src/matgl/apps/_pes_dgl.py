@@ -97,7 +97,9 @@ class Potential(nn.Module, IOMixIn):
         total_charge: torch.Tensor | None = None,
         ext_pot: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, ...]:
-        """Args:
+        """Compute energies, forces, stresses, and (optionally) the Hessian.
+
+        Args:
             g: DGL graph
             lat: lattice
             state_attr: State attrs

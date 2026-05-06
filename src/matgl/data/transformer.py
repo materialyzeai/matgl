@@ -39,7 +39,8 @@ class Normalizer(Transformer):
     """Performs a scaling of the data by centering to the mean and dividing by the standard deviation."""
 
     def __init__(self, mean: float, std: float):
-        """
+        """Initialize the Normalizer.
+
         Args:
             mean: Mean of the data
             std: Standard deviation of the data.

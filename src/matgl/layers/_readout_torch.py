@@ -8,36 +8,102 @@ import torch
 from torch import nn
 
 from ._core import MLP, GatedMLP
+from matgl.utils.maths import scatter_add
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
 class WeightedAtomReadOut(nn.Module):
-    """Weighted atom readout for graph properties using pure PyTorch tensors."""
+    """Weighted atom readout for graph properties using pure PyTorch tensors.
+
+    This follows the TensorFlow WeightedReadout implementation:
+
+        updated_field = mlp(field)
+        weights = weight_mlp(field)
+        factor = weights / sum(weights)
+        readout = sum(factor * updated_field)
+
+    where the normalization is performed independently for each graph.
+    """
 
     def __init__(self, in_feats: int, dims: Sequence[int], activation: nn.Module):
+        """
+        Args:
+            in_feats: Input node feature dimension.
+            dims: NN architecture for the MLP. The final entry is the output dimension.
+            activation: Activation function for multi-layer perceptrons.
+        """
         super().__init__()
+
         self.dims = [in_feats, *dims]
         self.activation = activation
-        self.mlp = MLP(dims=self.dims, activation=self.activation, activate_last=True)
-        self.weight = nn.Sequential(nn.Linear(in_feats, 1), nn.Sigmoid())
 
-    def forward(self, node_feat: torch.Tensor, batch: torch.Tensor | None = None) -> torch.Tensor:
-        """Aggregate weighted node features into graph-level representations."""
-        h = self.mlp(node_feat)
-        w = self.weight(node_feat)
-        weighted_h = h * w
+        self.mlp = MLP(
+            dims=self.dims,
+            activation=self.activation,
+            activate_last=True,
+        )
 
-        if batch is not None:
-            num_graphs = int(batch.max().item()) + 1
-            out = torch.zeros(num_graphs, weighted_h.size(1), device=weighted_h.device, dtype=weighted_h.dtype)
-            out.index_add_(0, batch.to(torch.long), weighted_h)
+        self.weight = MLP(
+            dims=[*self.dims[:-1], 1],
+            activation=self.activation,
+            activate_last=False,
+        )
+        self.weight_activation = nn.Sigmoid()
+
+    def forward(
+        self,
+        node_feat: torch.Tensor,
+        batch: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Aggregate weighted node features into graph-level representations.
+
+        Args:
+            node_feat: Node features with shape ``[num_nodes, in_feats]``.
+            batch: Optional graph index tensor with shape ``[num_nodes]``.
+                If ``None``, all nodes are treated as belonging to one graph.
+
+        Returns:
+            Graph-level tensor with shape ``[num_graphs, output_dim]``.
+        """
+        if batch is None:
+            batch = torch.zeros(
+                node_feat.size(0),
+                dtype=torch.long,
+                device=node_feat.device,
+            )
         else:
-            out = weighted_h.sum(dim=0, keepdim=True)
+            batch = batch.to(device=node_feat.device, dtype=torch.long)
+
+        num_graphs = int(batch.max().item()) + 1 if batch.numel() > 0 else 1
+
+        # updated_field = self.mlp(field)
+        updated_field = self.mlp(node_feat)  # [num_nodes, output_dim]
+
+        # weights = self.weight(field)
+        weights = self.weight_activation(self.weight(node_feat))  # [num_nodes, 1]
+
+        # sum_j w_j for each graph
+        weight_sum = scatter_add(
+            weights,
+            batch,
+            dim_size=num_graphs,
+            dim=0,
+        )  # [num_graphs, 1]
+
+        # factor_i = w_i / sum_j w_j
+        factor = weights / weight_sum[batch].clamp(min=1e-8)  # [num_nodes, 1]
+
+        # sum_i factor_i * updated_field_i
+        out = scatter_add(
+            factor * updated_field,
+            batch,
+            dim_size=num_graphs,
+            dim=0,
+        )  # [num_graphs, output_dim]
 
         return out
-
 
 class ReduceReadOut(nn.Module):
     """Reduce node features into graph-level representations."""

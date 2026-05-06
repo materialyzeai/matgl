@@ -23,10 +23,13 @@ class MLP(nn.Module):
         activate_last: bool = False,
         bias_last: bool = True,
     ) -> None:
-        """:param dims: Dimensions of each layer of MLP.
-        :param activation: Activation function.
-        :param activate_last: Whether to apply activation to last layer.
-        :param bias_last: Whether to apply bias to last layer.
+        """Initialize the MLP.
+
+        Args:
+            dims: Dimensions of each layer of MLP.
+            activation: Activation function.
+            activate_last: Whether to apply activation to last layer.
+            bias_last: Whether to apply bias to last layer.
         """
         super().__init__()
         self._depth = len(dims) - 1
@@ -97,10 +100,13 @@ class GatedMLP(nn.Module):
     """An implementation of a Gated multi-layer perceptron."""
 
     def __init__(self, in_feats: int, dims: Sequence[int], activate_last: bool = True, use_bias: bool = True):
-        """:param in_feats: Dimension of input features.
-        :param dims: Architecture of neural networks.
-        :param activate_last: Whether applying activation to last layer or not.
-        :param use_bias: Whether applying bias in MLP.
+        """Initialize the GatedMLP.
+
+        Args:
+            in_feats: Dimension of input features.
+            dims: Architecture of neural networks.
+            activate_last: Whether applying activation to last layer or not.
+            use_bias: Whether applying bias in MLP.
         """
         super().__init__()
         self.in_feats = in_feats
@@ -128,8 +134,7 @@ class GatedMLP(nn.Module):
 
 
 class GatedEquivariantBlock(nn.Module):
-    r"""
-    Gated equivariant block as used for the prediction of tensorial properties by PaiNN.
+    r"""Gated equivariant block as used for the prediction of tensorial properties by PaiNN.
 
     Transforms scalar and vector representations using gated nonlinearities. The reference
     implementation is available at
@@ -152,7 +157,8 @@ class GatedEquivariantBlock(nn.Module):
         activation: nn.Module,
         sactivation: nn.Module | None = None,
     ):
-        """
+        """Initialize the GatedEquivariantBlock.
+
         Args:
             n_sin: number of input scalar features.
             n_vin: number of input vector features.

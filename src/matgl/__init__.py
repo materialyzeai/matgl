@@ -32,8 +32,7 @@ int_th = torch.int32
 
 
 def set_default_dtype(type_: str = "float", size: int = 32) -> None:
-    """
-    Set the default dtype size (16, 32 or 64) for int or float used throughout matgl.
+    """Set the default dtype size (16, 32 or 64) for int or float used throughout matgl.
 
     Args:
         type_: "float" or "int"
@@ -53,27 +52,29 @@ def set_default_dtype(type_: str = "float", size: int = 32) -> None:
 
 
 def set_backend(backend: Literal["DGL", "PYG"] = "PYG") -> None:
-    """
-    Sets the computational backend for the application.
+    """Set the computational backend for the application.
 
-    This function allows you to set the backend used for computations, which could
-    be either "DGL" (Deep Graph Library) or "PYG" (PyTorch Geometric). The selected
-    backend determines how graph-based computations are implemented in the
-    application. If an invalid backend is provided, a ValueError is raised.
+    Selects the backend used for graph computations, either "DGL" (Deep Graph Library)
+    or "PYG" (PyTorch Geometric). The selected backend determines how graph-based
+    computations are implemented in the application.
 
-    Parameters:
-    backend: Literal["DGL", "PYG"]
-        A string specifying the desired computational backend. Must be either
-        "DGL" or "PYG".
+    Args:
+        backend: A string specifying the desired computational backend. Must be either
+            "DGL" or "PYG".
 
     Raises:
-    ValueError
-        If the input backend is neither "DGL" nor "PYG".
-
-    Returns:
-    None
+        ValueError: If the input backend is neither "DGL" nor "PYG".
     """
     if backend not in ("DGL", "PYG"):
         raise ValueError("Invalid backend")
     ensure_backend(backend)
     matgl.config.BACKEND = backend
+
+
+def get_best_device() -> Literal["cpu", "cuda", "mps"]:
+    """Get the best device for the current system."""
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"

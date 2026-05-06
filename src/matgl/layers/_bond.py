@@ -25,7 +25,8 @@ class BondExpansion(nn.Module):
         num_centers: int = 100,
         width: float = 0.5,
     ) -> None:
-        """
+        """Initialize the BondExpansion.
+
         Args:
             max_l (int): order of angular part
             max_n (int): order of radial part
@@ -59,13 +60,13 @@ class BondExpansion(nn.Module):
             raise ValueError("Undefined rbf_type, please use SphericalBessel or Gaussian instead.")
 
     def forward(self, bond_dist: torch.Tensor):
-        """Forward.
+        """Forward pass.
 
         Args:
-        bond_dist: Bond distance
+            bond_dist: Bond distance
 
-        Return:
-        bond_basis: Radial basis functions
+        Returns:
+            bond_basis: Radial basis functions
         """
         bond_basis = self.rbf(bond_dist)
         return bond_basis

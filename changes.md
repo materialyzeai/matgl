@@ -6,14 +6,33 @@ nav_order: 3
 
 # Change Log
 
-## Unreleased
-- Removed the legacy GitHub `pretrained_models/` download fallback now that Hugging Face
-  is the canonical source for pre-trained matgl models. The `RemoteFile` class and the
-  `PRETRAINED_MODELS_BASE_URL` config constant have been removed, and
-  `get_available_pretrained_models` no longer accepts the `include_hf` / `include_github`
-  arguments (it now always queries the `materialyze` Hugging Face org). **Breaking
-  change** for any code that imported `matgl.utils.io.RemoteFile` or
-  `matgl.config.PRETRAINED_MODELS_BASE_URL` directly.
+## 3.0.1
+- PyG charge-training parity for `QET`. `PotentialLightningModule` now accepts `charge_weight` and adds a per-atom
+  charge loss term (`Charge_MAE` / `Charge_RMSE`) on top of energy/force/stress; `Potential.forward` (PyG) takes
+  `total_charge` / `ext_pot` and returns equilibrated charges in the output tuple, mirroring the DGL pipeline.
+- `MGLDataset` (PyG) gains `include_ref_charge` to attach per-atom `q_ref` onto each `Data` object (consumed by
+  `LinearQeq`); `collate_fn_pes` (PyG) gains `include_charge` so per-atom charge labels propagate through batches.
+- Renamed PyG layer classes for cross-backend consistency: `AtomRefPyG` -> `AtomRef`, `NuclearRepulsionPyG` ->
+  `NuclearRepulsion` (matching the DGL counterparts).
+- CI: bumped GitHub Actions to Node 24 versions (`actions/checkout@v5`, `actions/setup-python@v6`,
+  `actions/upload-artifact@v5`, `actions/download-artifact@v5`, `astral-sh/setup-uv@v7`).
+
+## 3.0.0
+- **PyG `M3GNet` and `QET`.** New PyG implementations of `M3GNet` and `QET` join the existing PyG `TensorNet` and
+  `MEGNet`, so all four core architectures now run on the default PyG backend without DGL.
+- **Message-passing fix (TensorNet, M3GNet, QET).** Corrected the message-passing convention in the interaction
+  and embedding blocks of `TensorNet`, `M3GNet`, and `QET` (both PyG and DGL): edge messages are now aggregated
+  onto the source (center) node so each atom correctly collects information from its neighbors. Pre-trained
+  weights generated under the old convention are no longer numerically valid. (#758, @kenko911)
+- **New pre-trained weights on Hugging Face.** `TensorNet-PES-MatPES-PBE-2025.2`, the `M3GNet` and `QET` PyG
+  potentials, and related models have been retrained against the corrected message-passing convention and
+  re-released on the [`materialyze`](https://huggingface.co/materialyze) HF org, which is now the canonical
+  source for all matgl pre-trained models.
+- **Breaking — removed legacy GitHub `pretrained_models/` download fallback.** The `RemoteFile` class and the
+  `PRETRAINED_MODELS_BASE_URL` config constant have been removed, and `get_available_pretrained_models` no longer
+  accepts the `include_hf` / `include_github` arguments (it now always queries the `materialyze` HF org).
+- Consolidated per-backend `tensornet` / `m3gnet` / `megnet` / `qet` test files; backend dispatch is via
+  `matgl.config.BACKEND` with `pytest.skip` guarding backend-specific cases.
 
 ## 2.2.1
 - Updated HuggingFace Repo Id to lowercase "materialyze".

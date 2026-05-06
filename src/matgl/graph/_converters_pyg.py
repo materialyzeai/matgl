@@ -16,7 +16,8 @@ class GraphConverter(metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def get_graph(self, structure) -> tuple[Data, torch.Tensor, list | np.ndarray]:
-        """
+        """Get a graph from a structure.
+
         Args:
             structure: Input crystal or molecule (e.g., Pymatgen structure or molecule).
 
@@ -38,8 +39,7 @@ class GraphConverter(metaclass=abc.ABCMeta):
         frac_coords: np.ndarray | torch.Tensor,
         is_atoms: bool = False,
     ) -> tuple[Data, torch.Tensor, np.ndarray]:
-        """
-        Construct a PyTorch Geometric Data object from processed structure and bond information.
+        """Construct a PyTorch Geometric Data object from processed structure and bond information.
 
         Args:
             structure: Input crystal or molecule (Pymatgen structure, molecule, or ASE atoms).

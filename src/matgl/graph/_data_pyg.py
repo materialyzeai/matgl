@@ -22,8 +22,7 @@ if TYPE_CHECKING:
 
 
 def ensure_batch_attribute(data: Data) -> Data:
-    """
-    Ensure a PyG Data object has a batch attribute.
+    """Ensure a PyG Data object has a batch attribute.
 
     Args:
         data: PyG Data object.
@@ -60,8 +59,7 @@ def split_dataset(
 def collate_fn_graph(
     batch: list, multiple_values_per_target: bool = False
 ) -> tuple[Batch | Data, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Merge a list of PyG graphs to form a batch.
+    """Merge a list of PyG graphs to form a batch.
 
     Args:
         batch: List of tuples, each containing (graph, lattice, [line_graph,] state_attr, labels).
@@ -89,7 +87,11 @@ def collate_fn_graph(
 
 
 def collate_fn_pes(
-    batch: list, include_stress: bool = True, include_line_graph: bool = False, include_magmom: bool = False
+    batch: list,
+    include_stress: bool = True,
+    include_line_graph: bool = False,
+    include_magmom: bool = False,
+    include_charge: bool = False,
 ) -> tuple:
     """Merge a list of PyG Data objects to form a batch.
 
@@ -98,6 +100,7 @@ def collate_fn_pes(
         include_stress (bool): Whether to include stress tensors in the output
         include_line_graph (bool): Whether to include line graphs in the batch
         include_magmom (bool): Whether to include magnetic moments in the output
+        include_charge (bool): Whether to include per-atom charges in the output
 
     Returns:
         Tuple containing:
@@ -108,6 +111,7 @@ def collate_fn_pes(
         - f: Forces (num_atoms, 3)
         - s: Stresses (batch_size, 6) or zeros if include_stress=False
         - m: Magnetic moments (batch_size, ...) or zeros if include_magmom=False
+        - q: Per-atom charges concatenated across the batch (only when include_charge=True)
     """
     graphs, lattices, state_attr, labels = map(list, zip(*batch, strict=False))
 
@@ -120,10 +124,13 @@ def collate_fn_pes(
         else torch.zeros(e.size(0), dtype=matgl.float_th)
     )
     m = torch.vstack([d["magmoms"] for d in labels]) if include_magmom else torch.zeros(e.size(0), dtype=matgl.float_th)
+    q = torch.hstack([d["charges"] for d in labels]) if include_charge else torch.zeros(e.size(0), dtype=matgl.float_th)
     state_attr = torch.stack(state_attr)  # type:ignore[assignment]
     lat = lattices[0] if g.batch_size == 1 else torch.squeeze(torch.stack(lattices))
     if include_magmom:
         return g, lat.squeeze(), state_attr, e, f, s, m
+    if include_charge:
+        return g, lat.squeeze(), state_attr, e, f, s, q
     return g, lat.squeeze(), state_attr, e, f, s
 
 
@@ -166,6 +173,7 @@ class MGLDataset(Dataset):
         filename_state_attr: str = "state_attr.pt",
         filename_labels: str = "labels.json",
         include_line_graph: bool = False,
+        include_ref_charge: bool = False,
         converter: GraphConverter | None = None,
         structures: list | None = None,
         labels: dict[str, list] | None = None,
@@ -177,7 +185,8 @@ class MGLDataset(Dataset):
         pre_transform=None,
         pre_filter=None,
     ):
-        """
+        """Initialize the MGLDataset.
+
         Args:
             filename: File name for storing PyG graphs.
             filename_lattice: File name for storing lattice matrices.
@@ -185,13 +194,14 @@ class MGLDataset(Dataset):
             filename_state_attr: File name for storing state attributes.
             filename_labels: File name for storing labels.
             include_line_graph: Whether to include line graphs.
+            include_ref_charge: Whether to attach reference charges as ``data.q_ref`` for use by QEq.
             converter: Graph converter for PyG (converts structures to Data objects).
             structures: Pymatgen structures.
             labels: Targets as a dict of {name: list of values}.
             root: Root directory where the dataset should be saved.
             transform: A function/transform that takes in a Data or HeteroData object and returns a transformed version.
             pre_transform: A function/transform that takes in a Data or HeteroData object
-                           and returns a transformed version.
+                and returns a transformed version.
             pre_filter: A function that takes in a Data or HeteroData object and returns a boolean value.
             directory_name: Name of the directory to store the dataset.
             graph_labels: State attributes.
@@ -204,6 +214,7 @@ class MGLDataset(Dataset):
         self.filename_state_attr = filename_state_attr
         self.filename_labels = filename_labels
         self.include_line_graph = include_line_graph
+        self.include_ref_charge = include_ref_charge
         self.converter = converter
         self.structures = structures or []
         self.labels = labels or {}
@@ -248,6 +259,9 @@ class MGLDataset(Dataset):
                 data, lattice, state_attr = self.converter.get_graph(structure)
                 data = data.to(device="cpu")
                 lattice = lattice.to(device="cpu")
+
+                if self.include_ref_charge:
+                    data.q_ref = torch.tensor(self.labels["charges"][idx], dtype=matgl.float_th)
 
                 graphs.append(data)
                 lattices.append(lattice)

@@ -76,7 +76,7 @@ class TensorNet(MatGLModel):
         ntargets: int = 1,
         **kwargs,
     ):
-        r"""
+        r"""Initialize the TensorNet (DGL) model.
 
         Args:
             element_types (tuple): List of elements appearing in the dataset. Default to DEFAULT_ELEMENTS.
@@ -100,7 +100,7 @@ class TensorNet(MatGLModel):
             equivariance_invariance_group (string, optional): Group under whose action on input
                 positions internal tensor features will be equivariant and scalar predictions
                 will be invariant. O(3) or SO(3).
-               (default :obj:`"O(3)"`)
+                (default :obj:`"O(3)"`)
             dtype (torch.dtype): data type for all variables
             width (float): the width of Gaussian radial basis functions
             readout_type (str): Readout function type, `set2set`, `weighted_atom` (default) or `reduce_atom`.
@@ -111,7 +111,6 @@ class TensorNet(MatGLModel):
             is_intensive (bool): Whether the prediction is intensive
             ntargets (int): Number of target properties
             **kwargs: For future flexibility. Not used at the moment.
-
         """
         super().__init__()
 
@@ -207,9 +206,11 @@ class TensorNet(MatGLModel):
         activation: nn.Module,
         task_type: Literal["classification", "regression"],
     ) -> None:
-        """Build the readout / ``final_layer`` modules. Override in a subclass to
-        skip or replace the default readout construction (e.g. ``QET`` builds its
-        own atomic-energy head over a wider concatenated node feature).
+        """Build the readout / ``final_layer`` modules.
+
+        Override in a subclass to skip or replace the default readout construction
+        (e.g. ``QET`` builds its own atomic-energy head over a wider concatenated
+        node feature).
         """
         if self.is_intensive:
             input_feats = units
@@ -301,16 +302,16 @@ class TensorNet(MatGLModel):
         return_all_layer_output: bool = False,
         **kwargs,
     ):
-        """
+        """Forward pass for TensorNet (DGL).
 
         Args:
-            g : DGLGraph for a batch of graphs.
+            g: DGLGraph for a batch of graphs.
             state_attr: State attrs for a batch of graphs.
             return_all_layer_output: Whether to return outputs of all layers.
             **kwargs: For future flexibility. Not used at the moment.
 
         Returns:
-            output: output: Output property for a batch of graphs
+            output: Output property for a batch of graphs
         """
         fea_dict = self.forward_features(g=g, state_attr=state_attr)
 

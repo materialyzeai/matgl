@@ -1,4 +1,8 @@
-"""Tests for the PyG QET model, including DGL <-> PyG numerical parity."""
+"""Tests for the QET model on whichever backend is currently active.
+
+DGL <-> PyG numerical-parity tests are also defined here and run only when both
+backends are importable in the current environment.
+"""
 
 from __future__ import annotations
 
@@ -11,10 +15,14 @@ import torch
 
 import matgl
 
-if matgl.config.BACKEND != "PYG":
-    pytest.skip("Skipping PyG tests", allow_module_level=True)
+BACKEND = matgl.config.BACKEND
 
-from matgl.models._qet_pyg import QET
+if BACKEND == "DGL":
+    from matgl.models._qet_dgl import QET
+elif BACKEND == "PYG":
+    from matgl.models._qet_pyg import QET  # type: ignore[assignment]
+else:
+    pytest.skip(f"Unsupported backend: {BACKEND}", allow_module_level=True)
 
 
 def _has_dgl() -> bool:
@@ -25,36 +33,54 @@ def _has_dgl() -> bool:
     return True
 
 
-def test_qet_pyg(graph_MoS_pyg):
+def _make_qet(**overrides):
+    """Construct QET, suppressing the warp kernel on PYG so the pure-PyTorch path runs."""
+    if BACKEND == "PYG":
+        overrides.setdefault("use_warp", False)
+    return QET(**overrides)
+
+
+def test_qet(graph_MoS):
     """Forward across activations + save/load + SO(3) variant."""
     torch.manual_seed(0)
     torch.use_deterministic_algorithms(True)
 
-    _, graph, _ = graph_MoS_pyg
+    expected = {
+        "swish": torch.tensor(-0.0112),
+        "tanh": torch.tensor(-0.1138),
+        "sigmoid": torch.tensor(0.1377),
+        "softplus2": torch.tensor(0.0127),
+        "softexp": torch.tensor(0.0819),
+    }
+
+    _, graph, _ = graph_MoS
+
     activations = ["swish", "tanh", "sigmoid", "softplus2", "softexp"]
 
     for act in activations:
-        model = QET(is_intensive=False, activation_type=act, use_warp=False)
+        model = _make_qet(is_intensive=False, activation_type=act)
         output = model(g=graph, total_charge=torch.tensor([0.0]))
         assert torch.numel(output) == 1
+        if BACKEND == "DGL" and act in expected:
+            assert torch.allclose(output, expected[act], atol=1e-4)
 
-    # Save / load round-trip
     model.save(".")
     QET.load(".")
     for fname in ("model.pt", "model.json", "state.pt"):
         os.remove(fname)
 
-    # SO(3) variant constructs cleanly
-    model = QET(is_intensive=False, equivariance_invariance_group="SO(3)", use_warp=False)
+    model = _make_qet(is_intensive=False, equivariance_invariance_group="SO(3)")
     output = model(g=graph, total_charge=torch.tensor([0.0]))
     assert torch.numel(output) == 1
 
 
-def test_qet_pyg_return_features(graph_MoS_pyg):
+def test_qet_return_features(graph_MoS):
     """`return_features=True` returns (node_feat, atomic_energies) with the right shapes."""
+    if BACKEND != "PYG":
+        pytest.skip("`return_features` is currently only exposed by the PYG QET implementation.")
     torch.manual_seed(0)
-    _, graph, _ = graph_MoS_pyg
-    model = QET(is_intensive=False, return_features=True, use_warp=False)
+    _, graph, _ = graph_MoS
+    model = _make_qet(is_intensive=False, return_features=True)
     node_feat, atomic_energies = model(g=graph, total_charge=torch.tensor([0.0]))
     n_nodes = graph.pos.shape[0]
     # +1 charge, +1 elec_pot
@@ -62,22 +88,24 @@ def test_qet_pyg_return_features(graph_MoS_pyg):
     assert atomic_energies.shape[0] == n_nodes
 
 
-def test_qet_pyg_include_magmom(graph_MoS_pyg):
-    """Smoke-check the magmom branch."""
+def test_qet_include_magmom(graph_MoS):
+    if BACKEND != "PYG":
+        pytest.skip("`include_magmom` is currently only exposed by the PYG QET implementation.")
     torch.manual_seed(0)
-    _, graph, _ = graph_MoS_pyg
-    model = QET(is_intensive=False, include_magmom=True, return_features=True, use_warp=False)
+    _, graph, _ = graph_MoS
+    model = _make_qet(is_intensive=False, include_magmom=True, return_features=True)
     node_feat, _ = model(g=graph, total_charge=torch.tensor([0.0]))
     n_nodes = graph.pos.shape[0]
     # +1 charge, +1 elec_pot, +1 magmom
     assert node_feat.shape == (n_nodes, model.units + 3)
 
 
-def test_qet_pyg_is_hardness_envs(graph_MoS_pyg):
-    """Smoke-check the environment-dependent hardness branch (MLP head instead of per-element parameter)."""
+def test_qet_is_hardness_envs(graph_MoS):
+    if BACKEND != "PYG":
+        pytest.skip("`is_hardness_envs` is currently only exposed by the PYG QET implementation.")
     torch.manual_seed(0)
-    _, graph, _ = graph_MoS_pyg
-    model = QET(is_intensive=False, is_hardness_envs=True, use_warp=False)
+    _, graph, _ = graph_MoS
+    model = _make_qet(is_intensive=False, is_hardness_envs=True)
     output = model(g=graph, total_charge=torch.tensor([0.0]))
     assert torch.numel(output) == 1
 
@@ -85,16 +113,18 @@ def test_qet_pyg_is_hardness_envs(graph_MoS_pyg):
 @pytest.mark.skipif(not _has_dgl(), reason="DGL not importable in this environment")
 def test_qet_dgl_pyg_parity(MoS):
     """DGL and PyG QET produce equal energies on the same structure with shared weights."""
+    if BACKEND != "PYG":
+        pytest.skip("Cross-backend parity test is driven from the PYG side.")
     import dgl  # noqa: F401  (proves DGL is importable in this env)
 
     from matgl.ext._pymatgen_dgl import Structure2Graph as Structure2GraphDGL
     from matgl.ext._pymatgen_pyg import Structure2Graph as Structure2GraphPyG
     from matgl.models._qet_dgl import QET as QETDGL
+    from matgl.models._qet_pyg import QET as QETPyG
 
     elements = ("Mo", "S")
     cutoff = 5.0
 
-    # Build identical-input graphs in both backends.
     conv_dgl = Structure2GraphDGL(element_types=elements, cutoff=cutoff)
     g_dgl, lat_dgl, _ = conv_dgl.get_graph(MoS)
     g_dgl.edata["pbc_offshift"] = torch.matmul(g_dgl.edata["pbc_offset"], lat_dgl[0])
@@ -105,19 +135,13 @@ def test_qet_dgl_pyg_parity(MoS):
     g_pyg.pbc_offshift = torch.matmul(g_pyg.pbc_offset, lat_pyg[0])
     g_pyg.pos = g_pyg.frac_coords @ lat_pyg[0]
 
-    # Construct both models with identical config and copy weights from PyG -> DGL.
     torch.manual_seed(42)
     torch.use_deterministic_algorithms(True)
-    pyg_model = QET(element_types=elements, is_intensive=False, cutoff=cutoff, use_warp=False).eval()
+    pyg_model = QETPyG(element_types=elements, is_intensive=False, cutoff=cutoff, use_warp=False).eval()
     torch.manual_seed(42)
     dgl_model = QETDGL(element_types=elements, is_intensive=False, cutoff=cutoff).eval()
 
-    # Both models share the same architecture and key names since QET DGL and PyG
-    # both subclass their respective TensorNet. Load PyG state into DGL with strict=False
-    # (some buffers like `pi`, `sqrt2` exist in both backends and match by name).
     missing, _unexpected = dgl_model.load_state_dict(pyg_model.state_dict(), strict=False)
-    # Allow a small set of buffers / module-internal differences but require all
-    # trainable weights to load on both sides.
     trainable_keys_pyg = {k for k, v in pyg_model.state_dict().items() if v.dtype.is_floating_point}
     not_loaded = trainable_keys_pyg.intersection(missing)
     assert not not_loaded, f"Trainable PyG keys missing from DGL state_dict: {sorted(not_loaded)[:5]}"
@@ -129,24 +153,16 @@ def test_qet_dgl_pyg_parity(MoS):
 
 @pytest.mark.skipif(not _has_dgl(), reason="DGL not importable in this environment")
 def test_qet_dgl_pyg_training_parity(MoS):
-    """Train QET DGL and QET PyG for ~10 epochs on a 5-structure MoS toy dataset
-    and assert that per-structure energies / forces stay equal across backends.
-
-    Dataset: the conftest ``MoS`` (cubic 4 A, Mo[0,0,0], S[0.5,0.5,0.5]) plus 4
-    small fractional-coord perturbations. Reference labels: charges of +4 / -2
-    on the base structure (sum fed via ``total_charge``), with small per-structure
-    perturbations of charge / energy / force on the others. Loss is energy MSE +
-    force MSE; same Adam optimizer, same data ordering, no shuffling.
-
-    Both models start from identical weights (PyG state copied into DGL) and
-    must produce step-by-step identical predictions throughout training; the
-    only allowed drift is float32 round-off in scatter / aggregation order.
-    """
+    """Train QET DGL and QET PyG on a 5-structure MoS toy dataset and assert
+    per-structure energies / forces stay equal across backends."""
+    if BACKEND != "PYG":
+        pytest.skip("Cross-backend training-parity test is driven from the PYG side.")
     import dgl  # noqa: F401
 
     from matgl.ext._pymatgen_dgl import Structure2Graph as Structure2GraphDGL
     from matgl.ext._pymatgen_pyg import Structure2Graph as Structure2GraphPyG
     from matgl.models._qet_dgl import QET as QETDGL
+    from matgl.models._qet_pyg import QET as QETPyG
 
     elements = ("Mo", "S")
     cutoff = 5.0
@@ -154,7 +170,6 @@ def test_qet_dgl_pyg_training_parity(MoS):
     n_epochs = 10
     seed = 0
 
-    # --- Build toy dataset (5 structures + reference q / E / F) -----------
     rng = np.random.default_rng(seed)
     structures, ref_q, ref_E, ref_F = [], [], [], []
     for i in range(n_structures):
@@ -172,7 +187,6 @@ def test_qet_dgl_pyg_training_parity(MoS):
     ref_F_t = [torch.tensor(f, dtype=torch.get_default_dtype()) for f in ref_F]
     total_q = [torch.tensor([float(q.sum())], dtype=torch.get_default_dtype()) for q in ref_q]
 
-    # --- Backend graph builders ------------------------------------------
     conv_dgl = Structure2GraphDGL(element_types=elements, cutoff=cutoff)
     conv_pyg = Structure2GraphPyG(element_types=elements, cutoff=cutoff)
 
@@ -225,9 +239,8 @@ def test_qet_dgl_pyg_training_parity(MoS):
             fs.append(f_p.detach().clone())
         return es, fs
 
-    # --- Build models with identical weights ------------------------------
     torch.manual_seed(seed)
-    pyg_model = QET(element_types=elements, is_intensive=False, cutoff=cutoff, use_warp=False).train()
+    pyg_model = QETPyG(element_types=elements, is_intensive=False, cutoff=cutoff, use_warp=False).train()
     torch.manual_seed(seed)
     dgl_model = QETDGL(element_types=elements, is_intensive=False, cutoff=cutoff).train()
     missing, _ = dgl_model.load_state_dict(pyg_model.state_dict(), strict=False)
@@ -235,11 +248,9 @@ def test_qet_dgl_pyg_training_parity(MoS):
     not_loaded = trainable_pyg.intersection(missing)
     assert not not_loaded, f"Trainable PyG keys missing from DGL state_dict: {sorted(not_loaded)[:5]}"
 
-    # --- Train both backends ---------------------------------------------
     _train(pyg_model, _forward_pyg, _pyg_graphs())
     _train(dgl_model, _forward_dgl, _dgl_graphs())
 
-    # --- Compare post-training predictions on every structure ------------
     e_pyg, f_pyg = _predict(pyg_model, _forward_pyg, _pyg_graphs())
     e_dgl, f_dgl = _predict(dgl_model, _forward_dgl, _dgl_graphs())
 

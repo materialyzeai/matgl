@@ -5,6 +5,7 @@ import os
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # Required for deterministic CUDA operations
 
 import shutil
+from functools import partial
 
 # This function is used for M3GNet property dataset
 import lightning as pl
@@ -19,6 +20,7 @@ if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)
 from matgl.ext._pymatgen_pyg import Structure2Graph, get_element_list
 from matgl.graph._data_pyg import MGLDataLoader, MGLDataset, collate_fn_pes, split_dataset
+from matgl.models._qet_pyg import QET
 from matgl.models._tensornet_pyg import TensorNet
 from matgl.utils._training_pyg import (
     ModelLightningModule,
@@ -106,6 +108,59 @@ class TestModelTrainer:
         # We are not expecting accuracy with 10 epochs. This just tests that the energy is actually < 0.
         assert torch.all(pred_LFP_energy < 0)
         assert torch.all(pred_BNO_energy < 0)
+
+        self.teardown_class()
+
+    def test_qet_training(self, LiFePO4, BaNiO3):
+        torch.manual_seed(0)
+        structures = [LiFePO4, BaNiO3] * 5
+        energies = [-2.0, -3.0] * 5
+        forces = [np.zeros((len(s), 3)).tolist() for s in structures]
+        charges = [np.zeros(len(s)).tolist() for s in structures]
+        stresses = [np.zeros((3, 3)).tolist()] * len(structures)
+        element_types = get_element_list([LiFePO4, BaNiO3])
+        converter = Structure2Graph(element_types=element_types, cutoff=5.0)
+        dataset = MGLDataset(
+            structures=structures,
+            converter=converter,
+            include_ref_charge=True,
+            labels={"energies": energies, "forces": forces, "stresses": stresses, "charges": charges},
+            save_cache=False,
+        )
+        train_data, val_data, test_data = split_dataset(
+            dataset,
+            frac_list=[0.8, 0.1, 0.1],
+            shuffle=True,
+            random_state=42,
+        )
+        train_loader, val_loader, test_loader = MGLDataLoader(
+            train_data=train_data,
+            val_data=val_data,
+            test_data=test_data,
+            collate_fn=partial(collate_fn_pes, include_charge=True),
+            batch_size=2,
+            num_workers=0,
+            generator=torch.Generator(device=device),
+        )
+        model = QET(element_types=element_types, is_intensive=False, use_smooth=True, rbf_type="SphericalBessel")
+        lit_model = PotentialLightningModule(
+            model=model,
+            stress_weight=0.0001,
+            charge_weight=0.001,
+            loss="smooth_l1_loss",
+            loss_params={"beta": 1.0},
+        )
+        trainer = pl.Trainer(max_epochs=2, accelerator=device, inference_mode=False)
+
+        trainer.fit(model=lit_model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+        trainer.test(lit_model, dataloaders=test_loader)
+
+        pred_LFP_energy = model.predict_structure(LiFePO4, total_charge=torch.tensor([0.0]))
+        pred_BNO_energy = model.predict_structure(BaNiO3, total_charge=torch.tensor([0.0]))
+
+        # Loose check: energies should be finite after a 2-epoch run.
+        assert torch.isfinite(pred_LFP_energy).all()
+        assert torch.isfinite(pred_BNO_energy).all()
 
         self.teardown_class()
 

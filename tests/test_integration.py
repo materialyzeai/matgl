@@ -9,14 +9,6 @@ import pytest
 import matgl
 
 
-@pytest.mark.skipif(matgl.config.BACKEND != "DGL", reason="Only works with DGL.")
-def test_form_e(LiFePO4):
-    model = matgl.load_model("M3GNet-Eform-MP-2018.6.1")
-    for _i in range(3):
-        # This loop ensures there is no stochasticity in the prediction, a problem in v1 of the models.
-        assert model.predict_structure(LiFePO4) == pytest.approx(-2.5489, 3)
-
-
 @pytest.mark.skipif(os.getenv("CI") == "true" or matgl.config.BACKEND != "DGL", reason="Unreliable in CI environments.")
 def test_loading_all_models():
     """

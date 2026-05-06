@@ -1,1 +1,1 @@
-"""This package implements data manipulation tools."""
+"""Data manipulation tools."""
