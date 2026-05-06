@@ -22,7 +22,7 @@ MATGL_CACHE = Path(os.path.expanduser("~")) / ".cache/matgl"
 os.makedirs(MATGL_CACHE, exist_ok=True)
 
 # Set the backend. Note that not all models are available for all backends.
-BACKEND: Literal["PYG", "DGL"] = os.environ.get("MATGL_BACKEND", "DGL").upper()  # type: ignore[assignment,return-value]
+BACKEND: Literal["PYG", "DGL"] = os.environ.get("MATGL_BACKEND", "PYG").upper()  # type: ignore[assignment,return-value]
 
 
 def ensure_backend(backend: Literal["DGL", "PYG"]) -> None:
