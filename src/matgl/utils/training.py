@@ -1,27 +1,18 @@
-"""Utils for training MatGL models.
+"""Public re-exports for the unified MatGL training scaffolding.
 
-This module provides a unified interface for training MatGL models, automatically
-selecting the appropriate backend implementation (DGL or PyG) based on the configured backend.
+The actual implementation lives in :mod:`matgl.utils._training`. That module branches
+internally on ``matgl.config.BACKEND`` for the small number of methods that touch
+backend-specific graph attributes; everything else is shared.
 """
 
 from __future__ import annotations
 
-from matgl.config import BACKEND
-
-if BACKEND == "DGL":
-    from matgl.utils._training_dgl import (
-        MatglLightningModuleMixin,
-        ModelLightningModule,
-        PotentialLightningModule,
-        xavier_init,
-    )
-else:
-    from matgl.utils._training_pyg import (  # type: ignore[assignment]
-        MatglLightningModuleMixin,
-        ModelLightningModule,
-        PotentialLightningModule,
-        xavier_init,
-    )
+from matgl.utils._training import (
+    MatglLightningModuleMixin,
+    ModelLightningModule,
+    PotentialLightningModule,
+    xavier_init,
+)
 
 __all__ = [
     "MatglLightningModuleMixin",

@@ -22,7 +22,7 @@ from matgl.ext._pymatgen_pyg import Structure2Graph, get_element_list
 from matgl.graph._data_pyg import MGLDataLoader, MGLDataset, collate_fn_pes, split_dataset
 from matgl.models._qet_pyg import QET
 from matgl.models._tensornet_pyg import TensorNet
-from matgl.utils._training_pyg import (
+from matgl.utils.training import (
     ModelLightningModule,
     PotentialLightningModule,
     xavier_init,

@@ -1,4 +1,11 @@
-"""Utils for training MatGL models."""
+"""Utils for training MatGL models.
+
+This module hosts the Lightning training scaffolding used by both DGL and PyG
+backends. The graph-attribute access pattern differs between the two frameworks
+(``g.edata`` / ``batch_num_nodes()`` for DGL vs ``g.pos`` / ``g.batch`` for PyG),
+so a small handful of methods branch on ``matgl.config.BACKEND``. Everything else
+(loss, optimizer, scheduler, logging, the public class layout) is shared.
+"""
 
 from __future__ import annotations
 
@@ -11,10 +18,14 @@ import torch.nn.functional as F
 import torchmetrics
 from torch import nn
 
-from matgl.apps._pes_dgl import Potential
+from matgl.config import BACKEND
+
+if BACKEND == "DGL":
+    from matgl.apps._pes_dgl import Potential
+else:
+    from matgl.apps._pes_pyg import Potential  # type: ignore[assignment]
 
 if TYPE_CHECKING:
-    import dgl
     import numpy as np
     from torch.optim import Optimizer
     from torch.optim.lr_scheduler import LRScheduler
@@ -198,27 +209,42 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
 
     def forward(
         self,
-        g: dgl.DGLGraph,
+        g: Any,
         lat: torch.Tensor | None = None,
-        l_g: dgl.DGLGraph | None = None,
+        l_g: Any = None,
         state_attr: torch.Tensor | None = None,
     ):
         """Run the wrapped model.
 
+        Attaches per-node ``pos`` and per-edge ``pbc_offshift`` tensors derived from
+        ``frac_coords`` / ``pbc_offset`` and the supplied lattice(s), then delegates
+        to the wrapped model.
+
         Args:
-            g: dgl Graph
-            lat: lattice
-            l_g: Line graph
-            state_attr: State attribute.
+            g: Backend graph (DGL ``DGLGraph`` or PyG ``Data``/``Batch``).
+            lat: Lattice tensor. ``(3, 3)`` for a single graph or ``(B, 3, 3)`` when batched.
+            l_g: Optional line graph.
+            state_attr: Optional state attribute.
 
         Returns:
             Model prediction.
         """
-        g.edata["lattice"] = torch.repeat_interleave(lat, g.batch_num_edges(), dim=0)  # type:ignore[arg-type]
-        g.edata["pbc_offshift"] = (g.edata["pbc_offset"].unsqueeze(dim=-1) * g.edata["lattice"]).sum(dim=1)
-        g.ndata["pos"] = (
-            g.ndata["frac_coords"].unsqueeze(dim=-1) * torch.repeat_interleave(lat, g.batch_num_nodes(), dim=0)  # type:ignore[arg-type]
-        ).sum(dim=1)
+        if BACKEND == "DGL":
+            g.edata["lattice"] = torch.repeat_interleave(lat, g.batch_num_edges(), dim=0)  # type:ignore[arg-type]
+            g.edata["pbc_offshift"] = (g.edata["pbc_offset"].unsqueeze(dim=-1) * g.edata["lattice"]).sum(dim=1)
+            g.ndata["pos"] = (
+                g.ndata["frac_coords"].unsqueeze(dim=-1) * torch.repeat_interleave(lat, g.batch_num_nodes(), dim=0)  # type:ignore[arg-type]
+            ).sum(dim=1)
+        elif lat is not None:
+            if lat.dim() == 2:
+                lat = lat.unsqueeze(0)
+            batch = getattr(g, "batch", None)
+            if batch is None:
+                batch = torch.zeros(g.num_nodes, dtype=torch.long, device=g.frac_coords.device)
+            node_lat = lat[batch]
+            g.pos = (g.frac_coords.unsqueeze(dim=-1) * node_lat).sum(dim=1)
+            edge_lat = lat[batch[g.edge_index[0]]]
+            g.pbc_offshift = (g.pbc_offset.unsqueeze(dim=-1) * edge_lat).sum(dim=1)
         if self.include_line_graph:
             return self.model(g=g, l_g=l_g, state_attr=state_attr)
         return self.model(g, state_attr=state_attr)
@@ -336,7 +362,6 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         self.stress_weight = stress_weight
         self.magmom_weight = magmom_weight
         self.charge_weight = charge_weight
-
         self.lr = lr
         self.decay_steps = decay_steps
         self.decay_alpha = decay_alpha
@@ -382,18 +407,18 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
 
     def forward(
         self,
-        g: dgl.DGLGraph,
+        g: Any,
         lat: torch.Tensor,
-        l_g: dgl.DGLGraph | None = None,
+        l_g: Any = None,
         state_attr: torch.Tensor | None = None,
     ) -> tuple:
         """Run the wrapped potential model.
 
         Args:
-            g: dgl Graph
-            lat: lattice
-            l_g: Line graph
-            state_attr: State attr.
+            g: Backend graph (DGL ``DGLGraph`` or PyG ``Data``/``Batch``).
+            lat: Lattice tensor.
+            l_g: Optional line graph.
+            state_attr: Optional state attribute.
 
         Returns:
             energy, force, stress, hessian and optional site_wise
@@ -442,19 +467,18 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             e, f, s, _, q = self(g=g, lat=lat, state_attr=state_attr)
             preds = (e, f, s, q.squeeze())
             labels = (energies, forces, stresses, charges.squeeze())
+        elif self.model.calc_magmom:
+            g, lat, state_attr, energies, forces, stresses, magmoms = batch
+            e, f, s, _, m = self(g=g, lat=lat, state_attr=state_attr)
+            preds = (e, f, s, m)
+            labels = (energies, forces, stresses, magmoms)
         else:
-            if self.model.calc_magmom:
-                g, lat, state_attr, energies, forces, stresses, magmoms = batch
-                e, f, s, _, m = self(g=g, lat=lat, state_attr=state_attr)
-                preds = (e, f, s, m)
-                labels = (energies, forces, stresses, magmoms)
-            else:
-                g, lat, state_attr, energies, forces, stresses = batch
-                e, f, s, _ = self(g=g, lat=lat, state_attr=state_attr)
-                preds = (e, f, s)
-                labels = (energies, forces, stresses)
+            g, lat, state_attr, energies, forces, stresses = batch
+            e, f, s, _ = self(g=g, lat=lat, state_attr=state_attr)
+            preds = (e, f, s)
+            labels = (energies, forces, stresses)
 
-        num_atoms = g.batch_num_nodes()
+        num_atoms = g.batch_num_nodes() if BACKEND == "DGL" else torch.bincount(g.batch)
         results = self.loss_fn(
             loss=self.loss,  # type: ignore
             preds=preds,
@@ -466,11 +490,14 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         self._last_preds = preds
         self._last_labels = labels
         self._last_num_atoms = num_atoms
-        if "sample_idx" in g.ndata:
-            offsets = torch.cumsum(num_atoms, dim=0) - num_atoms
-            self._last_indices = g.ndata["sample_idx"][offsets].to(torch.long)
+        if BACKEND == "DGL":
+            if "sample_idx" in g.ndata:
+                offsets = torch.cumsum(num_atoms, dim=0) - num_atoms
+                self._last_indices = g.ndata["sample_idx"][offsets].to(torch.long)
+            else:
+                self._last_indices = None
         else:
-            self._last_indices = None
+            self._last_indices = getattr(g, "sample_idx", None)
 
         return results, batch_size
 
@@ -523,7 +550,7 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         labels: tuple,
         preds: tuple,
         num_atoms: torch.Tensor | None = None,
-    ):
+    ) -> dict[str, Any]:
         """Compute losses for EFS.
 
         Args:
@@ -539,8 +566,8 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
                 "Energy_MAE": e_mae,
                 "Force_MAE": f_mae,
                 "Stress_MAE": s_mae,
-                "Charge MAE": q_mae,
                 "Magmom_MAE": m_mae,
+                "Charge_MAE": q_mae,
                 "Energy_RMSE": e_rmse,
                 "Force_RMSE": f_rmse,
                 "Stress_RMSE": s_rmse,
