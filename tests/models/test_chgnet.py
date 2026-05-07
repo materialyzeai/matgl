@@ -126,12 +126,12 @@ def test_prediction_stability_against_graph_cutoff_perturbation(structure, three
     # numerical perturbation to solve the RuntimeError
     structure = request.getfixturevalue(structure)
 
-    potential1 = matgl.load_model("pretrained_models/CHGNet-MatPES-PBE-2025.2.10-2.7M-PES")
+    potential1 = matgl.load_model("CHGNet-PES-MatPES-PBE-2025.2.10")
     potential1.threebody_cutoff = threebody_cutoff
     calculator = PESCalculator(potential1)
     forces1 = calculator.get_forces(AseAtomsAdaptor.get_atoms(structure))
 
-    potential2 = matgl.load_model("pretrained_models/CHGNet-MatPES-PBE-2025.2.10-2.7M-PES")
+    potential2 = matgl.load_model("CHGNet-PES-MatPES-PBE-2025.2.10")
     potential2.model.threebody_cutoff = threebody_cutoff + 1e-6
     assert potential2.model.threebody_cutoff > threebody_cutoff
     calculator2 = PESCalculator(potential2)
