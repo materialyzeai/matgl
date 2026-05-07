@@ -22,6 +22,7 @@ from matgl.ext._pymatgen_dgl import Structure2Graph, get_element_list
 from matgl.graph._data_dgl import MGLDataLoader, MGLDataset, collate_fn_graph, collate_fn_pes
 from matgl.models import CHGNet, M3GNet, MEGNet, SO3Net, TensorNet
 from matgl.models._qet_dgl import QET
+from matgl.utils.callbacks import PredictionLogger, add_sample_indices
 from matgl.utils.training import ModelLightningModule, PotentialLightningModule, xavier_init
 
 module_dir = os.path.dirname(os.path.abspath(__file__))
@@ -953,3 +954,62 @@ def test_xavier_init(distribution):
         print(w)
         assert not torch.allclose(w, model.output_proj.layers[0].get_parameter("weight"))
         assert torch.allclose(torch.tensor(0.0), model.output_proj.layers[0].get_parameter("bias"))
+
+
+def test_prediction_logger(LiFePO4, BaNiO3, tmp_path):
+    structures = [LiFePO4, BaNiO3] * 5
+    energies = [-2.0, -3.0] * 5
+    forces = [np.zeros((len(s), 3)).tolist() for s in structures]
+    stresses = [np.zeros((3, 3)).tolist()] * len(structures)
+    element_types = get_element_list([LiFePO4, BaNiO3])
+    converter = Structure2Graph(element_types=element_types, cutoff=5.0)
+    dataset = MGLDataset(
+        structures=structures,
+        converter=converter,
+        labels={"energies": energies, "forces": forces, "stresses": stresses},
+        save_cache=False,
+    )
+    train_data, val_data, test_data = split_dataset(dataset, frac_list=[0.6, 0.2, 0.2], shuffle=True, random_state=42)
+    add_sample_indices(train_data)
+    add_sample_indices(val_data)
+    add_sample_indices(test_data)
+    train_loader, val_loader, test_loader = MGLDataLoader(
+        train_data=train_data,
+        val_data=val_data,
+        test_data=test_data,
+        collate_fn=collate_fn_pes,
+        batch_size=2,
+        num_workers=0,
+        generator=torch.Generator(device=device),
+    )
+    model = M3GNet(element_types=element_types, is_intensive=False)
+    lit_model = PotentialLightningModule(model=model, stress_weight=0.0)
+    logger = PredictionLogger(tmp_path / "preds", log_train=True, log_forces=True)
+    trainer = pl.Trainer(
+        max_epochs=2,
+        accelerator=device,
+        inference_mode=False,
+        enable_progress_bar=False,
+        logger=False,
+        enable_checkpointing=False,
+        callbacks=[logger],
+    )
+    trainer.fit(lit_model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    trainer.test(lit_model, dataloaders=test_loader)
+
+    n_train, n_val, n_test = len(train_data), len(val_data), len(test_data)
+    val_out = torch.load(tmp_path / "preds" / "val_predictions.pt", weights_only=True)
+    assert val_out["energy_pred"].shape == (2, n_val)
+    assert val_out["energy_true"].shape == (n_val,)
+    total_val_atoms = int(val_out["num_atoms"].sum())
+    assert val_out["force_pred"].shape == (2, total_val_atoms, 3)
+    assert val_out["force_true"].shape == (total_val_atoms, 3)
+
+    train_out = torch.load(tmp_path / "preds" / "train_predictions.pt", weights_only=True)
+    assert train_out["energy_pred"].shape == (2, n_train)
+    assert train_out["energy_true"].shape == (n_train,)
+
+    test_out = torch.load(tmp_path / "preds" / "test_predictions.pt", weights_only=True)
+    assert test_out["energy_pred"].shape == (n_test,)
+
+    teardown()
