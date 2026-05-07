@@ -172,9 +172,9 @@ class TestModelTrainer:
             pass
 
 
-def test_prediction_logger_callback(LiFePO4, BaNiO3, tmp_path):
-    """PredictionLogger callback captures per-epoch energy/force preds and persists them."""
-    from matgl.utils.callbacks import PredictionLogger
+def test_prediction_logger_train_and_val(LiFePO4, BaNiO3, tmp_path):
+    """PredictionLogger captures per-epoch train + val preds in a stable per-sample order."""
+    from matgl.utils.callbacks import PredictionLogger, add_sample_indices
 
     torch.manual_seed(0)
     structures = [LiFePO4, BaNiO3] * 4
@@ -195,6 +195,9 @@ def test_prediction_logger_callback(LiFePO4, BaNiO3, tmp_path):
         shuffle=True,
         random_state=42,
     )
+    add_sample_indices(train_data)
+    add_sample_indices(val_data)
+
     train_loader, val_loader = MGLDataLoader(
         train_data=train_data,
         val_data=val_data,
@@ -203,13 +206,15 @@ def test_prediction_logger_callback(LiFePO4, BaNiO3, tmp_path):
         num_workers=0,
         generator=torch.Generator(device=device),
     )
-    n_val_supercells = len(val_data)
-    n_val_atoms = sum(val_data[i][0].num_nodes for i in range(n_val_supercells))
+    n_train = len(train_data)
+    n_val = len(val_data)
+    n_train_atoms = sum(train_data[i][0].num_nodes for i in range(n_train))
+    n_val_atoms = sum(val_data[i][0].num_nodes for i in range(n_val))
 
     model = TensorNet(element_types=element_types, is_intensive=False, use_warp=False)
     lit_model = PotentialLightningModule(model=model, stress_weight=0.0, loss="mse_loss")
     log_path = tmp_path / "predictions.pt"
-    logger_cb = PredictionLogger(save_path=log_path)
+    logger_cb = PredictionLogger(save_path=log_path, log_train=True, log_validation=True)
     n_epochs = 3
     trainer = pl.Trainer(
         max_epochs=n_epochs,
@@ -223,23 +228,24 @@ def test_prediction_logger_callback(LiFePO4, BaNiO3, tmp_path):
     trainer.fit(model=lit_model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
     log = logger_cb.predictions
-    assert log["energy_preds"].shape == (n_epochs, n_val_supercells)
-    assert log["energy_labels"].shape == (n_val_supercells,)
-    assert log["energy_errors"].shape == (n_epochs, n_val_supercells)
-    assert log["force_preds"].shape == (n_epochs, n_val_atoms, 3)
-    assert log["force_labels"].shape == (n_val_atoms, 3)
-    assert log["force_errors"].shape == (n_epochs, n_val_atoms, 3)
+    assert log["train_energy_preds"].shape == (n_epochs, n_train)
+    assert log["train_energy_labels"].shape == (n_train,)
+    assert log["train_force_preds"].shape == (n_epochs, n_train_atoms, 3)
+    assert log["train_force_labels"].shape == (n_train_atoms, 3)
+    assert log["val_energy_preds"].shape == (n_epochs, n_val)
+    assert log["val_force_preds"].shape == (n_epochs, n_val_atoms, 3)
+    # Errors are preds - labels.
     assert torch.allclose(
-        log["energy_errors"],
-        log["energy_preds"] - log["energy_labels"].unsqueeze(0),
+        log["train_energy_errors"],
+        log["train_energy_preds"] - log["train_energy_labels"].unsqueeze(0),
     )
-    # Ground-truth forces in the val loader were all zero.
-    assert torch.allclose(log["force_labels"], torch.zeros(n_val_atoms, 3))
+    # Ground-truth forces in the loaders were all zero.
+    assert torch.allclose(log["train_force_labels"], torch.zeros(n_train_atoms, 3))
 
     assert log_path.exists()
     on_disk = torch.load(log_path, weights_only=True)
-    assert torch.equal(on_disk["energy_preds"], log["energy_preds"])
-    assert torch.equal(on_disk["force_preds"], log["force_preds"])
+    assert torch.equal(on_disk["train_energy_preds"], log["train_energy_preds"])
+    assert torch.equal(on_disk["val_energy_preds"], log["val_energy_preds"])
 
     try:
         shutil.rmtree("lightning_logs")
@@ -247,13 +253,13 @@ def test_prediction_logger_callback(LiFePO4, BaNiO3, tmp_path):
         pass
 
 
-def test_prediction_logger_in_memory_only(LiFePO4, BaNiO3):
-    """Without ``save_path``, PredictionLogger keeps the cumulative log in memory."""
+def test_prediction_logger_requires_indices(LiFePO4, BaNiO3):
+    """PredictionLogger raises a clear error when add_sample_indices wasn't called."""
     from matgl.utils.callbacks import PredictionLogger
 
     torch.manual_seed(0)
-    structures = [LiFePO4, BaNiO3] * 4
-    energies = [-2.0, -3.0] * 4
+    structures = [LiFePO4, BaNiO3] * 2
+    energies = [-2.0, -3.0] * 2
     forces = [np.zeros((len(s), 3)).tolist() for s in structures]
     stresses = [np.zeros((3, 3)).tolist()] * len(structures)
     element_types = get_element_list([LiFePO4, BaNiO3])
@@ -277,7 +283,7 @@ def test_prediction_logger_in_memory_only(LiFePO4, BaNiO3):
     lit_model = PotentialLightningModule(model=model, stress_weight=0.0, loss="mse_loss")
     logger_cb = PredictionLogger()
     trainer = pl.Trainer(
-        max_epochs=2,
+        max_epochs=1,
         accelerator=device,
         inference_mode=False,
         num_sanity_val_steps=0,
@@ -285,8 +291,8 @@ def test_prediction_logger_in_memory_only(LiFePO4, BaNiO3):
         logger=False,
         callbacks=[logger_cb],
     )
-    trainer.fit(model=lit_model, train_dataloaders=train_loader, val_dataloaders=val_loader)
-    assert logger_cb.predictions["energy_preds"].shape[0] == 2
+    with pytest.raises(RuntimeError, match="add_sample_indices"):
+        trainer.fit(model=lit_model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
     try:
         shutil.rmtree("lightning_logs")

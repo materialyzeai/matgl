@@ -955,9 +955,9 @@ def test_xavier_init(distribution):
         assert torch.allclose(torch.tensor(0.0), model.output_proj.layers[0].get_parameter("bias"))
 
 
-def test_prediction_logger_callback(LiFePO4, BaNiO3, tmp_path):
-    """PredictionLogger callback captures per-epoch energy/force preds (DGL backend)."""
-    from matgl.utils.callbacks import PredictionLogger
+def test_prediction_logger_train_and_val(LiFePO4, BaNiO3, tmp_path):
+    """PredictionLogger captures per-epoch train + val preds (DGL backend)."""
+    from matgl.utils.callbacks import PredictionLogger, add_sample_indices
 
     torch.manual_seed(0)
     structures = [LiFePO4, BaNiO3] * 4
@@ -980,6 +980,9 @@ def test_prediction_logger_callback(LiFePO4, BaNiO3, tmp_path):
         shuffle=True,
         random_state=42,
     )
+    add_sample_indices(train_data)
+    add_sample_indices(val_data)
+
     train_loader, val_loader = MGLDataLoader(
         train_data=train_data,
         val_data=val_data,
@@ -988,13 +991,15 @@ def test_prediction_logger_callback(LiFePO4, BaNiO3, tmp_path):
         num_workers=0,
         generator=torch.Generator(device=device),
     )
-    n_val_supercells = len(val_data)
-    n_val_atoms = sum(val_data[i][0].num_nodes() for i in range(n_val_supercells))
+    n_train = len(train_data)
+    n_val = len(val_data)
+    n_train_atoms = sum(train_data[i][0].num_nodes() for i in range(n_train))
+    n_val_atoms = sum(val_data[i][0].num_nodes() for i in range(n_val))
 
     model = TensorNet(element_types=element_types, is_intensive=False)
     lit_model = PotentialLightningModule(model=model, stress_weight=0.0, loss="mse_loss")
     log_path = tmp_path / "predictions.pt"
-    logger_cb = PredictionLogger(save_path=log_path)
+    logger_cb = PredictionLogger(save_path=log_path, log_train=True, log_validation=True)
     n_epochs = 3
     trainer = pl.Trainer(
         max_epochs=n_epochs,
@@ -1008,15 +1013,17 @@ def test_prediction_logger_callback(LiFePO4, BaNiO3, tmp_path):
     trainer.fit(model=lit_model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
     log = logger_cb.predictions
-    assert log["energy_preds"].shape == (n_epochs, n_val_supercells)
-    assert log["energy_labels"].shape == (n_val_supercells,)
-    assert log["force_preds"].shape == (n_epochs, n_val_atoms, 3)
-    assert log["force_labels"].shape == (n_val_atoms, 3)
-    assert torch.allclose(log["energy_errors"], log["energy_preds"] - log["energy_labels"].unsqueeze(0))
+    assert log["train_energy_preds"].shape == (n_epochs, n_train)
+    assert log["train_force_preds"].shape == (n_epochs, n_train_atoms, 3)
+    assert log["val_energy_preds"].shape == (n_epochs, n_val)
+    assert log["val_force_preds"].shape == (n_epochs, n_val_atoms, 3)
+    assert torch.allclose(
+        log["train_energy_errors"],
+        log["train_energy_preds"] - log["train_energy_labels"].unsqueeze(0),
+    )
 
     assert log_path.exists()
     on_disk = torch.load(log_path, weights_only=True)
-    assert torch.equal(on_disk["energy_preds"], log["energy_preds"])
-    assert torch.equal(on_disk["force_preds"], log["force_preds"])
+    assert torch.equal(on_disk["train_energy_preds"], log["train_energy_preds"])
 
     teardown()
