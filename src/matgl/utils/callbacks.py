@@ -11,7 +11,7 @@ import torch
 import matgl
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Mapping
 
 
 def add_sample_indices(dataset: Any, start: int = 0) -> None:
@@ -49,11 +49,16 @@ def add_sample_indices(dataset: Any, start: int = 0) -> None:
 
 
 class PredictionLogger(pl.Callback):
-    """Capture per-epoch energy and force predictions, labels, and errors.
+    """Capture per-epoch predictions, labels, and errors during training.
 
     Plug into a ``lightning.Trainer`` via ``callbacks=[PredictionLogger(...)]`` while training
     a :class:`matgl.utils.training.PotentialLightningModule`. Default behaviour logs the
     **training** set; pass ``log_validation=True`` to also (or instead) log the validation set.
+
+    Energies and forces are always logged. Stresses and per-atom charges are logged
+    automatically when the wrapped potential computes them (i.e. when
+    ``model.calc_stresses`` / ``model.calc_charge`` is true) — pass ``log_stress=False`` or
+    ``log_charge=False`` to opt out.
 
     The dataset(s) being logged must be stamped with global indices via
     :func:`add_sample_indices` before training so that the ``(n_epochs, n_samples)`` log
@@ -63,11 +68,15 @@ class PredictionLogger(pl.Callback):
     After every (non-sanity-check) epoch the callback accumulates:
 
     - ``{train,val}_energy_preds``: ``(n_epochs, n_samples)`` total energies per supercell.
-    - ``{train,val}_energy_labels``: ``(n_samples,)`` ground-truth total energies (recorded once).
+    - ``{train,val}_energy_labels``: ``(n_samples,)`` ground-truth total energies.
     - ``{train,val}_energy_errors``: ``preds - labels``.
     - ``{train,val}_force_preds``: ``(n_epochs, n_atoms, 3)`` per-atom forces.
-    - ``{train,val}_force_labels``: ``(n_atoms, 3)`` ground-truth forces (recorded once).
+    - ``{train,val}_force_labels``: ``(n_atoms, 3)`` ground-truth forces.
     - ``{train,val}_force_errors``: ``preds - labels``.
+    - ``{train,val}_stress_preds`` (if logged): ``(n_epochs, n_samples, 3, 3)`` per-supercell stresses.
+    - ``{train,val}_stress_labels`` / ``..._errors`` analogously.
+    - ``{train,val}_charge_preds`` (if logged): ``(n_epochs, n_atoms)`` per-atom charges.
+    - ``{train,val}_charge_labels`` / ``..._errors`` analogously.
 
     Args:
         save_path: Optional path to persist the cumulative log to as a ``torch.save`` payload.
@@ -75,13 +84,19 @@ class PredictionLogger(pl.Callback):
             memory only, accessed via :attr:`predictions`.
         log_train: Log the training set (default).
         log_validation: Log the validation set in addition to / instead of training.
+        log_stress: Log stresses when ``model.calc_stresses`` is true (default).
+        log_charge: Log per-atom charges when ``model.calc_charge`` is true (default).
     """
+
+    _METRICS = ("e", "f", "s", "q")
 
     def __init__(
         self,
         save_path: str | Path | None = None,
         log_train: bool = True,
         log_validation: bool = False,
+        log_stress: bool = True,
+        log_charge: bool = True,
     ) -> None:
         """See class docstring."""
         super().__init__()
@@ -90,19 +105,17 @@ class PredictionLogger(pl.Callback):
         self.save_path: Path | None = Path(save_path) if save_path is not None else None
         self.log_train = log_train
         self.log_validation = log_validation
+        self.log_stress = log_stress
+        self.log_charge = log_charge
         # Per-epoch (current epoch) collected predictions, keyed by sample idx.
         self._epoch_train: dict[int, dict[str, torch.Tensor]] = {}
         self._epoch_val: dict[int, dict[str, torch.Tensor]] = {}
         # Per-epoch stacked tensors accumulated over all completed epochs.
-        self._train_e_preds: list[torch.Tensor] = []
-        self._train_f_preds: list[torch.Tensor] = []
-        self._val_e_preds: list[torch.Tensor] = []
-        self._val_f_preds: list[torch.Tensor] = []
+        self._train_preds: dict[str, list[torch.Tensor]] = {m: [] for m in self._METRICS}
+        self._val_preds: dict[str, list[torch.Tensor]] = {m: [] for m in self._METRICS}
         # Ground truth, recorded once.
-        self._train_e_labels: torch.Tensor | None = None
-        self._train_f_labels: torch.Tensor | None = None
-        self._val_e_labels: torch.Tensor | None = None
-        self._val_f_labels: torch.Tensor | None = None
+        self._train_labels: dict[str, torch.Tensor | None] = dict.fromkeys(self._METRICS)
+        self._val_labels: dict[str, torch.Tensor | None] = dict.fromkeys(self._METRICS)
 
     # --- training hooks -------------------------------------------------------------------
 
@@ -122,18 +135,13 @@ class PredictionLogger(pl.Callback):
         """Capture per-sample preds for this training batch."""
         if not self.log_train:
             return
-        self._absorb(outputs, target=self._epoch_train)
+        self._absorb(outputs, target=self._epoch_train, pl_module=pl_module)
 
     def on_train_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         """Stack per-sample preds in idx order and append to running per-epoch lists."""
         if not self.log_train or not self._epoch_train:
             return
-        e_pred, f_pred, e_label, f_label = self._stack_epoch(self._epoch_train)
-        self._train_e_preds.append(e_pred)
-        self._train_f_preds.append(f_pred)
-        if self._train_e_labels is None:
-            self._train_e_labels = e_label
-            self._train_f_labels = f_label
+        self._absorb_epoch(self._epoch_train, self._train_preds, self._train_labels)
         if self.save_path is not None:
             self._save(self.save_path)
 
@@ -156,25 +164,24 @@ class PredictionLogger(pl.Callback):
         """Capture per-sample preds for this validation batch."""
         if not self.log_validation or trainer.sanity_checking:
             return
-        self._absorb(outputs, target=self._epoch_val)
+        self._absorb(outputs, target=self._epoch_val, pl_module=pl_module)
 
     def on_validation_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         """Stack per-sample validation preds and append to running per-epoch lists."""
         if not self.log_validation or trainer.sanity_checking or not self._epoch_val:
             return
-        e_pred, f_pred, e_label, f_label = self._stack_epoch(self._epoch_val)
-        self._val_e_preds.append(e_pred)
-        self._val_f_preds.append(f_pred)
-        if self._val_e_labels is None:
-            self._val_e_labels = e_label
-            self._val_f_labels = f_label
+        self._absorb_epoch(self._epoch_val, self._val_preds, self._val_labels)
         if self.save_path is not None:
             self._save(self.save_path)
 
     # --- helpers --------------------------------------------------------------------------
 
-    @staticmethod
-    def _absorb(outputs: Any, target: dict[int, dict[str, torch.Tensor]]) -> None:
+    def _absorb(
+        self,
+        outputs: Any,
+        target: dict[int, dict[str, torch.Tensor]],
+        pl_module: pl.LightningModule,
+    ) -> None:
         if not isinstance(outputs, dict) or "preds" not in outputs or "labels" not in outputs:
             raise RuntimeError(
                 "PredictionLogger requires a LightningModule whose training_step / "
@@ -189,32 +196,77 @@ class PredictionLogger(pl.Callback):
                 "`matgl.utils.callbacks.add_sample_indices(dataset)` on the dataset (or its "
                 "subset) you are logging before constructing the dataloader."
             )
-        e_pred = outputs["preds"][0].detach().cpu()
-        f_pred = outputs["preds"][1].detach().cpu()
-        e_label = outputs["labels"][0].detach().cpu()
-        f_label = outputs["labels"][1].detach().cpu()
+        preds = outputs["preds"]
+        labels = outputs["labels"]
+        model = getattr(pl_module, "model", None)
+        log_stress = self.log_stress and getattr(model, "calc_stresses", False)
+        log_charge = self.log_charge and getattr(model, "calc_charge", False) and len(preds) >= 4
+
+        e_pred = preds[0].detach().cpu()
+        f_pred = preds[1].detach().cpu()
+        e_label = labels[0].detach().cpu()
+        f_label = labels[1].detach().cpu()
+        # Stresses come back from collate_fn_pes / Potential as a flat (B*3, 3) stack —
+        # reshape into (B, 3, 3) so we can index per-sample.
+        if log_stress:
+            s_pred = preds[2].detach().cpu().reshape(-1, 3, 3)
+            s_label = labels[2].detach().cpu().reshape(-1, 3, 3)
+        if log_charge:
+            q_pred = preds[3].detach().cpu()
+            q_label = labels[3].detach().cpu()
+
         idx_list = indices.detach().cpu().tolist()
         n_atoms_list = num_atoms.detach().cpu().tolist()
         offset = 0
         for i, (idx, n) in enumerate(zip(idx_list, n_atoms_list, strict=False)):
-            target[int(idx)] = {
+            entry: dict[str, torch.Tensor] = {
                 "e_pred": e_pred[i].reshape(()),
                 "f_pred": f_pred[offset : offset + n],
                 "e_label": e_label[i].reshape(()),
                 "f_label": f_label[offset : offset + n],
             }
+            if log_stress:
+                entry["s_pred"] = s_pred[i]
+                entry["s_label"] = s_label[i]
+            if log_charge:
+                entry["q_pred"] = q_pred[offset : offset + n]
+                entry["q_label"] = q_label[offset : offset + n]
+            target[int(idx)] = entry
             offset += n
 
     @staticmethod
-    def _stack_epoch(
-        buf: dict[int, dict[str, torch.Tensor]],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _stack_epoch(buf: dict[int, dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
         sorted_idx = sorted(buf.keys())
-        e_pred = torch.stack([buf[i]["e_pred"] for i in sorted_idx])
-        f_pred = torch.cat([buf[i]["f_pred"] for i in sorted_idx], dim=0)
-        e_label = torch.stack([buf[i]["e_label"] for i in sorted_idx])
-        f_label = torch.cat([buf[i]["f_label"] for i in sorted_idx], dim=0)
-        return e_pred, f_pred, e_label, f_label
+        sample = buf[sorted_idx[0]]
+        out: dict[str, torch.Tensor] = {
+            "e_pred": torch.stack([buf[i]["e_pred"] for i in sorted_idx]),
+            "f_pred": torch.cat([buf[i]["f_pred"] for i in sorted_idx], dim=0),
+            "e_label": torch.stack([buf[i]["e_label"] for i in sorted_idx]),
+            "f_label": torch.cat([buf[i]["f_label"] for i in sorted_idx], dim=0),
+        }
+        if "s_pred" in sample:
+            out["s_pred"] = torch.stack([buf[i]["s_pred"] for i in sorted_idx])
+            out["s_label"] = torch.stack([buf[i]["s_label"] for i in sorted_idx])
+        if "q_pred" in sample:
+            out["q_pred"] = torch.cat([buf[i]["q_pred"] for i in sorted_idx], dim=0)
+            out["q_label"] = torch.cat([buf[i]["q_label"] for i in sorted_idx], dim=0)
+        return out
+
+    def _absorb_epoch(
+        self,
+        epoch_buf: dict[int, dict[str, torch.Tensor]],
+        preds_store: dict[str, list[torch.Tensor]],
+        labels_store: dict[str, torch.Tensor | None],
+    ) -> None:
+        stacked = self._stack_epoch(epoch_buf)
+        for m in self._METRICS:
+            pred_key = f"{m}_pred"
+            label_key = f"{m}_label"
+            if pred_key not in stacked:
+                continue
+            preds_store[m].append(stacked[pred_key])
+            if labels_store[m] is None:
+                labels_store[m] = stacked[label_key]
 
     @property
     def predictions(self) -> dict[str, torch.Tensor]:
@@ -224,47 +276,30 @@ class PredictionLogger(pl.Callback):
         Empty dict before the first epoch completes.
         """
         out: dict[str, torch.Tensor] = {}
-        out.update(
-            self._collect(
-                "train",
-                self._train_e_preds,
-                self._train_f_preds,
-                self._train_e_labels,
-                self._train_f_labels,
-            )
-        )
-        out.update(
-            self._collect(
-                "val",
-                self._val_e_preds,
-                self._val_f_preds,
-                self._val_e_labels,
-                self._val_f_labels,
-            )
-        )
+        out.update(self._collect("train", self._train_preds, self._train_labels))
+        out.update(self._collect("val", self._val_preds, self._val_labels))
         return out
 
     @staticmethod
     def _collect(
         prefix: str,
-        e_preds: Iterable[torch.Tensor],
-        f_preds: Iterable[torch.Tensor],
-        e_labels: torch.Tensor | None,
-        f_labels: torch.Tensor | None,
+        preds_store: dict[str, list[torch.Tensor]],
+        labels_store: dict[str, torch.Tensor | None],
     ) -> dict[str, torch.Tensor]:
-        e_preds_list = list(e_preds)
-        if not e_preds_list or e_labels is None or f_labels is None:
+        if not preds_store["e"] or labels_store["e"] is None:
             return {}
-        e_stack = torch.stack(e_preds_list, dim=0)
-        f_stack = torch.stack(list(f_preds), dim=0)
-        return {
-            f"{prefix}_energy_preds": e_stack,
-            f"{prefix}_energy_labels": e_labels,
-            f"{prefix}_energy_errors": e_stack - e_labels.unsqueeze(0),
-            f"{prefix}_force_preds": f_stack,
-            f"{prefix}_force_labels": f_labels,
-            f"{prefix}_force_errors": f_stack - f_labels.unsqueeze(0),
-        }
+        names = {"e": "energy", "f": "force", "s": "stress", "q": "charge"}
+        out: dict[str, torch.Tensor] = {}
+        for short, long in names.items():
+            preds_list = preds_store[short]
+            label = labels_store[short]
+            if not preds_list or label is None:
+                continue
+            stacked = torch.stack(preds_list, dim=0)
+            out[f"{prefix}_{long}_preds"] = stacked
+            out[f"{prefix}_{long}_labels"] = label
+            out[f"{prefix}_{long}_errors"] = stacked - label.unsqueeze(0)
+        return out
 
     def _save(self, path: Path) -> None:
         payload = self.predictions

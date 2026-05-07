@@ -1027,3 +1027,85 @@ def test_prediction_logger_train_and_val(LiFePO4, BaNiO3, tmp_path):
     assert torch.equal(on_disk["train_energy_preds"], log["train_energy_preds"])
 
     teardown()
+
+
+def test_prediction_logger_with_stress_and_charge(LiFePO4, BaNiO3, tmp_path):
+    """PredictionLogger captures per-epoch stress and per-atom charge predictions (DGL)."""
+    from matgl.utils.callbacks import PredictionLogger, add_sample_indices
+
+    torch.manual_seed(0)
+    structures = [LiFePO4, BaNiO3] * 4
+    energies = [-2.0, -3.0] * 4
+    forces = [np.zeros((len(s), 3)).tolist() for s in structures]
+    stresses = [np.zeros((3, 3)).tolist()] * len(structures)
+    charges = [np.zeros(len(s)).tolist() for s in structures]
+    element_types = get_element_list([LiFePO4, BaNiO3])
+    converter = Structure2Graph(element_types=element_types, cutoff=5.0)
+    dataset = MGLDataset(
+        threebody_cutoff=4.0,
+        structures=structures,
+        converter=converter,
+        include_line_graph=False,
+        include_ref_charge=True,
+        labels={"energies": energies, "forces": forces, "stresses": stresses, "charges": charges},
+        save_cache=False,
+    )
+    train_data, val_data, _ = split_dataset(
+        dataset,
+        frac_list=[0.5, 0.5, 0.0],
+        shuffle=True,
+        random_state=42,
+    )
+    add_sample_indices(train_data)
+    add_sample_indices(val_data)
+    train_loader, val_loader = MGLDataLoader(
+        train_data=train_data,
+        val_data=val_data,
+        collate_fn=partial(collate_fn_pes, include_charge=True),
+        batch_size=2,
+        num_workers=0,
+        generator=torch.Generator(device=device),
+    )
+    n_train = len(train_data)
+    n_val = len(val_data)
+    n_train_atoms = sum(train_data[i][0].num_nodes() for i in range(n_train))
+    n_val_atoms = sum(val_data[i][0].num_nodes() for i in range(n_val))
+
+    model = QET(element_types=element_types, is_intensive=False, use_smooth=True, rbf_type="SphericalBessel")
+    lit_model = PotentialLightningModule(
+        model=model,
+        stress_weight=0.0001,
+        charge_weight=0.001,
+        loss="mse_loss",
+    )
+    log_path = tmp_path / "predictions.pt"
+    logger_cb = PredictionLogger(save_path=log_path, log_train=True, log_validation=True)
+    n_epochs = 2
+    trainer = pl.Trainer(
+        max_epochs=n_epochs,
+        accelerator=device,
+        inference_mode=False,
+        num_sanity_val_steps=0,
+        enable_checkpointing=False,
+        logger=False,
+        callbacks=[logger_cb],
+    )
+    trainer.fit(model=lit_model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+
+    log = logger_cb.predictions
+    assert log["train_stress_preds"].shape == (n_epochs, n_train, 3, 3)
+    assert log["train_stress_labels"].shape == (n_train, 3, 3)
+    assert torch.allclose(
+        log["train_stress_errors"],
+        log["train_stress_preds"] - log["train_stress_labels"].unsqueeze(0),
+    )
+    assert log["train_charge_preds"].shape == (n_epochs, n_train_atoms)
+    assert log["train_charge_labels"].shape == (n_train_atoms,)
+    assert log["val_stress_preds"].shape == (n_epochs, n_val, 3, 3)
+    assert log["val_charge_preds"].shape == (n_epochs, n_val_atoms)
+
+    on_disk = torch.load(log_path, weights_only=True)
+    assert torch.equal(on_disk["train_stress_preds"], log["train_stress_preds"])
+    assert torch.equal(on_disk["train_charge_preds"], log["train_charge_preds"])
+
+    teardown()
