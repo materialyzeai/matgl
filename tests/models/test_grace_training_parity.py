@@ -9,12 +9,19 @@ implementations have different parametric forms (matgl uses
 ``LinearRadialFunction`` and a simpler indicator-mixing block; upstream
 ``GRACE_2LAYER_v1_24`` adds ``FCRight2Left`` projections, an
 ``MLPRadialFunction`` option, separate per-block readouts, etc.) so we
-neither expect, nor enforce, exact numerical agreement of weights or
-predictions. We only assert that
+do not expect exact numerical agreement of weights or predictions. We
+do, however, drive both sides with the *same* optimizer settings (Adam,
+``lr=0.01``, ``betas=(0.9, 0.999)``, ``eps=1e-8``) and assert numerical
+properties of the resulting loss trajectories:
 
-    (a) both training loops complete the requested number of Adam steps
-        without errors, and
-    (b) both end with a strictly smaller loss than they started with.
+    (a) both training loops produce only finite losses across all
+        ``N_STEPS`` Adam steps,
+    (b) each side reduces the loss by at least 50% from start to end,
+        and
+    (c) the two relative reduction ratios ``L_final / L_initial`` agree
+        within 1.5 decades — same Adam settings, same data, so the
+        learning curves should be in the same ballpark even though the
+        absolute loss scales differ between the two parametrizations.
 
 This module is **not** part of the regular ``pytest`` run: it skips
 automatically when ``tensorflow`` and ``tensorpotential`` are not
@@ -258,21 +265,72 @@ def _build_tp_batch(samples: list[dict], float_dtype):
     return tf_batch
 
 
-def _tp_step(model, train_function, lr: float, batch) -> float:
-    """One manual SGD step on the whole TP batch; returns scalar loss.
+class _ManualTFAdam:
+    """Hand-rolled TF Adam — same defaults as ``torch.optim.Adam``.
 
     We deliberately avoid ``tf.keras.optimizers.Adam`` (or any Keras
-    optimizer): TF 2.19 ships with Keras 3.14, whose ``Variable.__eq__``
-    fails inside ``Adam.update_step`` with
+    optimizer) here: TF 2.19 ships with Keras 3.14, whose
+    ``Variable.__eq__`` fails inside ``Adam.update_step`` with
 
         ValueError: Attempt to convert a value (<class 'bool'>) with an
         unsupported type (<class 'type'>) to a Tensor.
 
     when called against the ``tensorpotential`` variables. ``tensorpotential``
     sets ``TF_USE_LEGACY_KERAS=1`` to dodge this, but the flag arrives
-    too late once another test has already imported TF. A direct
-    ``var.assign_sub(lr * grad)`` keeps this test independent of the
-    Keras 3 / TF 2.19 optimizer plumbing entirely.
+    too late once another test has already imported TF.
+
+    A vanilla SGD step (the previous workaround) sidesteps Keras
+    entirely but diverges in one step at ``lr=0.01``: with the random
+    initialization of ``GRACE_2LAYER_v1_24`` the starting energy MSE is
+    ~10^6 (per-atom contributions of O(100 eV) before any energy shift
+    is fit), so raw-gradient updates at ``lr=0.01`` overshoot
+    catastrophically. Adam's variance-normalized update keeps the
+    effective step bounded, and mirroring ``torch.optim.Adam``'s
+    defaults (``beta1=0.9``, ``beta2=0.999``, ``eps=1e-8``) keeps the
+    matgl and TP sides on equal footing. Updates use only arithmetic
+    and ``assign_sub`` — never ``__eq__`` — so we are immune to the
+    Keras 3 plumbing entirely.
+    """
+
+    def __init__(
+        self,
+        variables,
+        lr: float,
+        beta1: float = 0.9,
+        beta2: float = 0.999,
+        eps: float = 1e-8,
+    ):
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
+        self.t = 0
+        self._m = [tf.Variable(tf.zeros_like(v), trainable=False) for v in variables]
+        self._v = [tf.Variable(tf.zeros_like(v), trainable=False) for v in variables]
+
+    def step(self, variables, grads) -> None:
+        """Apply one Adam update in-place to ``variables``."""
+        self.t += 1
+        bc1 = 1.0 - self.beta1**self.t
+        bc2 = 1.0 - self.beta2**self.t
+        for var, grad, m, v in zip(variables, grads, self._m, self._v, strict=True):
+            if grad is None:
+                continue
+            g = tf.cast(grad, var.dtype)
+            m.assign(self.beta1 * m + (1.0 - self.beta1) * g)
+            v.assign(self.beta2 * v + (1.0 - self.beta2) * g * g)
+            m_hat = m / bc1
+            v_hat = v / bc2
+            var.assign_sub(self.lr * m_hat / (tf.sqrt(v_hat) + self.eps))
+
+
+def _tp_step(model, train_function, optimizer: _ManualTFAdam, batch) -> float:
+    """One Adam step on the whole TP batch; returns scalar loss.
+
+    Uses :class:`_ManualTFAdam` rather than ``tf.keras.optimizers.Adam``
+    to dodge a Keras 3 / TF 2.19 ``Variable.__eq__`` bug; see that
+    class's docstring for the full rationale, including why a vanilla
+    SGD fallback is not viable here.
     """
     e_target = batch[tp_constants.DATA_REFERENCE_ENERGY]
     f_target = batch[tp_constants.DATA_REFERENCE_FORCES]
@@ -291,11 +349,7 @@ def _tp_step(model, train_function, lr: float, batch) -> float:
         loss = ENERGY_WEIGHT * loss_e + FORCE_WEIGHT * loss_f
     variables = model.variables_to_train
     grads = tape.gradient(loss, variables)
-    lr_t = tf.constant(lr, dtype=tf.float64)
-    for var, grad in zip(variables, grads, strict=True):
-        if grad is None:
-            continue
-        var.assign_sub(lr_t * tf.cast(grad, var.dtype))
+    optimizer.step(variables, grads)
     return float(loss.numpy())
 
 
@@ -335,24 +389,48 @@ def test_grace2l_training_parity_matgl_vs_tp(nacl_training_set):
     tp_model.build(tf.float64, jit_compile=False)
     train_function = tp_model.train_function
     tf_batch = _build_tp_batch(samples, tf.float64)
-    # SGD's vanilla step on a small randomly-initialized model is enough to
-    # demonstrate the loss decreases over 10 iterations; see ``_tp_step``
-    # for the rationale for sidestepping ``tf.keras.optimizers.Adam``.
-    tp_lr = LR
+    # Adam (hand-rolled to dodge the Keras 3 / TF 2.19 optimizer bug;
+    # see ``_ManualTFAdam`` docstring) with the same defaults as
+    # ``torch.optim.Adam`` puts both sides on the same effective step
+    # size. Vanilla SGD diverges at ``lr=0.01`` on this starting loss.
+    tp_optimizer = _ManualTFAdam(tp_model.variables_to_train, lr=LR)
     tp_losses: list[float] = []
     for _ in range(N_STEPS):
-        tp_losses.append(_tp_step(tp_model, train_function, tp_lr, tf_batch))
+        tp_losses.append(_tp_step(tp_model, train_function, tp_optimizer, tf_batch))
 
     # ---- assertions -----------------------------------------------------
-    # Both losses must be finite throughout.
+    # (a) Both trajectories must be finite throughout.
     assert all(np.isfinite(matgl_losses)), f"matgl loss went non-finite: {matgl_losses}"
     assert all(np.isfinite(tp_losses)), f"tp loss went non-finite: {tp_losses}"
-    # Both training loops must reduce the loss (soft parity — the two
-    # parametric forms differ enough that we don't compare absolute
-    # values, just monotonic-ish improvement over the 10-step window).
-    assert matgl_losses[-1] < matgl_losses[0], (
-        f"matgl loss did not decrease: start={matgl_losses[0]:.4g}, end={matgl_losses[-1]:.4g}"
+
+    # (b) Each side must reduce the loss by at least 50%. Adam at
+    # ``lr=0.01`` on a randomly-initialized GRACE-2L on ten NaCl
+    # configurations normally drops the loss by an order of magnitude or
+    # more in 10 steps; 50% is a comfortable lower bound that still
+    # detects an optimizer that is not actually making progress.
+    matgl_ratio = matgl_losses[-1] / matgl_losses[0]
+    tp_ratio = tp_losses[-1] / tp_losses[0]
+    assert matgl_ratio < 0.5, (
+        f"matgl reduced loss by only {(1.0 - matgl_ratio) * 100:.1f}% "
+        f"(start={matgl_losses[0]:.4g}, end={matgl_losses[-1]:.4g}): {matgl_losses}"
     )
-    assert tp_losses[-1] < tp_losses[0], (
-        f"tensorpotential loss did not decrease: start={tp_losses[0]:.4g}, end={tp_losses[-1]:.4g}"
+    assert tp_ratio < 0.5, (
+        f"tensorpotential reduced loss by only {(1.0 - tp_ratio) * 100:.1f}% "
+        f"(start={tp_losses[0]:.4g}, end={tp_losses[-1]:.4g}): {tp_losses}"
+    )
+
+    # (c) Numerical parity on the *trajectory shape*: same Adam settings
+    # and same data, so the relative reductions ``L_final / L_initial``
+    # should land in the same ballpark. The two parametric forms differ
+    # (matgl uses a simpler indicator-mixing block; upstream adds
+    # FCRight2Left projections + per-block readouts), so we allow a
+    # generous 1.5-decade window — tight enough to flag a regression
+    # where one side stops learning, loose enough to not depend on
+    # architecture-specific details.
+    log_diff = abs(np.log10(matgl_ratio) - np.log10(tp_ratio))
+    assert log_diff < 1.5, (
+        f"loss-reduction ratios disagree by {log_diff:.2f} decades "
+        f"(matgl={matgl_ratio:.3g}, tp={tp_ratio:.3g}); expected <1.5\n"
+        f"  matgl losses: {matgl_losses}\n"
+        f"  tp losses:    {tp_losses}"
     )
