@@ -90,7 +90,10 @@ class MatglLightningModuleMixin:
             batch: Data batch.
             batch_idx: Batch index.
         """
-        torch.set_grad_enabled(True)
+        # Grad enabling is the responsibility of ``step``: the PES path
+        # (PotentialLightningModule.step) toggles it on for autograd-based
+        # force/stress computation, and the non-PES path (ModelLightningModule)
+        # legitimately runs under Lightning's default eval mode.
         results, batch_size = self.step(batch)  # type: ignore
         self.log_dict(  # type: ignore
             {f"test_{key}": val for key, val in results.items()},
@@ -146,7 +149,8 @@ class MatglLightningModuleMixin:
         Returns:
             Prediction
         """
-        torch.set_grad_enabled(True)
+        # See note in ``test_step``: ``step`` enables grad itself when needed
+        # (Potential autograd); non-PES models run under Lightning eval mode.
         return self.step(batch)  # type: ignore[attr-defined]
 
 
@@ -592,13 +596,19 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             valid_labels, valid_preds = list(labels), list(preds)
             valid_num_atoms = num_atoms
 
-        e_loss = self.loss(valid_labels[0] / valid_num_atoms, valid_preds[0] / valid_num_atoms, **self.loss_params)
+        # Per-atom energies are reused three times (loss, MAE, RMSE) — hoist
+        # the divisions out of the metric calls so each tensor is materialised
+        # once per loss_fn invocation.
+        e_label_per_atom = valid_labels[0] / valid_num_atoms
+        e_pred_per_atom = valid_preds[0] / valid_num_atoms
+
+        e_loss = self.loss(e_label_per_atom, e_pred_per_atom, **self.loss_params)
         f_loss = self.loss(valid_labels[1], valid_preds[1], **self.loss_params)
 
-        e_mae = self.mae(valid_labels[0] / valid_num_atoms, valid_preds[0] / valid_num_atoms)
+        e_mae = self.mae(e_label_per_atom, e_pred_per_atom)
         f_mae = self.mae(valid_labels[1], valid_preds[1])
 
-        e_rmse = self.rmse(valid_labels[0] / valid_num_atoms, valid_preds[0] / valid_num_atoms)
+        e_rmse = self.rmse(e_label_per_atom, e_pred_per_atom)
         f_rmse = self.rmse(valid_labels[1], valid_preds[1])
 
         s_mae = torch.zeros(1)
@@ -620,14 +630,15 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
 
         if self.model.calc_magmom and labels[3].numel() > 0:
             if self.magmom_target == "symbreak":
+                # Each metric was being recomputed twice for the +/- predictions; cache
+                # the four tensors and pick the per-element minimum at the end.
+                neg_pred = -valid_preds[3]
                 m_loss = torch.min(
                     loss(valid_labels[3], valid_preds[3], **self.loss_params),
-                    loss(valid_labels[3], -valid_preds[3], **self.loss_params),
+                    loss(valid_labels[3], neg_pred, **self.loss_params),
                 )
-                m_mae = torch.min(self.mae(valid_labels[3], valid_preds[3]), self.mae(valid_labels[3], -valid_preds[3]))
-                m_rmse = torch.min(
-                    self.rmse(valid_labels[3], valid_preds[3]), self.rmse(valid_labels[3], -valid_preds[3])
-                )
+                m_mae = torch.min(self.mae(valid_labels[3], valid_preds[3]), self.mae(valid_labels[3], neg_pred))
+                m_rmse = torch.min(self.rmse(valid_labels[3], valid_preds[3]), self.rmse(valid_labels[3], neg_pred))
             else:
                 labels_3 = torch.abs(valid_labels[3]) if self.magmom_target == "absolute" else valid_labels[3]
                 m_loss = loss(labels_3, valid_preds[3], **self.loss_params)

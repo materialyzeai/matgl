@@ -74,11 +74,23 @@ class GraphConverter(metaclass=abc.ABCMeta):
         # Convert lattice matrix to tensor
         lattice = torch.as_tensor(lattice_matrix, dtype=matgl.float_th, device=device)
 
-        # Create node features (node_type based on element indices)
+        # Create node features (node_type based on element indices). Use a dict
+        # lookup instead of list.index() so the cost is O(N_atoms) rather than
+        # O(N_atoms * len(element_types)) — meaningful on chemically diverse
+        # datasets (alloys, MatPES) where element_types can be 80+ entries long.
+        element_to_index = {elem: idx for idx, elem in enumerate(element_types)}
         if is_atoms:
-            node_type = np.array([element_types.index(elem) for elem in structure.get_chemical_symbols()])
+            node_type = np.fromiter(
+                (element_to_index[elem] for elem in structure.get_chemical_symbols()),
+                dtype=np.int64,
+                count=len(structure),
+            )
         else:
-            node_type = np.array([element_types.index(site.specie.symbol) for site in structure])
+            node_type = np.fromiter(
+                (element_to_index[site.specie.symbol] for site in structure),
+                dtype=np.int64,
+                count=len(structure),
+            )
         graph.node_type = torch.tensor(node_type, dtype=torch.long, device=device)  # Node features
 
         # Add fractional coordinates as node attribute
