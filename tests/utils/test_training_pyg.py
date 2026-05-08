@@ -4,6 +4,7 @@ import os
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # Required for deterministic CUDA operations
 
+import contextlib
 import shutil
 from functools import partial
 
@@ -25,6 +26,7 @@ from matgl.models._tensornet_pyg import TensorNet
 from matgl.utils.training import (
     ModelLightningModule,
     PotentialLightningModule,
+    fit_element_refs,
     xavier_init,
 )
 
@@ -166,10 +168,8 @@ class TestModelTrainer:
 
     @classmethod
     def teardown_class(cls):
-        try:
+        with contextlib.suppress(FileNotFoundError):
             shutil.rmtree("lightning_logs")
-        except FileNotFoundError:
-            pass
 
 
 def test_prediction_logger_train_and_val(LiFePO4, BaNiO3, tmp_path):
@@ -247,10 +247,8 @@ def test_prediction_logger_train_and_val(LiFePO4, BaNiO3, tmp_path):
     assert torch.equal(on_disk["train_energy_preds"], log["train_energy_preds"])
     assert torch.equal(on_disk["val_energy_preds"], log["val_energy_preds"])
 
-    try:
+    with contextlib.suppress(FileNotFoundError):
         shutil.rmtree("lightning_logs")
-    except FileNotFoundError:
-        pass
 
 
 def test_prediction_logger_with_stress_and_charge(LiFePO4, BaNiO3, tmp_path):
@@ -355,10 +353,8 @@ def test_prediction_logger_with_stress_and_charge(LiFePO4, BaNiO3, tmp_path):
     assert "train_stress_preds" not in log_off
     assert "train_charge_preds" not in log_off
 
-    try:
+    with contextlib.suppress(FileNotFoundError):
         shutil.rmtree("lightning_logs")
-    except FileNotFoundError:
-        pass
 
 
 def test_prediction_logger_requires_indices(LiFePO4, BaNiO3):
@@ -402,10 +398,8 @@ def test_prediction_logger_requires_indices(LiFePO4, BaNiO3):
     with pytest.raises(RuntimeError, match="add_sample_indices"):
         trainer.fit(model=lit_model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
-    try:
+    with contextlib.suppress(FileNotFoundError):
         shutil.rmtree("lightning_logs")
-    except FileNotFoundError:
-        pass
 
 
 def _make_efs_batch():
@@ -569,6 +563,74 @@ def test_model_lightning_module_forward_and_step(LiFePO4, BaNiO3):
     assert {"Total_Loss", "MAE", "RMSE"}.issubset(results)
     assert batch_size == preds.numel()
     assert torch.isfinite(results["Total_Loss"])
+
+
+def test_fit_element_refs_recovers_synthetic_offsets():
+    """fit_element_refs should recover offsets used to synthesize energies.
+
+    Uses a small set of bespoke structures whose composition matrix has
+    full column rank so the least-squares system has a unique solution.
+    """
+    elements = ("Li", "Fe", "P", "O")
+    # 4 unknowns; 6 compositionally distinct structures => over-determined and full rank.
+    species_lists = [
+        ["Li", "Li", "Fe", "P", "O"],
+        ["Li", "Fe", "Fe", "O", "O"],
+        ["Li", "P", "P", "O"],
+        ["Fe", "P", "O", "O", "O"],
+        ["Li", "Li", "P", "O", "O"],
+        ["Fe", "Fe", "P", "P", "O"],
+    ]
+    lattice = Lattice.cubic(8.0)
+    structures = []
+    for specs in species_lists:
+        # Random fractional positions are fine — fit_element_refs only sees composition.
+        coords = np.linspace(0.05, 0.95, num=len(specs))[:, None].repeat(3, axis=1)
+        structures.append(Structure(lattice, specs, coords))
+
+    rng = np.random.default_rng(0)
+    true_refs = rng.uniform(-5.0, -1.0, size=len(elements))
+    z_to_col = {sym: i for i, sym in enumerate(elements)}
+    energies = []
+    for s in structures:
+        counts = np.zeros(len(elements))
+        for site in s:
+            counts[z_to_col[site.specie.symbol]] += 1
+        energies.append(float(counts @ true_refs))
+
+    refs = fit_element_refs(structures, energies, elements)
+    assert refs.shape == (len(elements),)
+    np.testing.assert_allclose(refs, true_refs, atol=1e-8)
+
+
+def test_fit_element_refs_drops_into_potential_lightning_module(LiFePO4):
+    """Refs returned by fit_element_refs are accepted by PotentialLightningModule."""
+    elements = get_element_list([LiFePO4])
+    structures = [LiFePO4, LiFePO4.copy()]
+    energies = [-12.3, -12.1]
+    refs = fit_element_refs(structures, energies, elements)
+    assert refs.dtype == np.float64
+    model = TensorNet(element_types=elements, units=8, nblocks=1, num_rbf=8, is_intensive=False)
+    module = PotentialLightningModule(model=model, element_refs=refs)
+    # The Potential wrapper stores refs as torch float buffers via AtomRef.
+    assert module.model.element_refs is not None
+    np.testing.assert_allclose(
+        module.model.element_refs.property_offset.detach().cpu().numpy(),
+        refs.astype(np.float32),
+        atol=1e-6,
+    )
+
+
+def test_fit_element_refs_validates_inputs(LiFePO4):
+    elements = ("Li", "Fe", "P", "O")
+    with pytest.raises(ValueError, match="non-empty"):
+        fit_element_refs([], [], elements)
+    with pytest.raises(ValueError, match="does not match"):
+        fit_element_refs([LiFePO4], [1.0, 2.0], elements)
+    with pytest.raises(ValueError, match="not in element_types"):
+        fit_element_refs([LiFePO4], [1.0], ("Li", "Fe", "P"))  # missing 'O'
+    with pytest.raises(ValueError, match="non-empty"):
+        fit_element_refs([LiFePO4], [1.0], ())
 
 
 @pytest.mark.parametrize("distribution", ["normal", "uniform", "fake"])

@@ -62,12 +62,16 @@ class GraphConverter(metaclass=abc.ABCMeta):
         g.edata["pbc_offset"] = pbc_offset
         # TODO: Need to check if the variable needs to be double or float, now use float
         lattice = torch.tensor(np.array(lattice_matrix), dtype=matgl.float_th)
-        # Note: pbc_ offshift and pos needs to be float64 to handle cases where bonds are exactly at cutoff
+        # Note: pbc_ offshift and pos needs to be float64 to handle cases where bonds are exactly at cutoff.
+        # Build a {symbol: index} dict once; ``list.index()`` per atom is
+        # O(N_atoms * len(element_types)) and shows up on profiling for
+        # chemically diverse datasets where element_types can be 80+ long.
         element_to_index = {elem: idx for idx, elem in enumerate(element_types)}
-        node_type = (
-            np.array([element_types.index(site.specie.symbol) for site in structure])
-            if is_atoms is False
-            else np.array([element_to_index[elem] for elem in structure.get_chemical_symbols()])
+        symbols = structure.get_chemical_symbols() if is_atoms else [site.specie.symbol for site in structure]
+        node_type = np.fromiter(
+            (element_to_index[s] for s in symbols),
+            dtype=np.int64,
+            count=len(structure),
         )
         g.ndata["node_type"] = torch.tensor(node_type, dtype=matgl.int_th)
         # TODO: Need to check if the variable needs to be double or float, now use float

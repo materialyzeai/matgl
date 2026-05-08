@@ -246,22 +246,26 @@ class PESCalculator(Calculator):
             calc_result = self.potential(graph, lattice, self.state_attr)
         else:
             calc_result = self.potential(graph, lattice, state_attr_default)
+
+        # Detach to host once per output tensor — repeated ``.detach().cpu()``
+        # on the same tensor was triggering an extra host sync per MD step.
+        host = [t.detach().cpu() for t in calc_result]
+        energy_arr = host[0].numpy()
+        forces_arr = host[1].numpy()
+        energy_val = energy_arr.item()
         self.results.update(
-            energy=calc_result[0].detach().cpu().numpy().item(),
-            free_energy=calc_result[0].detach().cpu().numpy().item(),
-            forces=calc_result[1].detach().cpu().numpy(),
+            energy=energy_val,
+            free_energy=energy_val,
+            forces=forces_arr,
         )
         if self.compute_stress:
-            stresses_np = (
-                full_3x3_to_voigt_6_stress(calc_result[2].detach().cpu().numpy())
-                if self.use_voigt
-                else calc_result[2].detach().cpu().numpy()
-            )
+            stress_arr = host[2].numpy()
+            stresses_np = full_3x3_to_voigt_6_stress(stress_arr) if self.use_voigt else stress_arr
             self.results.update(stress=stresses_np * self.conversion_factor)
         if self.compute_hessian:
-            self.results.update(hessian=calc_result[3].detach().cpu().numpy())
+            self.results.update(hessian=host[3].numpy())
         if self.compute_magmom:
-            self.results.update(magmoms=calc_result[4].detach().cpu().numpy())
+            self.results.update(magmoms=host[4].numpy())
 
 
 # for backward compatibility

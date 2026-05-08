@@ -13,6 +13,7 @@ import math
 from typing import TYPE_CHECKING, Any, Literal
 
 import lightning as pl
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torchmetrics
@@ -26,7 +27,10 @@ else:
     from matgl.apps._pes_pyg import Potential  # type: ignore[assignment]
 
 if TYPE_CHECKING:
-    import numpy as np
+    from collections.abc import Iterable, Sequence
+
+    from numpy.typing import ArrayLike
+    from pymatgen.core import Structure
     from torch.optim import Optimizer
     from torch.optim.lr_scheduler import LRScheduler
 
@@ -86,7 +90,10 @@ class MatglLightningModuleMixin:
             batch: Data batch.
             batch_idx: Batch index.
         """
-        torch.set_grad_enabled(True)
+        # Grad enabling is the responsibility of ``step``: the PES path
+        # (PotentialLightningModule.step) toggles it on for autograd-based
+        # force/stress computation, and the non-PES path (ModelLightningModule)
+        # legitimately runs under Lightning's default eval mode.
         results, batch_size = self.step(batch)  # type: ignore
         self.log_dict(  # type: ignore
             {f"test_{key}": val for key, val in results.items()},
@@ -142,7 +149,8 @@ class MatglLightningModuleMixin:
         Returns:
             Prediction
         """
-        torch.set_grad_enabled(True)
+        # See note in ``test_step``: ``step`` enables grad itself when needed
+        # (Potential autograd); non-PES models run under Lightning eval mode.
         return self.step(batch)  # type: ignore[attr-defined]
 
 
@@ -451,32 +459,26 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         labels: tuple
 
         torch.set_grad_enabled(True)
+        # Batch shape is fully determined by ``include_line_graph``:
+        #   line graph: (g, lat, l_g, state_attr, energies, forces, stresses, [extra])
+        #   otherwise:  (g, lat,      state_attr, energies, forces, stresses, [extra])
+        # where the trailing optional ``extra`` is magmoms (calc_magmom) or
+        # charges (calc_charge); ``forward`` mirrors the optional with an
+        # extra return slot. ``preds`` is just the forward output with the
+        # hessian (index 3) dropped, then a ``squeeze`` on the charge slot
+        # to match the legacy shape contract.
         if self.include_line_graph:
-            if self.model.calc_magmom:
-                g, lat, l_g, state_attr, energies, forces, stresses, magmoms = batch
-                e, f, s, _, m = self(g=g, lat=lat, state_attr=state_attr, l_g=l_g)
-                preds = (e, f, s, m)
-                labels = (energies, forces, stresses, magmoms)
-            else:
-                g, lat, l_g, state_attr, energies, forces, stresses = batch
-                e, f, s, _ = self(g=g, lat=lat, state_attr=state_attr, l_g=l_g)
-                preds = (e, f, s)
-                labels = (energies, forces, stresses)
-        elif self.model.calc_charge:
-            g, lat, state_attr, energies, forces, stresses, charges = batch
-            e, f, s, _, q = self(g=g, lat=lat, state_attr=state_attr)
-            preds = (e, f, s, q.squeeze())
-            labels = (energies, forces, stresses, charges.squeeze())
-        elif self.model.calc_magmom:
-            g, lat, state_attr, energies, forces, stresses, magmoms = batch
-            e, f, s, _, m = self(g=g, lat=lat, state_attr=state_attr)
-            preds = (e, f, s, m)
-            labels = (energies, forces, stresses, magmoms)
+            g, lat, l_g, state_attr, *targets = batch
+            out = self(g=g, lat=lat, state_attr=state_attr, l_g=l_g)
         else:
-            g, lat, state_attr, energies, forces, stresses = batch
-            e, f, s, _ = self(g=g, lat=lat, state_attr=state_attr)
-            preds = (e, f, s)
-            labels = (energies, forces, stresses)
+            g, lat, state_attr, *targets = batch
+            out = self(g=g, lat=lat, state_attr=state_attr)
+
+        preds = (out[0], out[1], out[2], *out[4:])
+        labels = tuple(targets)
+        if self.model.calc_charge:
+            preds = (preds[0], preds[1], preds[2], preds[3].squeeze())
+            labels = (labels[0], labels[1], labels[2], labels[3].squeeze())
 
         num_atoms = g.batch_num_nodes() if BACKEND == "DGL" else torch.bincount(g.batch)
         results = self.loss_fn(
@@ -594,13 +596,19 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             valid_labels, valid_preds = list(labels), list(preds)
             valid_num_atoms = num_atoms
 
-        e_loss = self.loss(valid_labels[0] / valid_num_atoms, valid_preds[0] / valid_num_atoms, **self.loss_params)
+        # Per-atom energies are reused three times (loss, MAE, RMSE) — hoist
+        # the divisions out of the metric calls so each tensor is materialised
+        # once per loss_fn invocation.
+        e_label_per_atom = valid_labels[0] / valid_num_atoms
+        e_pred_per_atom = valid_preds[0] / valid_num_atoms
+
+        e_loss = self.loss(e_label_per_atom, e_pred_per_atom, **self.loss_params)
         f_loss = self.loss(valid_labels[1], valid_preds[1], **self.loss_params)
 
-        e_mae = self.mae(valid_labels[0] / valid_num_atoms, valid_preds[0] / valid_num_atoms)
+        e_mae = self.mae(e_label_per_atom, e_pred_per_atom)
         f_mae = self.mae(valid_labels[1], valid_preds[1])
 
-        e_rmse = self.rmse(valid_labels[0] / valid_num_atoms, valid_preds[0] / valid_num_atoms)
+        e_rmse = self.rmse(e_label_per_atom, e_pred_per_atom)
         f_rmse = self.rmse(valid_labels[1], valid_preds[1])
 
         s_mae = torch.zeros(1)
@@ -622,14 +630,15 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
 
         if self.model.calc_magmom and labels[3].numel() > 0:
             if self.magmom_target == "symbreak":
+                # Each metric was being recomputed twice for the +/- predictions; cache
+                # the four tensors and pick the per-element minimum at the end.
+                neg_pred = -valid_preds[3]
                 m_loss = torch.min(
                     loss(valid_labels[3], valid_preds[3], **self.loss_params),
-                    loss(valid_labels[3], -valid_preds[3], **self.loss_params),
+                    loss(valid_labels[3], neg_pred, **self.loss_params),
                 )
-                m_mae = torch.min(self.mae(valid_labels[3], valid_preds[3]), self.mae(valid_labels[3], -valid_preds[3]))
-                m_rmse = torch.min(
-                    self.rmse(valid_labels[3], valid_preds[3]), self.rmse(valid_labels[3], -valid_preds[3])
-                )
+                m_mae = torch.min(self.mae(valid_labels[3], valid_preds[3]), self.mae(valid_labels[3], neg_pred))
+                m_rmse = torch.min(self.rmse(valid_labels[3], valid_preds[3]), self.rmse(valid_labels[3], neg_pred))
             else:
                 labels_3 = torch.abs(valid_labels[3]) if self.magmom_target == "absolute" else valid_labels[3]
                 m_loss = loss(labels_3, valid_preds[3], **self.loss_params)
@@ -656,6 +665,100 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             "Magmom_RMSE": m_rmse,
             "Charge_RMSE": q_rmse,
         }
+
+
+def fit_element_refs(
+    structures: Iterable[Structure],
+    energies: ArrayLike,
+    element_types: Sequence[str],
+    *,
+    rcond: float | None = None,
+) -> np.ndarray:
+    r"""Fit per-element energy offsets via linear regression.
+
+    Solves the least-squares problem
+
+    .. math::
+
+        E_i \approx \sum_{Z \in S} \mu_Z \, N_{i,Z}
+
+    where :math:`E_i` is the total energy of structure :math:`i`,
+    :math:`N_{i,Z}` is the count of element :math:`Z` in that structure,
+    and :math:`\mu_Z` is the per-element offset returned in the same
+    order as ``element_types``. The result is shaped to drop straight
+    into :class:`PotentialLightningModule` or
+    :class:`matgl.apps.pes.Potential` as ``element_refs``.
+
+    Subtracting these offsets from the targets removes the (usually
+    dominant) constant-per-element contribution from the loss so the
+    model only has to learn the relative-energy surface. This stabilises
+    training when the absolute energy scale (~tens of eV per atom) is
+    large compared to the residual variation across a chemically
+    homogeneous training set.
+
+    Args:
+        structures: Iterable of pymatgen ``Structure`` (or ``Molecule``)
+            objects. Composition is read via ``site.specie.symbol``.
+        energies: Total potential energies, one per structure, in any
+            unit consistent with downstream training (usually eV).
+        element_types: Element ordering used by the model — typically
+            the value of ``model.element_types`` or what
+            ``matgl.ext.pymatgen.get_element_list`` returns. The output
+            offset vector is in this order.
+        rcond: Forwarded to ``numpy.linalg.lstsq``. ``None`` (default)
+            uses NumPy's current default cutoff for small singular
+            values; pass ``-1`` to retain old behaviour, or a float to
+            override.
+
+    Returns:
+        ``np.ndarray`` of shape ``(len(element_types),)`` with the fitted
+        per-element offsets, dtype ``float64``.
+
+    Raises:
+        ValueError: If ``structures`` and ``energies`` have different
+            lengths, or if a structure contains an element not listed in
+            ``element_types``.
+
+    Note:
+        For inputs already in graph form (e.g. an
+        :class:`~matgl.graph._data_pyg.MGLDataset` of PyG ``Data``
+        objects), :meth:`matgl.layers.AtomRef.fit` provides the same
+        regression directly on the layer.
+
+    Example:
+        >>> from matgl.ext.pymatgen import get_element_list
+        >>> elements = get_element_list(structures)
+        >>> refs = fit_element_refs(structures, energies, elements)
+        >>> module = PotentialLightningModule(model=model, element_refs=refs)
+    """
+    element_types = tuple(element_types)
+    if not element_types:
+        raise ValueError("element_types must be non-empty.")
+
+    z_to_col = {sym: i for i, sym in enumerate(element_types)}
+    structures_list = list(structures)
+    energies_arr = np.asarray(energies, dtype=np.float64).reshape(-1)
+
+    if len(structures_list) != energies_arr.shape[0]:
+        raise ValueError(
+            f"len(structures)={len(structures_list)} does not match len(energies)={energies_arr.shape[0]}."
+        )
+    if not structures_list:
+        raise ValueError("structures must be non-empty.")
+
+    counts = np.zeros((len(structures_list), len(element_types)), dtype=np.float64)
+    for i, struct in enumerate(structures_list):
+        for site in struct:
+            sym = site.specie.symbol
+            col = z_to_col.get(sym)
+            if col is None:
+                raise ValueError(
+                    f"Structure {i} contains element {sym!r} which is not in element_types={element_types}."
+                )
+            counts[i, col] += 1.0
+
+    refs, *_ = np.linalg.lstsq(counts, energies_arr, rcond=rcond)
+    return refs
 
 
 def xavier_init(model: nn.Module, gain: float = 1.0, distribution: Literal["uniform", "normal"] = "uniform") -> None:

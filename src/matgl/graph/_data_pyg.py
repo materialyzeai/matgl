@@ -21,6 +21,27 @@ if TYPE_CHECKING:
     from matgl.graph.converters import GraphConverter
 
 
+def _default_loader_kwargs(user_kwargs: dict) -> dict:
+    """Fill in num_workers / pin_memory / persistent_workers when the caller didn't.
+
+    Most users miss these flags entirely and become CPU-bound when training on
+    GPU. Defaults aim to be safe (low worker count, no oversubscription on
+    headless CI machines) and only kick in when the user hasn't expressed an
+    opinion. ``pin_memory`` only matters when CUDA is available.
+    """
+    out = dict(user_kwargs)
+    if "num_workers" not in out:
+        # Conservative default: works on CI single-CPU runners and 32-core
+        # workstations. Users with GPU clusters will typically override.
+        cpu_count = os.cpu_count() or 1
+        out["num_workers"] = min(4, cpu_count)
+    if "pin_memory" not in out:
+        out["pin_memory"] = torch.cuda.is_available()
+    if "persistent_workers" not in out and out.get("num_workers", 0) > 0:
+        out["persistent_workers"] = True
+    return out
+
+
 def ensure_batch_attribute(data: Data) -> Data:
     """Ensure a PyG Data object has a batch attribute.
 
@@ -153,7 +174,15 @@ def MGLDataLoader(
 
     Returns:
         Tuple[DataLoader, ...]: Train, validation, and test data loaders. Test data loader is None if test_data is None.
+
+    Notes:
+        ``num_workers``, ``pin_memory``, and ``persistent_workers`` default to
+        sensible values when not supplied (a small worker pool, page-locked
+        CUDA transfers when a GPU is visible, and persistent workers when
+        ``num_workers > 0`` so the pool isn't torn down between epochs). Pass
+        them explicitly to override.
     """
+    kwargs = _default_loader_kwargs(kwargs)
     train_loader: DataLoader = DataLoader(train_data, shuffle=True, collate_fn=collate_fn, **kwargs)
     val_loader: DataLoader = DataLoader(val_data, shuffle=False, collate_fn=collate_fn, **kwargs)
     if test_data is not None:
