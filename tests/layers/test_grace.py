@@ -13,8 +13,10 @@ from matgl.layers._grace import (
     ChebyshevRadialBasis,
     GraceACEStack,
     GraceSPBasis,
+    GraceSPBasisEquivariant,
     LinearRadialFunction,
     collect_invariants,
+    pad_lm_axis,
 )
 
 
@@ -87,3 +89,53 @@ def test_collect_invariants_shape():
     assert out.shape == (n, 3 * n_rad_max)
     # Verify it slices the L=0 row, i.e. column index 0.
     assert torch.allclose(out[:, :n_rad_max], tensors[0][:, 0, :])
+
+
+def test_pad_lm_axis_grow_and_truncate():
+    x = torch.arange(2 * 4 * 3, dtype=torch.float32).reshape(2, 4, 3)  # lm dim has 4 = (1+1)^2
+    grown = pad_lm_axis(x, current_lmax=1, target_lmax=2)
+    assert grown.shape == (2, 9, 3)
+    # Original entries preserved at indices 0..3.
+    assert torch.allclose(grown[:, :4, :], x)
+    # New slots are exactly zero.
+    assert torch.all(grown[:, 4:, :] == 0)
+
+    same = pad_lm_axis(x, current_lmax=1, target_lmax=1)
+    assert same is x  # no-op short-circuit
+
+    truncated = pad_lm_axis(x, current_lmax=1, target_lmax=0)
+    assert truncated.shape == (2, 1, 3)
+    assert torch.allclose(truncated, x[:, :1, :])
+
+
+def test_grace_sp_basis_equivariant_rejects_indicator_lmax_too_large():
+    with pytest.raises(ValueError, match="indicator_lmax"):
+        GraceSPBasisEquivariant(lmax=2, n_rad_max=4, indicator_lmax=3, indicator_n_max=4)
+
+
+def test_grace_sp_basis_equivariant_shape():
+    lmax = 2
+    indicator_lmax = 1
+    n_rad_max = 4
+    indicator_n_max = 5
+    n_atoms = 5
+    n_edges = 8
+
+    sp = GraceSPBasisEquivariant(
+        lmax=lmax,
+        n_rad_max=n_rad_max,
+        indicator_lmax=indicator_lmax,
+        indicator_n_max=indicator_n_max,
+    )
+    radial_nl = torch.randn(n_edges, (lmax + 1) ** 2, n_rad_max)
+    spherical_lm = torch.randn(n_edges, (lmax + 1) ** 2)
+    indicator = torch.randn(n_atoms, (indicator_lmax + 1) ** 2, indicator_n_max)
+    edge_index = torch.randint(0, n_atoms, (2, n_edges))
+    out = sp(
+        radial_nl=radial_nl,
+        spherical_lm=spherical_lm,
+        indicator=indicator,
+        edge_index=edge_index,
+        num_nodes=n_atoms,
+    )
+    assert out.shape == (n_atoms, (lmax + 1) ** 2, n_rad_max)
