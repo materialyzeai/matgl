@@ -224,15 +224,29 @@ def _build_tp_batch(samples: list[dict], float_dtype):
     true_energy = np.asarray(energies, dtype=np.float64).reshape(-1, 1)
     true_force = np.concatenate(forces_list, axis=0)
 
+    n_atoms_total = atomic_mu_i.shape[0]
     int_specs = {
         tp_constants.BOND_IND_I: ind_i,
         tp_constants.BOND_IND_J: ind_j,
         tp_constants.BOND_MU_I: mu_i,
         tp_constants.BOND_MU_J: mu_j,
         tp_constants.ATOMIC_MU_I: atomic_mu_i,
+        # ``ATOMIC_MU_I_LOCAL`` is only consumed by instructions that run in
+        # the distributed ``local=True`` path; we never trigger that path in
+        # this test, but feeding the same array keeps the input dict
+        # complete-by-construction in case a future instruction starts
+        # reading it unconditionally.
+        tp_constants.ATOMIC_MU_I_LOCAL: atomic_mu_i,
         tp_constants.ATOMS_TO_STRUCTURE_MAP: map_atoms_to_struct,
         tp_constants.BONDS_TO_STRUCTURE_MAP: map_bonds_to_struct,
         tp_constants.N_STRUCTURES_BATCH_TOTAL: np.asarray(len(samples), dtype=np.int32),
+        # We do not pad, so the "real" count equals the total batch atom
+        # count. ``ConstantScaleShiftTarget.frwrd`` reads
+        # ``N_ATOMS_BATCH_REAL`` to mask shifts onto only real atoms; the
+        # train function reads ``N_ATOMS_BATCH_TOTAL`` for force
+        # accumulation segment counts.
+        tp_constants.N_ATOMS_BATCH_REAL: np.asarray(n_atoms_total, dtype=np.int32),
+        tp_constants.N_ATOMS_BATCH_TOTAL: np.asarray(n_atoms_total, dtype=np.int32),
     }
     float_specs = {
         tp_constants.BOND_VECTOR: bond_vector,
