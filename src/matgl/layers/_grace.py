@@ -196,6 +196,113 @@ class GraceSPBasis(nn.Module):
         return a_node * self.inv_avg_n_neigh
 
 
+def pad_lm_axis(x: torch.Tensor, current_lmax: int, target_lmax: int) -> torch.Tensor:
+    """Zero-pad (or truncate) the ``(lmax+1)^2`` axis of an equivariant tensor.
+
+    The lm axis is assumed to be ``dim=1`` (lm-major layout
+    ``[N, (lmax+1)^2, n_features]``) — the convention used everywhere else in
+    the GRACE / SO(3) machinery in matgl.
+
+    Args:
+        x: ``[..., (current_lmax+1)^2, n_features]`` tensor.
+        current_lmax: angular cutoff of ``x``'s lm axis.
+        target_lmax: desired angular cutoff after padding/truncation.
+
+    Returns:
+        ``[..., (target_lmax+1)^2, n_features]`` tensor. Padding fills with
+        zeros (so the new ``l > current_lmax`` slots are exactly zero, which
+        is the right thing for a CG product to ignore).
+    """
+    if current_lmax == target_lmax:
+        return x
+    target = (target_lmax + 1) ** 2
+    if current_lmax > target_lmax:
+        return x[..., :target, :].contiguous()
+    extra = target - (current_lmax + 1) ** 2
+    pad_shape = list(x.shape)
+    pad_shape[-2] = extra
+    zeros = x.new_zeros(*pad_shape)
+    return torch.cat([x, zeros], dim=-2)
+
+
+class GraceSPBasisEquivariant(nn.Module):
+    """ACE single-particle basis aggregator with an equivariant indicator.
+
+    GRACE-2L (and any deeper layered GRACE) replaces the per-element scalar
+    indicator used by :class:`GraceSPBasis` with an *equivariant* per-atom
+    tensor produced by the previous layer. This block forms
+
+        ``A_i^{n L M} = (1 / n_neigh_avg) sum_{j ~ i}
+            (R_{n l1}(r_ij) Y_{l1 m1}(r̂_ij) ⊗_CG I_j^{n l2 m2}) → (L, M)``
+
+    using matgl's :class:`~matgl.layers._so3.SO3TensorProduct` (real-CG with
+    the SO(3)-natural parity mask). The indicator is first projected to the
+    layer's ``n_rad_max`` channel count so the elementwise product makes
+    sense, then zero-padded along the lm axis to the layer's ``lmax`` so it
+    can be coupled by ``SO3TensorProduct`` at the shared ``lmax``.
+
+    Args:
+        lmax: angular cutoff of the layer (and of the CG tensor product).
+        n_rad_max: number of radial channels of the layer.
+        indicator_lmax: angular cutoff of the incoming equivariant indicator
+            (``<= lmax``); the rest of the indicator's ``l`` slots are
+            zero-padded before the product.
+        indicator_n_max: feature width of the incoming indicator. A learned
+            linear layer projects this to ``n_rad_max``.
+        avg_n_neigh: typical neighbor count, used to normalize the sum.
+    """
+
+    def __init__(
+        self,
+        lmax: int,
+        n_rad_max: int,
+        indicator_lmax: int,
+        indicator_n_max: int,
+        avg_n_neigh: float = 1.0,
+    ):
+        super().__init__()
+        if indicator_lmax > lmax:
+            raise ValueError(f"indicator_lmax ({indicator_lmax}) must be <= lmax ({lmax}).")
+        self.lmax = int(lmax)
+        self.n_rad_max = int(n_rad_max)
+        self.indicator_lmax = int(indicator_lmax)
+        self.indicator_n_max = int(indicator_n_max)
+        self.inv_avg_n_neigh = 1.0 / float(avg_n_neigh)
+        self.indicator_proj = nn.Linear(indicator_n_max, n_rad_max, bias=False)
+        self.tp = SO3TensorProduct(lmax=lmax)
+
+    def forward(
+        self,
+        radial_nl: torch.Tensor,
+        spherical_lm: torch.Tensor,
+        indicator: torch.Tensor,
+        edge_index: torch.Tensor,
+        num_nodes: int,
+    ) -> torch.Tensor:
+        """Aggregate the equivariant single-particle basis from neighbors.
+
+        Args:
+            radial_nl: ``[E, (lmax+1)^2, n_rad_max]`` per-edge radial channels.
+            spherical_lm: ``[E, (lmax+1)^2]`` real spherical harmonics.
+            indicator: ``[N, (indicator_lmax+1)^2, indicator_n_max]`` per-atom
+                equivariant descriptor produced by the previous layer.
+            edge_index: ``[2, E]`` ``(i, j)`` PyG edge index.
+            num_nodes: number of atoms ``N``.
+
+        Returns:
+            ``[N, (lmax+1)^2, n_rad_max]`` per-atom single-particle basis.
+        """
+        center_idx = edge_index[0]
+        neighbor_idx = edge_index[1]
+        bond_RY = radial_nl * spherical_lm.unsqueeze(-1)  # [E, (lmax+1)^2, n_rad_max]
+        bond_indicator = indicator[neighbor_idx]  # [E, (indicator_lmax+1)^2, indicator_n_max]
+        bond_indicator_proj = self.indicator_proj(bond_indicator)  # [..., n_rad_max]
+        bond_indicator_padded = pad_lm_axis(bond_indicator_proj, self.indicator_lmax, self.lmax)
+        bond_coupled = self.tp(bond_RY, bond_indicator_padded)
+        a_node = scatter_add(bond_coupled, center_idx, dim_size=num_nodes, dim=0)
+        return a_node * self.inv_avg_n_neigh
+
+
 class GraceACEStack(nn.Module):
     """Stack of equivariant tensor products forming ``A, A⊗A, A⊗A⊗A, ...``.
 
@@ -256,6 +363,8 @@ __all__ = [
     "ChebyshevRadialBasis",
     "GraceACEStack",
     "GraceSPBasis",
+    "GraceSPBasisEquivariant",
     "LinearRadialFunction",
     "collect_invariants",
+    "pad_lm_axis",
 ]
