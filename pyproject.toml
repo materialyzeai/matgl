@@ -172,6 +172,11 @@ lint.isort.required-imports = ["from __future__ import annotations"]
 # decomposition components ``I``, ``A``, ``S`` (E741) follow physics conventions
 # and should not be renamed.
 "src/matgl/kernels/*" = ["E741", "I002"]
+# GRACE / ACE machinery uses ``l`` as the canonical angular-momentum index
+# throughout (matches the physics literature and the upstream gracemaker
+# implementation). Renaming would obscure the math.
+"src/matgl/layers/_grace_pyg.py" = ["E741"]
+"src/matgl/models/_grace_pyg.py" = ["E741"]
 
 [tool.pytest.ini_options]
 addopts = "--durations=30 --quiet -rXs --color=yes -p no:warnings"
