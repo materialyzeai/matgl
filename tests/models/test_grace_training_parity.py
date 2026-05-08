@@ -289,7 +289,11 @@ def test_grace2l_training_parity_matgl_vs_tp(nacl_training_set):
 
     # ---- tensorpotential ------------------------------------------------
     tf.random.set_seed(SEED)
-    instructions = _build_tp_grace2l_instructions()
+    # ``GRACE_2LAYER_v1_24`` returns an ``InstructionManager``; ``TPModel``
+    # (and the ``execute_instructions`` helper it dispatches through)
+    # accepts only ``list`` or ``dict``, so we unwrap to the registered
+    # instruction dict.
+    instructions = _build_tp_grace2l_instructions().get_instructions()
     tp_model = tp_tpmodel.TPModel(
         instructions,
         train_function=tp_tpmodel.ComputeBatchEnergyForcesVirials(),
