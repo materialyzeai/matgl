@@ -167,6 +167,7 @@ lint.isort.required-imports = ["from __future__ import annotations"]
 "tests/**/*" = ["D", "PERF"]
 "docs/**/*" = ["D"]
 "examples/**/*" = ["D"]
+"scripts/**/*" = ["D", "PERF"]
 # Warp parses kernel function annotations at decoration time to compile to GPU
 # code, so ``from __future__ import annotations`` (I002) cannot be used. Tensor
 # decomposition components ``I``, ``A``, ``S`` (E741) follow physics conventions
