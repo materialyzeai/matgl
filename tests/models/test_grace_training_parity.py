@@ -43,7 +43,6 @@ tf.config.experimental.enable_tensor_float_32_execution(False)
 tf.experimental.numpy.experimental_enable_numpy_behavior(dtype_conversion_mode="all")
 
 tp_constants = pytest.importorskip("tensorpotential.constants")
-tp_databuilder = pytest.importorskip("tensorpotential.data.databuilder")
 tp_presets = pytest.importorskip("tensorpotential.potentials.presets")
 tp_tpmodel = pytest.importorskip("tensorpotential.tpmodel")
 
@@ -159,68 +158,89 @@ def _build_tp_grace2l_instructions():
 
 
 def _build_tp_batch(samples: list[dict], float_dtype):
-    # ``float_dtype`` is a ``tf.DType`` but we leave it untyped — ``tf`` is
-    # only imported via ``pytest.importorskip`` so its types aren't visible
-    # to mypy.
-    """Construct a single padded TF batch from the NaCl training set."""
-    adaptor = AseAtomsAdaptor()
-    atoms_list = [adaptor.get_atoms(s["structure"]) for s in samples]
-    # Inject reference E / F / stress onto each Atoms via a SinglePoint
-    # calculator so ``ReferenceEnergyForcesStressesDataBuilder.extract_from_ase_atoms``
-    # picks them up through the standard ASE calculator interface.
-    from ase.calculators.singlepoint import SinglePointCalculator
+    """Assemble the TF input dict for ``ComputeBatchEnergyForcesVirials`` directly.
 
-    for atoms, sample in zip(atoms_list, samples, strict=True):
-        atoms.calc = SinglePointCalculator(
-            atoms,
-            energy=sample["energy"],
-            forces=sample["forces"],
-            stress=sample["stress"],
-        )
+    We bypass upstream's ``tensorpotential.data.databuilder.construct_batches``
+    because ``ReferenceEnergyForcesStressesDataBuilder.join_to_batch`` calls
+    ``float(np.array(energy).reshape(-1, 1))`` — a pattern that NumPy 1.26+
+    rejects with ``TypeError: only 0-dimensional arrays can be converted to
+    Python scalars``. Building the batch by hand also keeps the test
+    insensitive to other refactors of upstream's batching pipeline.
+
+    The fields below are exactly the union of:
+      - ``ComputeBatchEnergyForcesVirials.specs`` (geometry + structure maps)
+      - the extra inputs the ``GRACE_2LAYER_v1_24`` instructions consume
+        (``ATOMIC_MU_I``, ``BOND_MU_I``, ``BOND_MU_J``)
+      - the reference labels read by ``_tp_step`` (``DATA_REFERENCE_ENERGY``,
+        ``DATA_REFERENCE_FORCES``).
+
+    ``float_dtype`` is a ``tf.DType``; left untyped because ``tensorflow`` is
+    only imported via ``pytest.importorskip`` and not visible to mypy.
+    """
+    from ase.neighborlist import neighbor_list
 
     elements_map = {sym: i for i, sym in enumerate(ELEMENT_TYPES)}
-    geom_db = tp_databuilder.GeometricalDataBuilder(
-        elements_map=elements_map,
-        cutoff=CUTOFF,
-        is_fit_stress=False,
-    )
-    ref_db = tp_databuilder.ReferenceEnergyForcesStressesDataBuilder(
-        is_fit_stress=False,
-        normalize_weights=False,
-        normalize_force_per_structure=False,
-    )
-    geom_db.float_dtype = np.float64
-    ref_db.float_dtype = np.float64
+    adaptor = AseAtomsAdaptor()
 
-    batches = tp_databuilder.construct_batches(
-        atoms_list,
-        data_builders=[geom_db, ref_db],
-        batch_size=len(atoms_list),
-        verbose=False,
-    )
-    batches = list(batches)
-    assert len(batches) == 1, f"Expected a single full-set batch, got {len(batches)}"
-    batch = batches[0]
-    # Cast every numeric entry to TF tensors with the requested dtype.
-    int_keys = {
-        tp_constants.BOND_IND_I,
-        tp_constants.BOND_IND_J,
-        tp_constants.ATOMS_TO_STRUCTURE_MAP,
-        tp_constants.BONDS_TO_STRUCTURE_MAP,
-        tp_constants.ATOMIC_MU_I,
-        tp_constants.ATOMIC_MU_I_LOCAL,
-        tp_constants.MU_I,
-        tp_constants.MU_J,
-        tp_constants.N_STRUCTURES_BATCH_TOTAL,
-        tp_constants.N_ATOMS_BATCH_TOTAL,
-        tp_constants.N_NEIGHBORS_BATCH_TOTAL,
-        tp_constants.DATA_STRUCTURE_ID,
+    atomic_mu = []  # per-atom species index
+    atoms_to_struct = []  # per-atom structure index
+    ind_i_list, ind_j_list, bond_vec_list = [], [], []
+    bonds_to_struct = []
+    energies = []
+    forces_list = []
+
+    atom_offset = 0
+    for struct_idx, sample in enumerate(samples):
+        atoms = adaptor.get_atoms(sample["structure"])
+        # All ASE PBC components must be True for the periodic neighbor list.
+        atoms.set_pbc(True)
+        n_at = len(atoms)
+        species = np.array([elements_map[s] for s in atoms.get_chemical_symbols()], dtype=np.int32)
+        atomic_mu.append(species)
+        atoms_to_struct.append(np.full(n_at, struct_idx, dtype=np.int32))
+
+        # ``"ijD"`` returns (i, j, D) where D = r_j - r_i (Cartesian, Å).
+        ii, jj, dd = neighbor_list("ijD", atoms, cutoff=CUTOFF)
+        ii = ii.astype(np.int32) + atom_offset
+        jj = jj.astype(np.int32) + atom_offset
+        ind_i_list.append(ii)
+        ind_j_list.append(jj)
+        bond_vec_list.append(np.asarray(dd, dtype=np.float64))
+        bonds_to_struct.append(np.full(ii.shape[0], struct_idx, dtype=np.int32))
+
+        energies.append(float(sample["energy"]))
+        forces_list.append(np.asarray(sample["forces"], dtype=np.float64))
+
+        atom_offset += n_at
+
+    atomic_mu_i = np.concatenate(atomic_mu, axis=0)
+    map_atoms_to_struct = np.concatenate(atoms_to_struct, axis=0)
+    ind_i = np.concatenate(ind_i_list, axis=0)
+    ind_j = np.concatenate(ind_j_list, axis=0)
+    bond_vector = np.concatenate(bond_vec_list, axis=0)
+    map_bonds_to_struct = np.concatenate(bonds_to_struct, axis=0)
+    mu_i = atomic_mu_i[ind_i]
+    mu_j = atomic_mu_i[ind_j]
+    true_energy = np.asarray(energies, dtype=np.float64).reshape(-1, 1)
+    true_force = np.concatenate(forces_list, axis=0)
+
+    int_specs = {
+        tp_constants.BOND_IND_I: ind_i,
+        tp_constants.BOND_IND_J: ind_j,
+        tp_constants.BOND_MU_I: mu_i,
+        tp_constants.BOND_MU_J: mu_j,
+        tp_constants.ATOMIC_MU_I: atomic_mu_i,
+        tp_constants.ATOMS_TO_STRUCTURE_MAP: map_atoms_to_struct,
+        tp_constants.BONDS_TO_STRUCTURE_MAP: map_bonds_to_struct,
+        tp_constants.N_STRUCTURES_BATCH_TOTAL: np.asarray(len(samples), dtype=np.int32),
     }
-    tf_batch: dict = {}
-    for k, v in batch.items():
-        arr = np.asarray(v)
-        dtype = tf.int32 if k in int_keys else float_dtype
-        tf_batch[k] = tf.constant(arr, dtype=dtype)
+    float_specs = {
+        tp_constants.BOND_VECTOR: bond_vector,
+        tp_constants.DATA_REFERENCE_ENERGY: true_energy,
+        tp_constants.DATA_REFERENCE_FORCES: true_force,
+    }
+    tf_batch: dict = {k: tf.constant(v, dtype=tf.int32) for k, v in int_specs.items()}
+    tf_batch.update({k: tf.constant(v, dtype=float_dtype) for k, v in float_specs.items()})
     return tf_batch
 
 

@@ -168,11 +168,13 @@ jobs:
         #
         # We install ``tensorpotential`` itself with ``--no-deps`` and add
         # only the runtime deps the parity test actually exercises.
-        # ``matscipy`` / ``pandas`` / ``tqdm`` / ``pyyaml`` are imported at
-        # module-load time by ``tensorpotential.data.databuilder`` and
-        # ``tensorpotential.utils`` (which ``test_grace_training_parity``
-        # touches via ``construct_batches``); without them the test module
-        # skips with ``ModuleNotFoundError: No module named 'matscipy'``.
+        # ``pandas`` / ``pyyaml`` are imported at module-load time by
+        # ``tensorpotential.utils`` (which the GRACE preset reaches
+        # transitively); ``matscipy`` / ``tqdm`` are imported at
+        # module-load time by ``tensorpotential.data.databuilder``, which
+        # is dragged in by ``tensorpotential.potentials.presets``. Without
+        # any of them the test module would skip with
+        # ``ModuleNotFoundError`` at collection time.
         run: |
           uv pip install --no-deps "tensorpotential>=0.5.9"
           uv pip install \
