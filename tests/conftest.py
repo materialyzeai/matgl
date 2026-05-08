@@ -11,6 +11,8 @@ of "function".
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 import torch
 from pymatgen.core import Lattice, Molecule, Structure
@@ -539,3 +541,83 @@ def graph_MoSH_pyg():
 @pytest.fixture(scope="session")
 def graph_Li3InCl6(Li3InCl6):
     return get_graph(Li3InCl6, 6.0)
+
+
+# ---------------------------------------------------------------------------
+# NaCl perturbed training set (used by GRACE training-parity tests).
+#
+# Built deterministically from the rocksalt NaCl ground state (the Materials
+# Project structure ``mp-22862``: conventional cubic cell, ``a = 5.6402 Å``,
+# 4 Na + 4 Cl). Ten random copies — 1 ground state + 9 perturbations of
+# both the lattice parameters and the fractional atomic positions — are
+# pre-labelled offline with ``TensorNet-PES-MatPES-r2SCAN-2025.2`` and
+# checked into ``tests/parity_data/nacl_training_set.json.gz``. The fixture
+# only **loads** that artifact: it does not run the labelling potential at
+# test time. Re-run ``tests/parity_data/gen_nacl_training_set.py`` to
+# regenerate the artifact when the labeller or the perturbation recipe
+# changes.
+# ---------------------------------------------------------------------------
+
+
+_NACL_TRAINING_SET_PATH = pathlib.Path(__file__).parent / "parity_data" / "nacl_training_set.json.gz"
+
+
+@pytest.fixture(scope="session")
+def NaCl():
+    """Rocksalt NaCl conventional cell (matches MP ``mp-22862``)."""
+    a = 5.6402  # MP-relaxed PBE lattice constant, in Å.
+    species = ["Na", "Cl", "Na", "Cl", "Na", "Cl", "Na", "Cl"]
+    coords = [
+        [0.0, 0.0, 0.0],
+        [0.5, 0.5, 0.5],
+        [0.5, 0.5, 0.0],
+        [0.0, 0.0, 0.5],
+        [0.5, 0.0, 0.5],
+        [0.0, 0.5, 0.0],
+        [0.0, 0.5, 0.5],
+        [0.5, 0.0, 0.0],
+    ]
+    return Structure(Lattice.cubic(a), species, coords)
+
+
+@pytest.fixture(scope="session")
+def nacl_training_set():
+    """Load the pre-labelled NaCl perturbed training set.
+
+    Returns a list of ``dict`` entries, each with the keys
+
+    - ``structure``: pymatgen ``Structure`` (perturbed copy of NaCl)
+    - ``energy``:   total potential energy (eV), float
+    - ``forces``:   per-atom forces (eV/Å), shape ``(n_atoms, 3)`` ``np.ndarray``
+    - ``stress``:   stress tensor (eV/Å³), shape ``(3, 3)`` ``np.ndarray``
+
+    The first entry is the unperturbed ground-state structure. The other
+    nine apply a small random symmetric strain to the lattice and a small
+    random Cartesian displacement to each atom (recipe pinned in
+    ``tests/parity_data/gen_nacl_training_set.py``).
+
+    Skips at fixture-collection time if the artifact is missing — keeps
+    the fixture optional in trees where ``tests/parity_data/`` was not
+    checked out.
+    """
+
+    import numpy as np
+    from monty.serialization import loadfn
+
+    payload = loadfn(str(_NACL_TRAINING_SET_PATH))
+    samples: list[dict] = []
+    for raw in payload["samples"]:
+        # ``loadfn`` already decoded the structure dict back into a
+        # pymatgen ``Structure`` via the MSON ``@class`` hook.
+        struct = raw["structure"]
+        if not isinstance(struct, Structure):
+            struct = Structure.from_dict(struct)
+        samples.append(
+            {
+                "structure": struct,
+                "energy": float(raw["energy"]),
+                "forces": np.asarray(raw["forces"], dtype="float64"),
+                "stress": np.asarray(raw["stress"], dtype="float64"),
+            }
+        )
+    return samples

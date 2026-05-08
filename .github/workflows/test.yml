@@ -178,7 +178,7 @@ jobs:
       - name: parity pytest
         run: |
           uv run python -c "import tensorflow as tf, tensorpotential; print('tf', tf.__version__)"
-          uv run pytest tests/models/test_grace_parity_tp.py -v --color=yes
+          uv run pytest tests/models/test_grace_parity_tp.py tests/models/test_grace_training_parity.py -v --color=yes
 
   coverage:
     needs: [test_dgl, test_pyg]
