@@ -175,8 +175,8 @@ lint.isort.required-imports = ["from __future__ import annotations"]
 # GRACE / ACE machinery uses ``l`` as the canonical angular-momentum index
 # throughout (matches the physics literature and the upstream gracemaker
 # implementation). Renaming would obscure the math.
-"src/matgl/layers/_grace_pyg.py" = ["E741"]
-"src/matgl/models/_grace_pyg.py" = ["E741"]
+"src/matgl/layers/_grace.py" = ["E741"]
+"src/matgl/models/_grace.py" = ["E741"]
 "tests/models/test_grace_parity_tp.py" = ["E741"]
 
 [tool.pytest.ini_options]

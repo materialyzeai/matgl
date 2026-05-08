@@ -9,7 +9,7 @@ if matgl.config.BACKEND != "PYG":
     pytest.skip("GRACE is PYG-only", allow_module_level=True)
 
 
-from matgl.layers._grace_pyg import (
+from matgl.layers._grace import (
     ChebyshevRadialBasis,
     GraceACEStack,
     GraceSPBasis,

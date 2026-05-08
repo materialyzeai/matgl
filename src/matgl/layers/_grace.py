@@ -4,7 +4,7 @@ The GRACE network is a graph extension of the Atomic Cluster Expansion (ACE)
 introduced by Bochkarev, Lysogorskiy and Drautz (Phys. Rev. X 14, 021036
 (2024); arXiv:2508.17936). The reference TensorFlow implementation is
 ``ICAMS/grace-tensorpotential``. This file contains the GRACE-specific
-PyG-friendly layers that the model in :mod:`matgl.models._grace_pyg`
+PyG-friendly layers that the model in :mod:`matgl.models._grace`
 composes; it deliberately reuses the existing matgl primitives (real
 spherical harmonics, real-CG tensor product, polynomial cutoff,
 ``scatter_add``) so the GRACE PES sits on the same numerical machinery as
@@ -123,7 +123,10 @@ class LinearRadialFunction(nn.Module):
         # [n_rad_max, lmax+1, nfunc] x [E, nfunc] -> [E, n_rad_max, lmax+1]
         y = torch.einsum("nlk,ek->enl", self.crad, basis_values)
         # Expand l → (l, m) by gathering, then permute to lm-major.
-        y_lm = y.index_select(dim=-1, index=self._l_idx)  # [E, n_rad_max, (lmax+1)^2]
+        # ``torch.as_tensor`` narrows ``self._l_idx`` from ``Tensor | Module``
+        # (the static type seen by mypy for buffers) to ``Tensor``.
+        l_idx = torch.as_tensor(self._l_idx)
+        y_lm = y.index_select(dim=-1, index=l_idx)  # [E, n_rad_max, (lmax+1)^2]
         return y_lm.transpose(1, 2).contiguous()  # [E, (lmax+1)^2, n_rad_max]
 
 

@@ -14,7 +14,7 @@ primitives (:class:`matgl.layers._so3.RealSphericalHarmonics`,
 (:func:`matgl.graph._compute_pyg.compute_pair_vector_and_distance`,
 :func:`matgl.utils.maths.scatter_add`). The GRACE-specific bits — Chebyshev
 radial basis, learnable ``R_{nl}`` expansion, single-particle aggregation,
-multi-order product chain — live in :mod:`matgl.layers._grace_pyg`.
+multi-order product chain — live in :mod:`matgl.layers._grace`.
 
 References:
     Bochkarev, Lysogorskiy, Drautz. *Graph Atomic Cluster Expansion for
@@ -36,7 +36,7 @@ from torch import nn
 from matgl.config import DEFAULT_ELEMENTS
 from matgl.graph._compute_pyg import compute_pair_vector_and_distance
 from matgl.layers import MLP, ActivationFunction
-from matgl.layers._grace_pyg import (
+from matgl.layers._grace import (
     ChebyshevRadialBasis,
     GraceACEStack,
     GraceSPBasis,

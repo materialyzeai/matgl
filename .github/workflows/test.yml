@@ -157,8 +157,18 @@ jobs:
         # Manual install — not added to pyproject.toml. ``numpy<2`` is
         # required for compatibility with the TensorFlow versions
         # ``tensorpotential`` pins (TF<2.20).
+        #
+        # On Linux, ``tensorpotential`` pins ``tensorflow[and-cuda]<2.20``
+        # whose ``nvidia-nccl-cu12`` extra clashes with torch's bundled
+        # NCCL ABI (``undefined symbol: ncclCommWindowDeregister``). We
+        # override to plain ``tensorflow<2.20`` (CPU-only) — the parity
+        # tests are deterministic CPU math and don't need the GPU stack.
         run: |
-          uv pip install "tensorpotential>=0.5.9" "numpy<2"
+          cat > /tmp/tp-overrides.txt <<'EOF'
+          tensorflow<2.20
+          EOF
+          uv pip install --override /tmp/tp-overrides.txt \
+            "tensorpotential>=0.5.9" "numpy<2"
       - name: parity pytest
         run: |
           uv run python -c "import tensorflow as tf, tensorpotential; print('tf', tf.__version__)"

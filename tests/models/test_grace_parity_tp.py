@@ -1,6 +1,6 @@
 """Parity tests vs the upstream tensorpotential (TensorFlow) reference.
 
-Verifies that the GRACE primitives in :mod:`matgl.layers._grace_pyg` and the
+Verifies that the GRACE primitives in :mod:`matgl.layers._grace` and the
 matgl SO(3) machinery they reuse (:mod:`matgl.layers._so3`,
 :mod:`matgl.utils.so3`, :mod:`matgl.utils.cutoff`) reproduce the upstream
 gracemaker / ``tensorpotential`` behavior numerically.
@@ -42,7 +42,7 @@ tp_coup = pytest.importorskip("tensorpotential.functions.couplings")
 tp_compute = pytest.importorskip("tensorpotential.instructions.compute")
 
 
-from matgl.layers._grace_pyg import ChebyshevRadialBasis  # noqa: E402
+from matgl.layers._grace import ChebyshevRadialBasis  # noqa: E402
 from matgl.layers._so3 import RealSphericalHarmonics, SO3TensorProduct  # noqa: E402
 from matgl.utils.cutoff import polynomial_cutoff as matgl_polynomial_cutoff  # noqa: E402
 from matgl.utils.so3 import generate_clebsch_gordan_rsh  # noqa: E402
