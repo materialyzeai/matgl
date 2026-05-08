@@ -258,8 +258,22 @@ def _build_tp_batch(samples: list[dict], float_dtype):
     return tf_batch
 
 
-def _tp_step(model, train_function, optimizer, batch) -> float:
-    """One Adam step on the whole TP batch; returns scalar loss."""
+def _tp_step(model, train_function, lr: float, batch) -> float:
+    """One manual SGD step on the whole TP batch; returns scalar loss.
+
+    We deliberately avoid ``tf.keras.optimizers.Adam`` (or any Keras
+    optimizer): TF 2.19 ships with Keras 3.14, whose ``Variable.__eq__``
+    fails inside ``Adam.update_step`` with
+
+        ValueError: Attempt to convert a value (<class 'bool'>) with an
+        unsupported type (<class 'type'>) to a Tensor.
+
+    when called against the ``tensorpotential`` variables. ``tensorpotential``
+    sets ``TF_USE_LEGACY_KERAS=1`` to dodge this, but the flag arrives
+    too late once another test has already imported TF. A direct
+    ``var.assign_sub(lr * grad)`` keeps this test independent of the
+    Keras 3 / TF 2.19 optimizer plumbing entirely.
+    """
     e_target = batch[tp_constants.DATA_REFERENCE_ENERGY]
     f_target = batch[tp_constants.DATA_REFERENCE_FORCES]
     with tf.GradientTape() as tape:
@@ -275,8 +289,13 @@ def _tp_step(model, train_function, optimizer, batch) -> float:
         loss_e = tf.reduce_mean(tf.square(e_pred - e_target))
         loss_f = tf.reduce_mean(tf.square(f_pred - f_target))
         loss = ENERGY_WEIGHT * loss_e + FORCE_WEIGHT * loss_f
-    grads = tape.gradient(loss, model.variables_to_train)
-    optimizer.apply_gradients(zip(grads, model.variables_to_train, strict=True))
+    variables = model.variables_to_train
+    grads = tape.gradient(loss, variables)
+    lr_t = tf.constant(lr, dtype=tf.float64)
+    for var, grad in zip(variables, grads, strict=True):
+        if grad is None:
+            continue
+        var.assign_sub(lr_t * tf.cast(grad, var.dtype))
     return float(loss.numpy())
 
 
@@ -316,10 +335,13 @@ def test_grace2l_training_parity_matgl_vs_tp(nacl_training_set):
     tp_model.build(tf.float64, jit_compile=False)
     train_function = tp_model.train_function
     tf_batch = _build_tp_batch(samples, tf.float64)
-    tp_optimizer = tf.keras.optimizers.Adam(learning_rate=LR)
+    # SGD's vanilla step on a small randomly-initialized model is enough to
+    # demonstrate the loss decreases over 10 iterations; see ``_tp_step``
+    # for the rationale for sidestepping ``tf.keras.optimizers.Adam``.
+    tp_lr = LR
     tp_losses: list[float] = []
     for _ in range(N_STEPS):
-        tp_losses.append(_tp_step(tp_model, train_function, tp_optimizer, tf_batch))
+        tp_losses.append(_tp_step(tp_model, train_function, tp_lr, tf_batch))
 
     # ---- assertions -----------------------------------------------------
     # Both losses must be finite throughout.
