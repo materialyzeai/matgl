@@ -137,7 +137,6 @@ jobs:
       PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: "python"
       MATGL_BACKEND: "PYG"
       TF_CPP_MIN_LOG_LEVEL: "2"
-      TF_USE_LEGACY_KERAS: "1"
     steps:
       - uses: actions/checkout@v5
       - name: Install uv
@@ -154,21 +153,28 @@ jobs:
           uv pip install -e .
           uv pip install pytest
       - name: Install tensorpotential (parity reference)
-        # Manual install — not added to pyproject.toml. ``numpy<2`` is
-        # required for compatibility with the TensorFlow versions
-        # ``tensorpotential`` pins (TF<2.20).
+        # Manual install — not added to pyproject.toml. We avoid pulling
+        # ``tensorpotential``'s full dependency closure for two reasons:
         #
-        # On Linux, ``tensorpotential`` pins ``tensorflow[and-cuda]<2.20``
-        # whose ``nvidia-nccl-cu12`` extra clashes with torch's bundled
-        # NCCL ABI (``undefined symbol: ncclCommWindowDeregister``). We
-        # override to plain ``tensorflow<2.20`` (CPU-only) — the parity
-        # tests are deterministic CPU math and don't need the GPU stack.
+        # 1. On Linux, ``tensorpotential`` pins ``tensorflow[and-cuda]<2.20``,
+        #    whose ``nvidia-nccl-cu12`` extra clashes with torch's bundled
+        #    NCCL ABI (``undefined symbol: ncclCommWindowDeregister``).
+        # 2. ``tensorpotential`` declares ``tf_keras`` as a dep, but the
+        #    Linux/Python 3.11 wheel resolved here ships with
+        #    ``saved_metadata.proto`` gencode 6.31.1 while ``tensorflow<2.20``
+        #    constrains ``protobuf<6.0.0`` — TF 2.19 unconditionally imports
+        #    ``tf_keras.src.optimizers`` at startup and the gencode/runtime
+        #    check fails. The parity tests don't use Keras at all.
+        #
+        # We install ``tensorpotential`` itself with ``--no-deps`` and add
+        # only the runtime deps the parity test actually exercises.
         run: |
-          cat > /tmp/tp-overrides.txt <<'EOF'
-          tensorflow<2.20
-          EOF
-          uv pip install --override /tmp/tp-overrides.txt \
-            "tensorpotential>=0.5.9" "numpy<2"
+          uv pip install --no-deps "tensorpotential>=0.5.9"
+          uv pip install \
+            "tensorflow<2.20" \
+            "numpy<2" \
+            "scipy" \
+            "sympy"
       - name: parity pytest
         run: |
           uv run python -c "import tensorflow as tf, tensorpotential; print('tf', tf.__version__)"
