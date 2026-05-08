@@ -177,6 +177,7 @@ lint.isort.required-imports = ["from __future__ import annotations"]
 # implementation). Renaming would obscure the math.
 "src/matgl/layers/_grace_pyg.py" = ["E741"]
 "src/matgl/models/_grace_pyg.py" = ["E741"]
+"tests/models/test_grace_parity_tp.py" = ["E741"]
 
 [tool.pytest.ini_options]
 addopts = "--durations=30 --quiet -rXs --color=yes -p no:warnings"

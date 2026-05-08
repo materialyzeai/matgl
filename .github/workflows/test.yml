@@ -123,6 +123,47 @@ jobs:
           path: coverage.pyg
           if-no-files-found: ignore
 
+  test_grace_parity:
+    # Numerical parity job for the GRACE model against the upstream
+    # ``tensorpotential`` (TensorFlow) reference. Heavy install (TensorFlow
+    # ~500 MB) so it lives in a dedicated job rather than under the main
+    # PYG matrix. ``tensorpotential`` is intentionally NOT declared as a
+    # project dependency or extras group; we install it manually here.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11"]
+    env:
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: "python"
+      MATGL_BACKEND: "PYG"
+      TF_CPP_MIN_LOG_LEVEL: "2"
+      TF_USE_LEGACY_KERAS: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          python-version: ${{ matrix.python }}
+      - name: Virtual env
+        run: uv venv --python ${{ matrix.python }} --clear
+      - name: Install matgl (PYG)
+        run: |
+          uv sync --upgrade
+          uv pip install -e .
+          uv pip install pytest
+      - name: Install tensorpotential (parity reference)
+        # Manual install — not added to pyproject.toml. ``numpy<2`` is
+        # required for compatibility with the TensorFlow versions
+        # ``tensorpotential`` pins (TF<2.20).
+        run: |
+          uv pip install "tensorpotential>=0.5.9" "numpy<2"
+      - name: parity pytest
+        run: |
+          uv run python -c "import tensorflow as tf, tensorpotential; print('tf', tf.__version__)"
+          uv run pytest tests/models/test_grace_parity_tp.py -v --color=yes
+
   coverage:
     needs: [test_dgl, test_pyg]
     runs-on: ubuntu-latest
