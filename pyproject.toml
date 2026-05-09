@@ -186,7 +186,11 @@ addopts = "--durations=30 --quiet -rXs --color=yes -p no:warnings"
 [tool.mypy]
 ignore_missing_imports = true
 no_implicit_optional = false
-exclude = ['examples', 'tests']
+# ``dev`` holds local development scripts (refactor helpers, validators,
+# ad-hoc reproducers). Not part of the installed package, so we don't
+# typecheck it alongside ``src/matgl``. mypy v2 walks more files by
+# default than v1.20, which is why this exclusion is needed now.
+exclude = ['examples', 'tests', 'dev']
 
 [[tool.mypy.overrides]]
 module = ["requests.*", "tabulate.*"]

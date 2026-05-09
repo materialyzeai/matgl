@@ -1,4 +1,14 @@
-exclude: ^(docs|.*test_files|tasks.py)
+# Globally-excluded paths: documentation sources, fixture directories, the
+# invoke ``tasks.py``, and the ``dev/`` directory of local helpers /
+# reproducers (not part of the installed package; lint debt there is out
+# of scope for the regular pre-commit pipeline).
+exclude: ^(docs|.*test_files|tasks\.py|dev/)
+
+# Install both pre-commit and commit-msg hook types when contributors run
+# ``pre-commit install`` — required for codespell's ``commit-msg`` stage
+# below to actually fire on commit messages without an extra install step.
+default_install_hook_types: [pre-commit, commit-msg]
+default_stages: [pre-commit]
 
 ci:
   autoupdate_schedule: monthly
@@ -10,7 +20,9 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.12
     hooks:
-      - id: ruff
+      # ``ruff-check`` is the modern hook id; ``id: ruff`` is the legacy
+      # alias and prints a "ruff (legacy alias)" warning every run.
+      - id: ruff-check
         args: [--fix]
       - id: ruff-format
 
@@ -18,13 +30,23 @@ repos:
     rev: v6.0.0
     hooks:
       - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=2000]
+      - id: debug-statements
       - id: end-of-file-fixer
       - id: trailing-whitespace
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.20.2
+    rev: v2.0.0
     hooks:
       - id: mypy
+        # mypy is given the explicit file list by pre-commit, which makes
+        # ``[tool.mypy] exclude = [...]`` in pyproject.toml a no-op for
+        # those files. Skip ``examples`` and ``tests`` at the hook level
+        # so mypy only sees ``src/matgl`` (matching pyproject.toml intent).
+        exclude: ^(examples|tests)/
 
   - repo: https://github.com/codespell-project/codespell
     rev: v2.4.2
@@ -32,7 +54,6 @@ repos:
       - id: codespell
         stages: [pre-commit, commit-msg]
         exclude_types: [html]
-        additional_dependencies: [tomli] # needed to read pyproject.toml below py3.11
         args: [--check-filenames]
         exclude: ^pretrained_models/.*/model\.json$
 
