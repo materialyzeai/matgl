@@ -70,22 +70,12 @@ def make_tensornet(element_types: tuple[str, ...]) -> nn.Module:
 
 
 def make_grace(element_types: tuple[str, ...]) -> nn.Module:
-    """GRACE scaled up to ~239K params.
+    """GRACE with library defaults (~213K params on 8-element table).
 
-    GRACE's defaults sit at ~9K params (production-tiny), so we widen the
-    radial / chemical channels and bump ``max_order`` to land in the same
-    ballpark as the other two.
+    The defaults were picked to sit within ~2% of TensorNet's parameter
+    count for a roughly compute-balanced comparison.
     """
-    return GRACE(
-        element_types=element_types,
-        n_rad_max=128,
-        lmax=3,
-        embedding_size=128,
-        indicator_n_max=128,
-        indicator_lmax=2,
-        max_order=4,
-        readout_hidden=(128,),
-    )
+    return GRACE(element_types=element_types)
 
 
 MODEL_FACTORIES: dict[str, Callable[[tuple[str, ...]], nn.Module]] = {
