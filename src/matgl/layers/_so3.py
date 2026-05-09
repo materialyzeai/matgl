@@ -213,21 +213,49 @@ class SO3TensorProduct(nn.Module):
 
     """
 
-    def __init__(self, lmax: int):
+    def __init__(self, lmax: int, lmax_in_2: int | None = None, lmax_out: int | None = None):
         """Initialize the SO3TensorProduct.
 
         Args:
-            lmax: maximum angular momentum in spherical harmonics.
+            lmax: maximum angular momentum of the first input ``x1`` (and the
+                output, when ``lmax_out`` is not given). Also acts as the
+                shared ``lmax`` when neither ``lmax_in_2`` nor ``lmax_out`` is
+                given (the original symmetric behavior).
+            lmax_in_2: maximum angular momentum of the second input ``x2``.
+                Defaults to ``lmax`` (symmetric form). Pass a smaller value
+                when ``x2`` is known to be zero beyond ``lmax_in_2`` — this
+                skips the would-be-zero CG triplets and avoids gathering /
+                multiplying the padded slots, which dominates GRACE's first
+                inter-block tensor product.
+            lmax_out: maximum angular momentum of the output. Defaults to
+                ``lmax``. Provided for symmetry; not currently exercised
+                outside symmetric use.
         """
         super().__init__()
         self.lmax = lmax
+        lmax_in_2_eff = int(lmax) if lmax_in_2 is None else int(lmax_in_2)
+        lmax_out_eff = int(lmax) if lmax_out is None else int(lmax_out)
+        self.lmax_in_2 = lmax_in_2_eff
+        self.lmax_out = lmax_out_eff
 
-        cg = generate_clebsch_gordan_rsh(lmax).to(matgl.float_th)
-        cg, idx_in_1, idx_in_2, idx_out = sparsify_clebsch_gordon(cg)
+        # Need the densest CG over the union of (lmax, lmax_in_2, lmax_out)
+        # to populate the output, then we slice down to the actual
+        # ``[lmax+1, lmax_in_2+1, lmax_out+1]`` region that's exercised.
+        cg_lmax = max(lmax, lmax_in_2_eff, lmax_out_eff)
+        cg_full = generate_clebsch_gordan_rsh(cg_lmax).to(matgl.float_th)
+        # cg_full has shape [(cg_lmax+1)^2, (cg_lmax+1)^2, (cg_lmax+1)^2].
+        # Slice to the actual lmax dims to avoid carrying zero-padded triplets
+        # from the larger-lmax block when the operands are smaller.
+        d1 = (lmax + 1) ** 2
+        d2 = (lmax_in_2_eff + 1) ** 2
+        do = (lmax_out_eff + 1) ** 2
+        cg_block = cg_full[:d1, :d2, :do].contiguous()
+        cg, idx_in_1, idx_in_2, idx_out = sparsify_clebsch_gordon(cg_block)
         self.register_buffer("idx_in_1", idx_in_1, persistent=False)
         self.register_buffer("idx_in_2", idx_in_2, persistent=False)
         self.register_buffer("idx_out", idx_out, persistent=False)
         self.register_buffer("clebsch_gordan", cg, persistent=False)
+        self._dim_out = do
 
     def forward(
         self,
@@ -243,15 +271,18 @@ class SO3TensorProduct(nn.Module):
         Returns:
             y: product of SO3 features.
         """
+        # NB: profiling on CPU showed that switching the gathers to
+        # ``torch.index_select`` slows the *backward* down — its gradient path
+        # (``aten::index_add_`` accumulating into [E, K_in, F]) is slower for
+        # these shapes than the advanced-indexing backward (``_index_put_impl_``).
+        # We keep the advanced-indexing form here.
         idx_in_1 = torch.as_tensor(self.idx_in_1)  # type: ignore[assignment]
         idx_in_2 = torch.as_tensor(self.idx_in_2)  # type: ignore[assignment]
-        idx_out = torch.as_tensor(self.idx_out)  # type: ignore[assignment]
-        clebsch_gordan = torch.as_tensor(self.clebsch_gordan)  # type: ignore[assignment]
-
-        x1 = x1[:, idx_in_1, :]
-        x2 = x2[:, idx_in_2, :]
-        y = x1 * x2 * clebsch_gordan[None, :, None]
-        return scatter_add(y, idx_out, dim_size=int((self.lmax + 1) ** 2), dim=1)
+        cg = torch.as_tensor(self.clebsch_gordan)  # type: ignore[assignment]
+        x1g = x1[:, idx_in_1, :]
+        x2g = x2[:, idx_in_2, :]
+        y = x1g * x2g * cg[None, :, None]
+        return scatter_add(y, self.idx_out, dim_size=self._dim_out, dim=1)  # type: ignore[arg-type]
 
 
 class SO3Convolution(nn.Module):

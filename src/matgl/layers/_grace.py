@@ -189,7 +189,10 @@ class GraceSPBasis(nn.Module):
         center_idx = edge_index[0]
         neighbor_idx = edge_index[1]
         z = self.indicator(self.chem_embedding)  # [n_elements, n_rad_max]
-        z_j = z[node_type[neighbor_idx]]  # [E, n_rad_max]
+        # Two index_select calls (1-D gather then 2-D gather) avoid the
+        # advanced-indexing path that backward-traces via ``_index_put_impl_``.
+        z_neigh = torch.index_select(node_type, 0, neighbor_idx)  # [E]
+        z_j = torch.index_select(z, 0, z_neigh)  # [E, n_rad_max]
         # Combine R_{nl}(r) * Y_{lm}(r̂) and weight by z_j.
         a_edge = radial_nl * spherical_lm.unsqueeze(-1) * z_j.unsqueeze(1)
         a_node = scatter_add(a_edge, center_idx, dim_size=num_nodes, dim=0)
@@ -269,7 +272,19 @@ class GraceSPBasisEquivariant(nn.Module):
         self.indicator_n_max = int(indicator_n_max)
         self.inv_avg_n_neigh = 1.0 / float(avg_n_neigh)
         self.indicator_proj = nn.Linear(indicator_n_max, n_rad_max, bias=False)
-        self.tp = SO3TensorProduct(lmax=lmax)
+        # Asymmetric tensor product (kept for the buffers — we reach into its
+        # sparsified CG to apply it at atom level instead of edge level).
+        # Shrinking CG to (lmax x indicator_lmax) cuts K from 353 to 215
+        # (lmax=3, indicator_lmax=2) — but the bigger win comes from moving
+        # the CG contraction itself from edges (~3K rows) to atoms (~200
+        # rows) by exploiting bilinearity: see ``forward`` below.
+        self.tp = SO3TensorProduct(lmax=lmax, lmax_in_2=indicator_lmax, lmax_out=lmax)
+        # Precomputed flat (lm1, lm2) → row index for gathering the
+        # j-summed outer product into the sparse-CG layout at atom level.
+        self._lm1_dim = (lmax + 1) ** 2
+        self._lm2_dim = (indicator_lmax + 1) ** 2
+        flat_idx = self.tp.idx_in_1 * self._lm2_dim + self.tp.idx_in_2  # type: ignore[arg-type]
+        self.register_buffer("_flat_idx", flat_idx, persistent=False)
 
     def forward(
         self,
@@ -294,12 +309,31 @@ class GraceSPBasisEquivariant(nn.Module):
         """
         center_idx = edge_index[0]
         neighbor_idx = edge_index[1]
-        bond_RY = radial_nl * spherical_lm.unsqueeze(-1)  # [E, (lmax+1)^2, n_rad_max]
-        bond_indicator = indicator[neighbor_idx]  # [E, (indicator_lmax+1)^2, indicator_n_max]
-        bond_indicator_proj = self.indicator_proj(bond_indicator)  # [..., n_rad_max]
-        bond_indicator_padded = pad_lm_axis(bond_indicator_proj, self.indicator_lmax, self.lmax)
-        bond_coupled = self.tp(bond_RY, bond_indicator_padded)
-        a_node = scatter_add(bond_coupled, center_idx, dim_size=num_nodes, dim=0)
+        bond_RY = radial_nl * spherical_lm.unsqueeze(-1)  # [E, lm1, F]
+        bond_indicator = torch.index_select(indicator, 0, neighbor_idx)  # [E, lm2_in, F]
+        bond_indicator_proj = self.indicator_proj(bond_indicator)  # [E, lm2, F]
+
+        # Bilinearity reformulation: rather than computing
+        #   A_i^L = (1/avg_n) Σⱼ CG(bond_RY[i,j], I_j)
+        # at edge level (which materializes a [E, K=215, F] tensor that
+        # dominates GRACE's CPU time), use
+        #   A_i^L = CG(B_i),    B_i^{l1m1, l2m2} = Σⱼ bond_RY[i,j]^{l1m1} I_j^{l2m2}
+        # The outer product still happens per-edge but yields a smaller
+        # [E, lm1·lm2, F] tensor; the K=215 sparse-CG sum is then applied
+        # only at atom level (N ≈ E/14), trading the heavy edge-level
+        # gather + scatter for a small atom-level one.
+        E = bond_RY.shape[0]
+        F = bond_RY.shape[2]
+        # [E, lm1, lm2, F] outer product, flattened on the lm axes for scatter.
+        outer = bond_RY.unsqueeze(2) * bond_indicator_proj.unsqueeze(1)
+        outer_flat = outer.reshape(E, self._lm1_dim * self._lm2_dim, F)
+        b_atom = scatter_add(outer_flat, center_idx, dim_size=num_nodes, dim=0)  # [N, lm1·lm2, F]
+
+        # Atom-level CG contraction via the same sparsified buffers as ``self.tp``.
+        cg = torch.as_tensor(self.tp.clebsch_gordan)  # type: ignore[arg-type]
+        gathered = b_atom[:, self._flat_idx, :]  # [N, K, F]
+        y = gathered * cg[None, :, None]
+        a_node = scatter_add(y, self.tp.idx_out, dim_size=self.tp._dim_out, dim=1)  # type: ignore[arg-type]
         return a_node * self.inv_avg_n_neigh
 
 
@@ -312,26 +346,46 @@ class GraceACEStack(nn.Module):
     SO(3) parity mask ``(-1)^l1 * (-1)^l2 == (-1)^L``.
 
     Args:
-        lmax: angular cutoff.
+        lmax: angular cutoff for intermediate products (their outputs feed into
+            the next product, so they must carry the full lm range).
         max_order: highest cluster order; ``max_order=3`` yields ``{A, A⊗A,
             A⊗A⊗A}``. Must be ``>= 1``.
+        last_lmax_out: lmax of the *final* product's output. Defaults to
+            ``lmax`` (no restriction). When the consumer only needs lower-L
+            components (e.g. only ``L=0`` for the energy readout, or up to
+            ``indicator_lmax`` for the next-block indicator), passing a
+            smaller value shrinks the CG buffer used by the last product
+            dramatically — for ``lmax=3``, dropping output to ``L=0`` cuts
+            the sparsified-CG entries from 353 to 16 (22x).
     """
 
-    def __init__(self, lmax: int, max_order: int):
+    def __init__(self, lmax: int, max_order: int, last_lmax_out: int | None = None):
         super().__init__()
         if max_order < 1:
             raise ValueError("max_order must be >= 1")
         self.lmax = int(lmax)
         self.max_order = int(max_order)
-        # max_order - 1 product layers; each shares the same lmax.
-        self.products = nn.ModuleList([SO3TensorProduct(lmax=lmax) for _ in range(self.max_order - 1)])
+        self.last_lmax_out = int(lmax) if last_lmax_out is None else int(last_lmax_out)
+        if self.last_lmax_out > self.lmax:
+            raise ValueError(f"last_lmax_out ({last_lmax_out}) must be <= lmax ({lmax}).")
+        # All but the final product use the full ``lmax`` for both inputs and
+        # output (their outputs feed the next product). The final product
+        # uses ``last_lmax_out`` for its output only.
+        n_products = self.max_order - 1
+        products: list[nn.Module] = []
+        for k in range(n_products):
+            is_last = k == n_products - 1
+            lmax_out = self.last_lmax_out if is_last else lmax
+            products.append(SO3TensorProduct(lmax=lmax, lmax_out=lmax_out))
+        self.products = nn.ModuleList(products)
 
     def forward(self, a_node: torch.Tensor) -> list[torch.Tensor]:
         """Build the chain of cluster-order equivariant tensors.
 
         Returns a list ``[A, A⊗A, ..., A^{max_order}]`` of per-atom
-        equivariant tensors. Each entry has shape
-        ``[N, (lmax+1)^2, n_rad_max]``.
+        equivariant tensors. Intermediate entries have shape
+        ``[N, (lmax+1)^2, n_rad_max]``; the final entry has shape
+        ``[N, (last_lmax_out+1)^2, n_rad_max]``.
         """
         outputs: list[torch.Tensor] = [a_node]
         prev = a_node

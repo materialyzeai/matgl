@@ -171,12 +171,15 @@ class GRACE(MatGLModel):
         # per-block.
         self.spherical = RealSphericalHarmonics(lmax=lmax)
 
-        self.radial_basis = nn.ModuleList(
-            [
-                ChebyshevRadialBasis(nfunc=n_rad_base, cutoff=cutoff, cutoff_exponent=cutoff_exponent)
-                for _ in range(self.nblocks)
-            ]
-        )
+        # Chebyshev basis is parameterless and depends only on (r, cutoff,
+        # cutoff_exponent) — those are identical across blocks, so we share
+        # one instance and call it once per forward instead of nblocks times.
+        # We keep ``self.radial_basis`` as a ``ModuleList`` of length nblocks
+        # for backward compatibility with checkpoints saved by previous
+        # versions of this model (every entry points at the same module so
+        # parameter counts and state-dict keys are unchanged).
+        shared_basis = ChebyshevRadialBasis(nfunc=n_rad_base, cutoff=cutoff, cutoff_exponent=cutoff_exponent)
+        self.radial_basis = nn.ModuleList([shared_basis for _ in range(self.nblocks)])
         self.radial_function = nn.ModuleList(
             [LinearRadialFunction(nfunc=n_rad_base, n_rad_max=n_rad_max, lmax=lmax) for _ in range(self.nblocks)]
         )
@@ -204,7 +207,19 @@ class GRACE(MatGLModel):
         )
         self.sp_basis = nn.ModuleList(sp_basis_modules)
 
-        self.ace_stack = nn.ModuleList([GraceACEStack(lmax=lmax, max_order=max_order) for _ in range(self.nblocks)])
+        # The last product in each block's ACE chain only needs to expose the
+        # lm components actually consumed downstream:
+        #   * collect_invariants reads only L=0;
+        #   * the next-block indicator concat reads up to ``indicator_lmax``.
+        # So for non-final blocks we set ``last_lmax_out = indicator_lmax``;
+        # the final block only feeds collect_invariants, so ``last_lmax_out=0``
+        # is sufficient (cuts the last product's CG buffer 22x for lmax=3).
+        ace_stacks: list[nn.Module] = []
+        for k in range(self.nblocks):
+            is_final_block = k == self.nblocks - 1
+            last_lmax_out = 0 if is_final_block else self.indicator_lmax
+            ace_stacks.append(GraceACEStack(lmax=lmax, max_order=max_order, last_lmax_out=last_lmax_out))
+        self.ace_stack = nn.ModuleList(ace_stacks)
 
         # ``nblocks - 1`` indicator-mixing linear projections, one between
         # every consecutive pair of blocks. Each maps the
@@ -259,13 +274,16 @@ class GRACE(MatGLModel):
         bond_vec, bond_dist = compute_pair_vector_and_distance(pos, edge_index, pbc_offshift)
         rhat = bond_vec / bond_dist.unsqueeze(-1).clamp_min(1e-10)
         spherical_lm = self.spherical(rhat)
+        # Chebyshev basis is parameterless so we hoist its ``forward`` out of
+        # the per-block loop (every block's ``self.radial_basis[k]`` points
+        # at the same shared module).
+        basis_values = self.radial_basis[0](bond_dist)
 
         atomic_energies = torch.zeros(num_nodes, dtype=pos.dtype, device=pos.device)
         indicator: torch.Tensor | None = None
         keep = (self.indicator_lmax + 1) ** 2
 
         for k in range(self.nblocks):
-            basis_values = self.radial_basis[k](bond_dist)
             radial_nl = self.radial_function[k](basis_values)
 
             if k == 0:
