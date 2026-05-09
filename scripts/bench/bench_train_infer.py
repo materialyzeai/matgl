@@ -264,50 +264,88 @@ def run(args: argparse.Namespace) -> None:
     print("=" * 78)
 
     print()
-    header = f"  {'model':<11s} {'#params':>10s} {'train ms (med)':>16s} "
+    header = f"  {'model':<22s} {'#params':>10s} {'train ms (med)':>16s} "
     header += f"{'p10':>8s} {'p90':>8s} {'infer ms (med)':>17s} {'p10':>8s} {'p90':>8s}"
     print(header)
     print("  " + "-" * (len(header) - 2))
 
     rows: list[tuple[str, int, TimingResult, TimingResult]] = []
 
+    # Variants: ("eager", no compile) and optionally ("compiled", torch.compile).
+    # torch.compile around Potential's autograd-grad path can be flaky; on any
+    # compile/runtime failure we fall back to printing FAILED for that row so
+    # the rest of the table still runs.
+    variants: list[str] = ["eager"]
+    if args.compile:
+        variants.append("compiled")
+
     for name, factory in MODEL_FACTORIES.items():
-        torch.manual_seed(args.seed)
-        model = factory(element_types).to(matgl.float_th)
-        potential = Potential(model=model, calc_stresses=True).to(matgl.float_th)
-        n_params = count_params(potential)
-        if not (args.min_params <= n_params <= args.max_params):
-            print(
-                f"  WARNING: {name} has {n_params:,} params, outside the "
-                f"[{args.min_params:,}, {args.max_params:,}] target window."
-            )
+        for variant in variants:
+            torch.manual_seed(args.seed)
+            model = factory(element_types).to(matgl.float_th)
+            potential = Potential(model=model, calc_stresses=True).to(matgl.float_th)
+            n_params = count_params(potential)
+            if variant == "eager" and not (args.min_params <= n_params <= args.max_params):
+                print(
+                    f"  WARNING: {name} has {n_params:,} params, outside the "
+                    f"[{args.min_params:,}, {args.max_params:,}] target window."
+                )
 
-        # Build the batch once; reusing the same graph keeps shape-dependent
-        # autograd graphs cached and lets us focus on raw forward/backward cost.
-        batch = build_batch(structure, converter, args.batch_size)
+            # Build the batch once; reusing the same graph keeps shape-dependent
+            # autograd graphs cached and lets us focus on raw forward/backward cost.
+            batch = build_batch(structure, converter, args.batch_size)
 
-        optimizer = torch.optim.Adam(potential.parameters(), lr=1e-3)
-        train_step = make_train_step(potential, batch, optimizer)
-        infer_step = make_infer_step(potential, batch)
+            optimizer = torch.optim.Adam(potential.parameters(), lr=1e-3)
+            run_module: nn.Module = potential
+            if variant == "compiled":
+                # Compile only the inner graph model. We can't safely compile
+                # Potential itself because dynamo doesn't trace cleanly through
+                # the autograd-grad call used to compute forces/stresses
+                # ("tensor not used in graph" / fake-tensor errors). Compiling
+                # the model alone covers the bulk of forward FLOPs and leaves
+                # the grad call eager.
+                potential.model = torch.compile(potential.model, fullgraph=False, dynamic=False)
 
-        train_t = time_loop(train_step, warmup=args.warmup, steps=args.steps)
+            label = f"{name} ({variant})" if args.compile else name
 
-        # Switch to eval-ish: still need autograd for force computation, just
-        # skip the optimizer / loss backward.
-        potential.eval()
-        infer_t = time_loop(infer_step, warmup=args.warmup, steps=args.steps)
-        potential.train()
+            # Time train and infer independently; either may fail under
+            # torch.compile (M3GNet has data-dependent shapes Dynamo can't
+            # trace; train double-backward isn't supported by AOTAutograd).
+            train_t: TimingResult | None = None
+            train_err: str | None = None
+            infer_t: TimingResult | None = None
+            infer_err: str | None = None
 
-        rows.append((name, n_params, train_t, infer_t))
+            try:
+                train_step = make_train_step(run_module, batch, optimizer)
+                train_t = time_loop(train_step, warmup=args.warmup, steps=args.steps)
+            except Exception as exc:
+                train_err = f"{type(exc).__name__}: {str(exc).splitlines()[0][:80]}"
 
-        print(
-            f"  {name:<11s} {n_params:>10,d}"
-            f"   {train_t.median_ms:>13.2f}  {train_t.p10_ms:>7.2f} {train_t.p90_ms:>7.2f}"
-            f"   {infer_t.median_ms:>14.2f}  {infer_t.p10_ms:>7.2f} {infer_t.p90_ms:>7.2f}"
-        )
+            potential.eval()
+            try:
+                infer_step = make_infer_step(run_module, batch)
+                infer_t = time_loop(infer_step, warmup=args.warmup, steps=args.steps)
+            except Exception as exc:
+                infer_err = f"{type(exc).__name__}: {str(exc).splitlines()[0][:80]}"
+            potential.train()
 
-        # Free parameters before next model.
-        del potential, model, optimizer, train_step, infer_step, batch
+            def fmt(t: TimingResult | None) -> str:
+                if t is None:
+                    return f"{'FAIL':>13s}  {'':>7s} {'':>7s}"
+                return f"{t.median_ms:>13.2f}  {t.p10_ms:>7.2f} {t.p90_ms:>7.2f}"
+
+            print(f"  {label:<22s} {n_params:>10,d}   {fmt(train_t)}   {fmt(infer_t)}")
+            if variant == "compiled":
+                if train_err:
+                    print(f"      train FAIL: {train_err}")
+                if infer_err:
+                    print(f"      infer FAIL: {infer_err}")
+            if train_t is not None and infer_t is not None:
+                rows.append((label, n_params, train_t, infer_t))
+
+            # Free parameters before next variant / model.
+            del potential, model, optimizer, run_module, batch
 
     print()
     print("Notes:")
@@ -315,6 +353,12 @@ def run(args: argparse.Namespace) -> None:
     print("  - 'infer ms' = forward + autograd-grad for forces/stress (no loss.backward)")
     print("  - The same batch is reused every step; no DataLoader / disk I/O.")
     print("  - Run on PYG backend; GRACE is PYG-only so DGL twin is omitted.")
+    if args.compile:
+        print("  - 'compiled' rows compile only the inner graph model (potential.model)")
+        print("    via torch.compile(fullgraph=False). Warmup absorbs compile time.")
+        print("  - Compiled-train commonly fails because force/stress losses require")
+        print("    double-backward, which AOTAutograd does not support.")
+        print("  - M3GNet does not compile (data-dependent shape in the 3-body index path).")
 
 
 def parse_args() -> argparse.Namespace:
@@ -328,6 +372,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--min-params", type=int, default=200_000)
     p.add_argument("--max-params", type=int, default=300_000)
+    p.add_argument(
+        "--compile",
+        action="store_true",
+        help="Also time torch.compile(potential) for each model (rows added after the eager rows).",
+    )
     return p.parse_args()
 
 
