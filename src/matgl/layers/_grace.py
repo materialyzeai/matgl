@@ -283,7 +283,12 @@ class GraceSPBasisEquivariant(nn.Module):
         # j-summed outer product into the sparse-CG layout at atom level.
         self._lm1_dim = (lmax + 1) ** 2
         self._lm2_dim = (indicator_lmax + 1) ** 2
-        flat_idx = self.tp.idx_in_1 * self._lm2_dim + self.tp.idx_in_2  # type: ignore[arg-type]
+        # ``self.tp.idx_in_*`` are registered buffers — typed as
+        # ``Tensor | Module`` so we narrow with ``torch.as_tensor`` before
+        # arithmetic (matgl idiom for buffer access).
+        idx_in_1 = torch.as_tensor(self.tp.idx_in_1)
+        idx_in_2 = torch.as_tensor(self.tp.idx_in_2)
+        flat_idx: torch.Tensor = idx_in_1 * self._lm2_dim + idx_in_2
         self.register_buffer("_flat_idx", flat_idx, persistent=False)
 
     def forward(
@@ -330,10 +335,11 @@ class GraceSPBasisEquivariant(nn.Module):
         b_atom = scatter_add(outer_flat, center_idx, dim_size=num_nodes, dim=0)  # [N, lm1·lm2, F]
 
         # Atom-level CG contraction via the same sparsified buffers as ``self.tp``.
-        cg = torch.as_tensor(self.tp.clebsch_gordan)  # type: ignore[arg-type]
-        gathered = b_atom[:, self._flat_idx, :]  # [N, K, F]
+        cg = torch.as_tensor(self.tp.clebsch_gordan)
+        flat_idx = torch.as_tensor(self._flat_idx)
+        gathered = b_atom[:, flat_idx, :]  # [N, K, F]
         y = gathered * cg[None, :, None]
-        a_node = scatter_add(y, self.tp.idx_out, dim_size=self.tp._dim_out, dim=1)  # type: ignore[arg-type]
+        a_node = scatter_add(y, torch.as_tensor(self.tp.idx_out), dim_size=self.tp._dim_out, dim=1)
         return a_node * self.inv_avg_n_neigh
 
 
