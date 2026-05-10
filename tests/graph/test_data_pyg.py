@@ -382,3 +382,61 @@ def test_mgl_dataloader_with_magmom(LiFePO4, BaNiO3):
     assert len(val_loader) == 1
     assert len(test_loader) == 1
     shutil.rmtree(f"{dataset.root}")
+
+
+def test_mgl_dataloader_autodetect_collate_fn(LiFePO4, BaNiO3):
+    """When ``collate_fn`` is omitted, the loader picks one from the dataset's labels."""
+    structures = [LiFePO4, BaNiO3] * 10
+    element_types = get_element_list([LiFePO4, BaNiO3])
+    cry_graph = Structure2Graph(element_types=element_types, cutoff=4.0)
+
+    # Property-prediction dataset (no ``forces``) -> ``collate_fn_graph``-shaped batch (4-tuple).
+    prop_dataset = MGLDataset(
+        structures=structures,
+        converter=cry_graph,
+        labels={"EForm": np.zeros(20).tolist()},
+        save_cache=False,
+    )
+    prop_train, prop_val = split_dataset(prop_dataset, frac_list=[0.9, 0.1, 0.0], shuffle=False)[:2]
+    prop_train_loader, _ = MGLDataLoader(train_data=prop_train, val_data=prop_val, batch_size=2, num_workers=0)
+    prop_batch = next(iter(prop_train_loader))
+    assert len(prop_batch) == 4  # (g, lat, state_attr, labels)
+
+    # PES dataset with forces only -> ``collate_fn_pes`` with ``include_stress=False`` (6-tuple).
+    f1 = np.zeros((28, 3)).tolist()
+    f2 = np.zeros((10, 3)).tolist()
+    forces = [f1 if i % 2 == 0 else f2 for i in range(20)]
+    pes_dataset = MGLDataset(
+        structures=structures,
+        converter=cry_graph,
+        labels={"energies": np.zeros(20).tolist(), "forces": forces},
+        save_cache=False,
+    )
+    pes_train, pes_val = split_dataset(pes_dataset, frac_list=[0.9, 0.1, 0.0], shuffle=False)[:2]
+    pes_train_loader, _ = MGLDataLoader(train_data=pes_train, val_data=pes_val, batch_size=2, num_workers=0)
+    pes_batch = next(iter(pes_train_loader))
+    assert len(pes_batch) == 6  # (g, lat, state_attr, e, f, s)
+
+    # PES with magmoms -> 7-tuple including ``m``. Use only LiFePO4 so per-atom
+    # magmom tensors all have the same length and ``collate_fn_pes``'s vstack
+    # works regardless of shuffle order (DataLoader inherits the global RNG,
+    # so this subtest can otherwise sample mixed-shape batches and fail
+    # depending on what set the seed earlier in the run).
+    mag_structs = [LiFePO4] * 20
+    mag_forces = [np.zeros((len(LiFePO4), 3)).tolist()] * 20
+    mag_magmoms = [[1.0] * len(LiFePO4)] * 20
+    mag_dataset = MGLDataset(
+        structures=mag_structs,
+        converter=cry_graph,
+        labels={
+            "energies": np.zeros(20).tolist(),
+            "forces": mag_forces,
+            "stresses": [np.zeros((3, 3)).tolist()] * 20,
+            "magmoms": mag_magmoms,
+        },
+        save_cache=False,
+    )
+    mag_train, mag_val = split_dataset(mag_dataset, frac_list=[0.9, 0.1, 0.0], shuffle=False)[:2]
+    mag_train_loader, _ = MGLDataLoader(train_data=mag_train, val_data=mag_val, batch_size=2, num_workers=0)
+    mag_batch = next(iter(mag_train_loader))
+    assert len(mag_batch) == 7

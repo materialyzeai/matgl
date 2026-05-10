@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from functools import partial
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -155,10 +156,34 @@ def collate_fn_pes(
     return g, lat.squeeze(), state_attr, e, f, s
 
 
+def _pick_collate_fn(labels: dict) -> Callable:
+    """Pick the right collate function from a dataset's label keys.
+
+    The two collate functions return different tuple shapes, so the choice has
+    to match the labels actually present in the dataset. Logic:
+
+    - No ``forces`` -> generic property-prediction (``collate_fn_graph``).
+    - PES with ``forces`` -> ``collate_fn_pes`` with stress/magmom/charge flags
+      enabled based on which optional keys are present.
+
+    ``magmoms`` and ``charges`` are mutually exclusive in ``collate_fn_pes``'s
+    return shape; we prefer ``magmoms`` when both happen to be present
+    (matching the DGL precedence) and document the override path.
+    """
+    if "forces" not in labels:
+        return collate_fn_graph
+    include_stress = "stresses" in labels
+    if "magmoms" in labels:
+        return partial(collate_fn_pes, include_stress=include_stress, include_magmom=True)
+    if "charges" in labels:
+        return partial(collate_fn_pes, include_stress=include_stress, include_charge=True)
+    return partial(collate_fn_pes, include_stress=include_stress)
+
+
 def MGLDataLoader(
     train_data: MGLDataset,
     val_data: MGLDataset,
-    collate_fn: Callable,
+    collate_fn: Callable | None = None,
     test_data: MGLDataset | None = None,
     **kwargs,
 ) -> tuple[DataLoader, ...]:
@@ -167,7 +192,12 @@ def MGLDataLoader(
     Args:
         train_data (Dataset): Training dataset (PyG Dataset or subset).
         val_data (Dataset): Validation dataset (PyG Dataset or subset).
-        collate_fn (Callable, optional): Collate function for batching.
+        collate_fn (Callable, optional): Collate function for batching. When ``None`` (default),
+            one is auto-selected from the training dataset's label keys: ``collate_fn_graph`` for
+            single-target property prediction (no ``forces`` key), or ``collate_fn_pes`` with
+            stress / magmom / charge flags toggled on based on the keys actually present. Pass
+            an explicit callable (e.g. ``partial(collate_fn_pes, include_stress=False)``) to
+            override.
         test_data (Dataset, optional): Test dataset (PyG Dataset or subset). Defaults to None.
         **kwargs: Pass-through kwargs to torch_geometric.loader.DataLoader. Common ones you may want to set are
             batch_size, num_workers, pin_memory, and generator.
@@ -182,6 +212,12 @@ def MGLDataLoader(
         ``num_workers > 0`` so the pool isn't torn down between epochs). Pass
         them explicitly to override.
     """
+    if collate_fn is None:
+        # Peel ``Subset`` (the common shape after ``split_dataset``) to reach
+        # the underlying ``MGLDataset`` whose ``labels`` drive the dispatch.
+        base = train_data.dataset if isinstance(train_data, Subset) else train_data
+        collate_fn = _pick_collate_fn(getattr(base, "labels", {}))
+
     kwargs = _default_loader_kwargs(kwargs)
     train_loader: DataLoader = DataLoader(train_data, shuffle=True, collate_fn=collate_fn, **kwargs)
     val_loader: DataLoader = DataLoader(val_data, shuffle=False, collate_fn=collate_fn, **kwargs)
