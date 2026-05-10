@@ -801,7 +801,7 @@ def xavier_init(model: nn.Module, gain: float = 1.0, distribution: Literal["unif
 
 
 # ---------------------------------------------------------------------------
-# MatGLTrainer — high-level "configure once, fit when asked" wrapper.
+# MatGLPotentialTrainer — high-level "configure once, fit when asked" wrapper.
 # ---------------------------------------------------------------------------
 
 HF_MATPES_REPO_ID = "materialyze/matpes"
@@ -970,7 +970,8 @@ def _build_pes_dataset(
     """Construct an ``MGLDataset`` from parallel structure / label lists."""
     if BACKEND != "PYG":
         raise RuntimeError(
-            "MatGLTrainer dataset loaders require the PyG backend. Set MATGL_BACKEND=PYG before importing matgl."
+            "MatGLPotentialTrainer dataset loaders require the PyG backend. "
+            "Set MATGL_BACKEND=PYG before importing matgl."
         )
     # Lazy imports to avoid circulars (``matgl.utils.training`` is foundational).
     from matgl.ext.pymatgen import Structure2Graph, get_element_list
@@ -1137,7 +1138,7 @@ def _atomrefs_array_from_payload(
     return np.asarray([refs[index_of[sym]] for sym in model_element_types], dtype="float64")
 
 
-class MatGLTrainer:
+class MatGLPotentialTrainer:
     r"""Configure-once / fit-when-asked trainer for matgl ``Potential`` training.
 
     ``__init__`` stores hyperparameters but does not download data, build a
@@ -1147,15 +1148,15 @@ class MatGLTrainer:
     Dataset-loading utilities are :class:`staticmethod`\ s so callers can grab
     raw data without configuring a trainer:
 
-    >>> ds = MatGLTrainer.load_matpes_dataset(version="r2SCAN-2025.2", split="test")
+    >>> ds = MatGLPotentialTrainer.load_matpes_dataset(version="r2SCAN-2025.2", split="test")
     >>> # or for non-MatPES sources:
-    >>> ds = MatGLTrainer.load_extxyz_dataset(
+    >>> ds = MatGLPotentialTrainer.load_extxyz_dataset(
     ...     repo_id="materialyze/mlip-lr-benchmarks", filename="cp_dimer.tar.gz"
     ... )
 
     A typical end-to-end MatPES call (HF download driven by ``fit``):
 
-    >>> trainer = MatGLTrainer(model, accelerator="gpu")
+    >>> trainer = MatGLPotentialTrainer(model, accelerator="gpu")
     >>> potential = trainer.fit(
     ...     dataset=("materialyze/matpes", "MatPES-R2SCAN-2025.2.json"),
     ...     atomrefs=("materialyze/matpes", "MatPES-R2SCAN-atoms.json"),
@@ -1349,7 +1350,7 @@ class MatGLTrainer:
             element_types = get_element_list(all_structures)
 
         return {
-            sp: MatGLTrainer.load_matpes_dataset(
+            sp: MatGLPotentialTrainer.load_matpes_dataset(
                 version=version,
                 split=sp,
                 cutoff=cutoff,
@@ -1435,7 +1436,7 @@ class MatGLTrainer:
             save_cache: Whether ``MGLDataset`` persists its processed cache.
             root: ``MGLDataset`` root directory; default lets it pick.
         """
-        local_path = MatGLTrainer._resolve_local_path(
+        local_path = MatGLPotentialTrainer._resolve_local_path(
             path, repo_id=repo_id, filename=filename, revision=revision, token=token, cache_dir=cache_dir
         )
         return _read_extxyz_dataset_local(
@@ -1470,7 +1471,7 @@ class MatGLTrainer:
         ``element_types`` is computed across the union of all matched splits
         when not supplied, so the three datasets share an ordering.
         """
-        local_path = MatGLTrainer._resolve_local_path(
+        local_path = MatGLPotentialTrainer._resolve_local_path(
             path, repo_id=repo_id, filename=filename, revision=revision, token=token, cache_dir=cache_dir
         )
         members = _read_extxyz_source(local_path)
@@ -1565,7 +1566,7 @@ class MatGLTrainer:
     ) -> tuple[DataLoader, DataLoader, DataLoader]:
         """Build the ``(train, val, test)`` triple from a single dataset or a splits mapping."""
         if BACKEND != "PYG":
-            raise RuntimeError("MatGLTrainer requires the PyG backend.")
+            raise RuntimeError("MatGLPotentialTrainer requires the PyG backend.")
         from matgl.graph.data import MGLDataLoader, MGLDataset, split_dataset
 
         loader_kwargs = dict(self.loader_kwargs)
@@ -1740,7 +1741,7 @@ class MatGLTrainer:
             ``self.atomrefs``) is updated.
         """
         if BACKEND != "PYG":
-            raise RuntimeError("MatGLTrainer.fit requires the PyG backend.")
+            raise RuntimeError("MatGLPotentialTrainer.fit requires the PyG backend.")
         pl.seed_everything(self.seed, workers=True)
 
         resolved_dataset = self._resolve_dataset(dataset, format=format)
@@ -1801,11 +1802,11 @@ class MatGLTrainer:
     def save(self, path: str | Path) -> None:
         """Save the trained ``Potential`` (delegates to :meth:`IOMixIn.save`)."""
         if self.potential is None:
-            raise RuntimeError("MatGLTrainer.save called before fit; nothing to save yet.")
+            raise RuntimeError("MatGLPotentialTrainer.save called before fit; nothing to save yet.")
         self.potential.save(str(path))
 
     def push_to_hub(self, repo_id: str, **kwargs) -> str:
         """Push the trained ``Potential`` to the Hub (delegates to :meth:`IOMixIn.push_to_hub`)."""
         if self.potential is None:
-            raise RuntimeError("MatGLTrainer.push_to_hub called before fit; nothing to push yet.")
+            raise RuntimeError("MatGLPotentialTrainer.push_to_hub called before fit; nothing to push yet.")
         return cast("str", self.potential.push_to_hub(repo_id, **kwargs))
