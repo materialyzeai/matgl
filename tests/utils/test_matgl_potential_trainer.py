@@ -87,29 +87,6 @@ class TestFilenameHelpers:
     def test_classify_extxyz_split(self, name, expected):
         assert _classify_extxyz_split(name) == expected
 
-    @pytest.mark.parametrize(
-        ("name", "expected"),
-        [
-            ("MatPES-R2SCAN-2025.2.json", "matpes"),
-            ("MatPES-R2SCAN-2025.2.json.gz", "matpes"),
-            ("cp_dimer.tar.gz", "extxyz"),
-            ("vama_train.extxyz", "extxyz"),
-            ("foo.xyz", "extxyz"),
-            ("foo.tar", "extxyz"),
-            ("foo.tgz", "extxyz"),
-        ],
-    )
-    def test_detect_data_format_known_suffixes(self, name, expected):
-        from matgl.utils.training import _detect_data_format
-
-        assert _detect_data_format(name) == expected
-
-    def test_detect_data_format_unknown_suffix_raises(self):
-        from matgl.utils.training import _detect_data_format
-
-        with pytest.raises(ValueError, match="auto-detect"):
-            _detect_data_format("dataset.parquet")
-
 
 # ---------------------------------------------------------------------------
 # Helpers for monkeypatching hf_hub_download.
@@ -423,56 +400,25 @@ class TestFit:
         reloaded = matgl.load_model(path=str(save_dir))
         assert isinstance(reloaded, Potential)
 
-    def test_fit_resolves_hf_dataset_tuple_with_auto_format(self, monkeypatch, tmp_path):
-        """fit() accepts a (repo_id, filename) tuple and auto-detects MatPES from the .json suffix."""
-        captured: list[dict] = []
+    def test_fit_extxyz_dataset_no_stress_auto_disabled(self, monkeypatch, extxyz_plain_file):
+        """A pre-built extxyz dataset with no stress trains; stress_weight is auto-disabled."""
 
-        def fake(**kwargs):
-            captured.append(kwargs)
-            fname = kwargs.get("filename", "")
-            return str(tmp_path / "atomrefs.json") if "atoms" in fname else str(_NACL_PARITY)
-
-        atomrefs_path = tmp_path / "atomrefs.json"
-        atomrefs_path.write_text(json.dumps({"element_types": ["Na", "Cl"], "refs": [-1.0, -2.0]}))
-        monkeypatch.setattr(training_mod, "hf_hub_download", fake)
-
-        model = self._make_model(("Na", "Cl"))
-        trainer = self._trainer(model)
-        trainer.fit(
-            dataset=("materialyze/matpes", "MatPES-R2SCAN-2025.2.json"),
-            format="auto",  # should infer 'matpes' from .json
-            atomrefs=("materialyze/matpes", "MatPES-R2SCAN-atoms.json"),
-        )
-
-        # Trainer wrote the resolved atomrefs onto self in (Na, Cl) order.
-        np.testing.assert_allclose(trainer.atomrefs, [-1.0, -2.0])
-        # hf_hub_download was hit twice: once for the dataset, once for atomrefs.
-        filenames = [c["filename"] for c in captured]
-        assert "MatPES-R2SCAN-2025.2.json" in filenames
-        assert "MatPES-R2SCAN-atoms.json" in filenames
-
-    def test_fit_extxyz_format_with_dict_atomrefs(self, monkeypatch, tmp_path, extxyz_plain_file):
-        """fit(format='extxyz') with an in-memory atomrefs dict and a local extxyz path."""
-
-        # No HF traffic at all in this path.
         def boom(**_):
-            raise AssertionError("hf_hub_download should not be called for local + dict atomrefs.")
+            raise AssertionError("hf_hub_download should not be called for a pre-built dataset.")
 
         monkeypatch.setattr(training_mod, "hf_hub_download", boom)
 
-        model = self._make_model(("H",))
+        ds = MatGLPotentialTrainer.load_extxyz_dataset(path=extxyz_plain_file, cutoff=2.0, save_cache=False)
+        model = self._make_model(ds.element_types)
         trainer = self._trainer(model)
-        trainer.fit(
-            dataset=str(extxyz_plain_file),
-            format="extxyz",
-            atomrefs={"element_types": ["H"], "refs": [-13.6]},
-        )
-        np.testing.assert_allclose(trainer.atomrefs, [-13.6])
-        # The forces-only extxyz (no stress) propagates through the loaders.
+        with pytest.warns(UserWarning, match="no stress labels"):
+            trainer.fit(dataset=ds, atomrefs=None)
+        assert trainer.atomrefs is None
+        # The forces-only extxyz propagates through the loaders.
         first_batch = next(iter(trainer.loaders["train"]))
-        assert len(first_batch) == 6  # (g, lat, state, e, f, s)  — s is zeros via auto-detect
+        assert len(first_batch) == 6  # (g, lat, state, e, f, s)
 
-    def test_fit_atomrefs_none(self, monkeypatch, tmp_path, extxyz_plain_file):
+    def test_fit_atomrefs_none(self, monkeypatch, extxyz_plain_file):
         """atomrefs=None disables offsets entirely."""
 
         def boom(**_):
@@ -480,9 +426,10 @@ class TestFit:
 
         monkeypatch.setattr(training_mod, "hf_hub_download", boom)
 
-        model = self._make_model(("H",))
+        ds = MatGLPotentialTrainer.load_extxyz_dataset(path=extxyz_plain_file, cutoff=2.0, save_cache=False)
+        model = self._make_model(ds.element_types)
         trainer = self._trainer(model)
-        trainer.fit(dataset=extxyz_plain_file, format="auto", atomrefs=None)
+        trainer.fit(dataset=ds, atomrefs=None)
         assert trainer.atomrefs is None
 
     def test_fit_atomrefs_atomref_instance(self, monkeypatch, extxyz_plain_file):
@@ -496,11 +443,25 @@ class TestFit:
 
         monkeypatch.setattr(training_mod, "hf_hub_download", boom)
 
-        ref_layer = AtomRef(property_offset=torch.tensor([-7.5], dtype=torch.float32))
-        model = self._make_model(("H",))
+        ds = MatGLPotentialTrainer.load_extxyz_dataset(path=extxyz_plain_file, cutoff=2.0, save_cache=False)
+        model = self._make_model(ds.element_types)
         trainer = self._trainer(model)
-        trainer.fit(dataset=extxyz_plain_file, format="extxyz", atomrefs=ref_layer)
+        ref_layer = AtomRef(property_offset=torch.tensor([-7.5], dtype=torch.float32))
+        trainer.fit(dataset=ds, atomrefs=ref_layer)
         np.testing.assert_allclose(trainer.atomrefs, [-7.5])
+
+    def test_fit_atomrefs_invalid_type_raises(self, monkeypatch, extxyz_plain_file):
+        """Anything other than ndarray / AtomRef / None raises TypeError."""
+
+        def boom(**_):
+            raise AssertionError("no HF traffic expected.")
+
+        monkeypatch.setattr(training_mod, "hf_hub_download", boom)
+        ds = MatGLPotentialTrainer.load_extxyz_dataset(path=extxyz_plain_file, cutoff=2.0, save_cache=False)
+        model = self._make_model(ds.element_types)
+        trainer = self._trainer(model)
+        with pytest.raises(TypeError, match="atomrefs must be"):
+            trainer.fit(dataset=ds, atomrefs={"element_types": ["H"], "refs": [-13.6]})
 
 
 # ---------------------------------------------------------------------------

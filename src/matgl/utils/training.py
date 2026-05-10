@@ -993,48 +993,6 @@ def _build_pes_dataset(
     return dataset
 
 
-def _resolve_to_local_path(spec: Any, *, cache_dir: str | Path | None = None) -> Path:
-    """Resolve a HF dataset spec or local path to a concrete file path.
-
-    Accepted shapes:
-
-    - ``str`` / ``Path``: treated as a local file path.
-    - ``tuple[str, str]``: ``(repo_id, filename)``; downloaded via ``hf_hub_download``.
-    - ``Mapping`` with at least ``"repo_id"`` and ``"filename"`` keys: forwarded
-      verbatim to ``hf_hub_download`` (so ``revision``, ``token``, ``cache_dir``,
-      ``force_download``, etc. flow through).
-    """
-    if isinstance(spec, (str, Path)):
-        return Path(spec)
-    if isinstance(spec, tuple):
-        if len(spec) != 2 or not all(isinstance(x, str) for x in spec):
-            raise ValueError(f"Tuple HF spec must be (repo_id: str, filename: str), got {spec!r}.")
-        repo_id, filename = spec
-        return Path(hf_hub_download(repo_id=repo_id, filename=filename, cache_dir=_resolve_cache_dir(cache_dir)))
-    if isinstance(spec, Mapping):
-        kwargs = dict(spec)
-        if "repo_id" not in kwargs or "filename" not in kwargs:
-            raise ValueError(f"Mapping HF spec must contain 'repo_id' and 'filename'; got keys {sorted(kwargs)}.")
-        if "cache_dir" not in kwargs:
-            kwargs["cache_dir"] = _resolve_cache_dir(cache_dir)
-        return Path(hf_hub_download(**kwargs))
-    raise ValueError(f"Cannot resolve {spec!r} as a HF spec (tuple/dict) or local path (str/Path).")
-
-
-def _detect_data_format(name: str) -> str:
-    """Infer ``"matpes"`` or ``"extxyz"`` from a filename suffix."""
-    lower = name.lower()
-    if lower.endswith((".extxyz", ".xyz", ".tar.gz", ".tgz", ".tar")):
-        return "extxyz"
-    if lower.endswith((".json.gz", ".json")):
-        return "matpes"
-    raise ValueError(
-        f"Cannot auto-detect data format from {name!r}. Supported: "
-        f"'.json'/'.json.gz' (matpes), '.extxyz'/'.xyz'/'.tar.gz'/'.tgz'/'.tar' (extxyz). "
-        f"Pass format='matpes' or format='extxyz' explicitly."
-    )
-
-
 def _read_matpes_dataset_local(
     local_path: str | Path,
     *,
@@ -1095,6 +1053,36 @@ def _read_extxyz_dataset_local(
     )
 
 
+def _coerce_atomrefs(atomrefs: Any) -> np.ndarray | None:
+    """Normalise the ``fit(atomrefs=...)`` argument to a numpy array (or ``None``).
+
+    Accepted shapes:
+
+    - ``None``: no offsets.
+    - ``np.ndarray``: used as-is (assumed to be in ``model.element_types`` order).
+    - :class:`~matgl.layers._atom_ref_pyg.AtomRef` instance: ``property_offset``
+      extracted as a numpy array.
+
+    Anything else raises ``TypeError``. To download MatPES atomic references
+    or parse a dict / file, use :meth:`MatGLPotentialTrainer.load_matpes_element_refs`
+    explicitly and pass the resulting ``np.ndarray``.
+    """
+    if atomrefs is None:
+        return None
+    if isinstance(atomrefs, np.ndarray):
+        return atomrefs.astype("float64", copy=False)
+    # Lazy import to avoid pulling layers at module-import time.
+    from matgl.layers._atom_ref_pyg import AtomRef
+
+    if isinstance(atomrefs, AtomRef):
+        return atomrefs.property_offset.detach().cpu().numpy().astype("float64")
+    raise TypeError(
+        f"atomrefs must be None, an np.ndarray, or an AtomRef instance; got {type(atomrefs).__name__}. "
+        "Use MatGLPotentialTrainer.load_matpes_element_refs(...) to download from HF, or "
+        "matgl.utils.training.fit_element_refs(...) to fit locally."
+    )
+
+
 def _dataset_has_stresses(dataset: Any) -> bool:
     """Return True iff the dataset (single or splits dict) carries a ``"stresses"`` label.
 
@@ -1114,30 +1102,6 @@ def _dataset_has_stresses(dataset: Any) -> bool:
     return True
 
 
-def _atomrefs_array_from_payload(
-    payload: Mapping[str, Any],
-    model_element_types: tuple[str, ...] | None,
-    *,
-    source_for_error: str = "atomrefs payload",
-) -> np.ndarray:
-    """Convert a ``{"element_types": [...], "refs": [...]}`` mapping into a numpy array.
-
-    When ``model_element_types`` is supplied the array is reordered so
-    ``out[i]`` is the offset for ``model_element_types[i]``.
-    """
-    if "element_types" not in payload or "refs" not in payload:
-        raise KeyError(f"atomrefs payload must contain 'element_types' and 'refs' keys; got {sorted(payload.keys())}.")
-    file_elements: list[str] = list(payload["element_types"])
-    refs = np.asarray(payload["refs"], dtype="float64")
-    if model_element_types is None:
-        return refs
-    index_of = {sym: i for i, sym in enumerate(file_elements)}
-    missing = [sym for sym in model_element_types if sym not in index_of]
-    if missing:
-        raise KeyError(f"Element(s) {missing} not present in {source_for_error}. File covers: {file_elements}.")
-    return np.asarray([refs[index_of[sym]] for sym in model_element_types], dtype="float64")
-
-
 class MatGLPotentialTrainer:
     r"""Configure-once / fit-when-asked trainer for matgl ``Potential`` training.
 
@@ -1145,24 +1109,32 @@ class MatGLPotentialTrainer:
     dataset, or instantiate Lightning. The first network / disk activity
     happens inside :meth:`fit`.
 
-    Dataset-loading utilities are :class:`staticmethod`\ s so callers can grab
-    raw data without configuring a trainer:
+    Dataset construction is delegated to :class:`staticmethod`\ helpers that
+    callers can invoke independently of the trainer:
 
-    >>> ds = MatGLPotentialTrainer.load_matpes_dataset(version="r2SCAN-2025.2", split="test")
-    >>> # or for non-MatPES sources:
+    - :meth:`load_matpes_dataset` / :meth:`load_matpes_splits` /
+      :meth:`load_matpes_element_refs` for the ``materialyze/matpes`` HF repo.
+    - :meth:`load_extxyz_dataset` / :meth:`load_extxyz_splits` for any
+      extxyz / xyz file (or tarball thereof), local or via HF.
+
+    A typical end-to-end MatPES call:
+
+    >>> ds = MatGLPotentialTrainer.load_matpes_dataset(version="r2SCAN-2025.2", split="train")
+    >>> refs = MatGLPotentialTrainer.load_matpes_element_refs(
+    ...     version="r2SCAN-2025.2", element_types=ds.element_types
+    ... )
+    >>> trainer = MatGLPotentialTrainer(model, accelerator="gpu")
+    >>> potential = trainer.fit(dataset=ds, atomrefs=refs)
+    >>> trainer.save("./MatPES-TensorNet")
+
+    For an extxyz dataset (e.g. ``materialyze/mlip-lr-benchmarks``
+    ``cp_dimer.tar.gz``) just swap the loader; cluster / dimer files have
+    no stress, so ``stress_weight`` is auto-disabled with a warning:
+
     >>> ds = MatGLPotentialTrainer.load_extxyz_dataset(
     ...     repo_id="materialyze/mlip-lr-benchmarks", filename="cp_dimer.tar.gz"
     ... )
-
-    A typical end-to-end MatPES call (HF download driven by ``fit``):
-
-    >>> trainer = MatGLPotentialTrainer(model, accelerator="gpu")
-    >>> potential = trainer.fit(
-    ...     dataset=("materialyze/matpes", "MatPES-R2SCAN-2025.2.json"),
-    ...     atomrefs=("materialyze/matpes", "MatPES-R2SCAN-atoms.json"),
-    ...     format="auto",   # infers 'matpes' from .json
-    ... )
-    >>> trainer.save("./MatPES-TensorNet")
+    >>> trainer.fit(dataset=ds)
 
     The trainer is PyG-only; DGL is being deprecated. The class itself
     imports cleanly under DGL but its loader methods and ``fit`` raise
@@ -1295,9 +1267,12 @@ class MatGLPotentialTrainer:
             environments use ``split="train"`` / ``"test"`` / ``"valid"``.
         """
         filename = _matpes_dataset_filename(version, split)
-        local_path = _resolve_to_local_path(
-            {"repo_id": repo_id, "filename": filename, "revision": revision, "token": token},
-            cache_dir=cache_dir,
+        local_path = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            revision=revision,
+            token=token,
+            cache_dir=_resolve_cache_dir(cache_dir),
         )
         return _read_matpes_dataset_local(
             local_path,
@@ -1381,15 +1356,23 @@ class MatGLPotentialTrainer:
         ``refs[i]`` is the offset for ``element_types[i]``.
         """
         filename = _matpes_atomrefs_filename(version)
-        local_path = _resolve_to_local_path(
-            {"repo_id": repo_id, "filename": filename, "revision": revision, "token": token},
-            cache_dir=cache_dir,
+        local_path = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            revision=revision,
+            token=token,
+            cache_dir=_resolve_cache_dir(cache_dir),
         )
-        return _atomrefs_array_from_payload(
-            loadfn(str(local_path)),
-            element_types,
-            source_for_error=filename,
-        )
+        payload = loadfn(str(local_path))
+        file_elements: list[str] = list(payload["element_types"])
+        refs = np.asarray(payload["refs"], dtype="float64")
+        if element_types is None:
+            return refs
+        index_of = {sym: i for i, sym in enumerate(file_elements)}
+        missing = [sym for sym in element_types if sym not in index_of]
+        if missing:
+            raise KeyError(f"Element(s) {missing} not present in {filename}. File covers: {file_elements}.")
+        return np.asarray([refs[index_of[sym]] for sym in element_types], dtype="float64")
 
     # ------------------------------------------------------------------
     # extxyz dataset loaders (any HF / local source).
@@ -1609,127 +1592,32 @@ class MatGLPotentialTrainer:
         )
 
     # ------------------------------------------------------------------
-    # Dataset / atomrefs resolution (used by ``fit``).
-    # ------------------------------------------------------------------
-
-    def _resolve_dataset(
-        self,
-        dataset: Any,
-        *,
-        format: Literal["auto", "matpes", "extxyz"] = "auto",
-    ) -> MGLDataset | Mapping[str, MGLDataset]:
-        """Coerce a user-supplied ``dataset`` argument into a usable form.
-
-        Pre-built ``MGLDataset`` and pre-built canonical-splits mappings are
-        passed through. HF specs (``(repo_id, filename)`` tuples or mappings
-        with ``"repo_id"`` + ``"filename"``) and local paths are downloaded
-        (if needed) and parsed by the loader picked from ``format``. ``"auto"``
-        infers from the filename suffix (``.json`` / ``.json.gz`` -> matpes;
-        ``.extxyz`` / ``.xyz`` / ``.tar.gz`` / ``.tgz`` / ``.tar`` -> extxyz).
-        """
-        from matgl.graph.data import MGLDataset
-
-        if isinstance(dataset, MGLDataset):
-            return dataset
-        # A mapping with "repo_id" is an HF spec, not a splits dict.
-        if isinstance(dataset, Mapping) and "repo_id" not in dataset:
-            return cast("Mapping[str, MGLDataset]", dataset)
-
-        local_path = _resolve_to_local_path(dataset)
-        fmt: str = format
-        if fmt == "auto":
-            fmt = _detect_data_format(local_path.name)
-        # ``save_cache=False`` here so an in-fit dataset doesn't pollute the
-        # shared default ``./MGLDataset/`` cache between fits or between
-        # otherwise-isolated tests. Users wanting on-disk caching should
-        # pre-build via :meth:`load_matpes_dataset` / :meth:`load_extxyz_dataset`.
-        if fmt == "matpes":
-            return _read_matpes_dataset_local(local_path, save_cache=False)
-        if fmt == "extxyz":
-            return _read_extxyz_dataset_local(local_path, save_cache=False)
-        raise ValueError(f"Unknown dataset format {fmt!r}; expected 'auto', 'matpes', or 'extxyz'.")
-
-    def _resolve_atomrefs(self, atomrefs: Any) -> np.ndarray | None:
-        """Coerce a user-supplied ``atomrefs`` argument into a numpy array (or ``None``).
-
-        Accepted shapes:
-
-        - ``None``: no offsets.
-        - ``np.ndarray``: used as-is (assumed to be in ``model.element_types`` order).
-        - ``AtomRef`` instance: ``property_offset`` extracted as a numpy array.
-        - ``Mapping`` with ``"element_types"`` + ``"refs"``: parsed as an in-memory
-          payload and reordered to ``model.element_types``.
-        - HF spec (``tuple[str, str]`` or ``Mapping`` with ``"repo_id"`` +
-          ``"filename"``): downloaded and parsed as a JSON payload.
-        - ``str`` / ``Path``: local JSON file with the same payload schema.
-        """
-        if atomrefs is None:
-            return None
-        if isinstance(atomrefs, np.ndarray):
-            return atomrefs.astype("float64", copy=False)
-        # Lazy import to avoid pulling layers at module import time.
-        from matgl.layers._atom_ref_pyg import AtomRef as _AtomRef
-
-        if isinstance(atomrefs, _AtomRef):
-            return atomrefs.property_offset.detach().cpu().numpy().astype("float64")
-
-        model_element_types: tuple[str, ...] | None = getattr(self.model, "element_types", None)
-
-        if isinstance(atomrefs, Mapping) and "element_types" in atomrefs and "refs" in atomrefs:
-            return _atomrefs_array_from_payload(
-                atomrefs, model_element_types, source_for_error="in-memory atomrefs dict"
-            )
-
-        # Otherwise treat as a HF spec or local-path; download / read JSON.
-        local_path = _resolve_to_local_path(atomrefs)
-        return _atomrefs_array_from_payload(
-            loadfn(str(local_path)), model_element_types, source_for_error=str(local_path.name)
-        )
-
-    # ------------------------------------------------------------------
     # Public training entry point.
     # ------------------------------------------------------------------
 
     def fit(
         self,
-        dataset: Any,
+        dataset: MGLDataset | Mapping[str, MGLDataset],
         *,
-        format: Literal["auto", "matpes", "extxyz"] = "auto",
-        atomrefs: Any = None,
+        atomrefs: np.ndarray | Any = None,
         save_path: str | Path | None = None,
         push_to_hub: str | None = None,
     ) -> Potential:
-        """Run training end-to-end.
+        """Run training end-to-end on a pre-built dataset.
 
         Args:
-            dataset: A HF dataset definition or a pre-built dataset. Accepted
-                shapes:
-
-                - ``(repo_id, filename)`` tuple: downloaded from HF and parsed
-                  according to ``format``.
-                - ``Mapping`` with ``"repo_id"`` + ``"filename"`` (and optional
-                  ``"revision"`` / ``"token"`` / ``"cache_dir"``): same as
-                  above with extra ``hf_hub_download`` kwargs.
-                - ``str`` / ``Path`` to a local file: parsed according to
-                  ``format``.
-                - Pre-built :class:`MGLDataset` (used directly).
-                - Pre-built canonical-splits ``Mapping[str, MGLDataset]``
-                  with keys ``"train"`` / ``"valid"`` / ``"test"``.
-            format: One of ``"auto"`` (infer from filename suffix; the default),
-                ``"matpes"`` (force the MatPES JSON loader), or ``"extxyz"``
-                (force the extxyz / tarball loader). Ignored when ``dataset``
-                is already an :class:`MGLDataset` or splits mapping.
-            atomrefs: Optional per-element energy offsets. Accepted shapes:
-
-                - ``None``: no offsets (default).
-                - ``np.ndarray``: already in ``model.element_types`` order.
-                - :class:`AtomRef` instance: the layer's ``property_offset``
-                  is extracted.
-                - ``Mapping`` with ``"element_types"`` + ``"refs"``: in-memory
-                  atomrefs payload; reordered to ``model.element_types``.
-                - HF spec (tuple or mapping with ``"repo_id"`` + ``"filename"``)
-                  or local path: downloaded / read as a JSON payload of the
-                  same shape and reordered.
+            dataset: An :class:`MGLDataset` (random split inside
+                :meth:`_build_dataloaders`) or a canonical-splits mapping with
+                keys ``"train"`` / ``"valid"`` / ``"test"``. Use the static
+                helpers :meth:`load_matpes_dataset` / :meth:`load_matpes_splits` /
+                :meth:`load_extxyz_dataset` / :meth:`load_extxyz_splits` to
+                build one.
+            atomrefs: Optional per-element energy offsets. Either an
+                ``np.ndarray`` (in ``model.element_types`` order), an
+                :class:`AtomRef` instance (the layer's ``property_offset`` is
+                extracted), or ``None`` (no offsets, default). Use
+                :meth:`load_matpes_element_refs` (download from HF) or
+                :func:`fit_element_refs` (fit locally) to obtain one.
             save_path: If given, ``potential.save(save_path)`` after training.
             push_to_hub: If given, ``potential.push_to_hub(push_to_hub)``
                 after training.
@@ -1739,15 +1627,21 @@ class MatGLPotentialTrainer:
             ``self.potential``; auxiliary state (``self.lit_module``,
             ``self.trainer``, ``self.loaders``, ``self.dataset``,
             ``self.atomrefs``) is updated.
+
+        Notes:
+            When the dataset has no ``"stresses"`` label (e.g. a cluster /
+            dimer extxyz dataset like ``cp_dimer.tar.gz``), the stress loss
+            term is auto-disabled for this fit with a one-line warning so
+            the trainer-level default ``stress_weight=0.1`` doesn't trigger
+            a shape mismatch.
         """
         if BACKEND != "PYG":
             raise RuntimeError("MatGLPotentialTrainer.fit requires the PyG backend.")
         pl.seed_everything(self.seed, workers=True)
 
-        resolved_dataset = self._resolve_dataset(dataset, format=format)
-        resolved_atomrefs = self._resolve_atomrefs(atomrefs)
+        resolved_atomrefs = _coerce_atomrefs(atomrefs)
 
-        self.dataset = resolved_dataset
+        self.dataset = dataset
         self.atomrefs = resolved_atomrefs
 
         # If the dataset has no stress labels (e.g. cluster / dimer extxyz),
@@ -1755,7 +1649,7 @@ class MatGLPotentialTrainer:
         # so the trainer-level default (``stress_weight=0.1``) doesn't blow up
         # with a shape mismatch deep inside ``collate_fn_pes`` / torchmetrics.
         effective_stress_weight = self.stress_weight
-        if effective_stress_weight > 0 and not _dataset_has_stresses(resolved_dataset):
+        if effective_stress_weight > 0 and not _dataset_has_stresses(dataset):
             warnings.warn(
                 "Dataset has no stress labels; disabling stress loss term "
                 f"(stress_weight={self.stress_weight} -> 0) for this fit.",
@@ -1763,7 +1657,7 @@ class MatGLPotentialTrainer:
             )
             effective_stress_weight = 0.0
 
-        train_loader, val_loader, test_loader = self._build_dataloaders(resolved_dataset)
+        train_loader, val_loader, test_loader = self._build_dataloaders(dataset)
         self.loaders = {"train": train_loader, "val": val_loader, "test": test_loader}
 
         self.lit_module = PotentialLightningModule(
