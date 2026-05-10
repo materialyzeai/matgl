@@ -23,7 +23,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchmetrics
-from huggingface_hub import hf_hub_download
+from huggingface_hub import _CACHED_NO_EXIST, hf_hub_download, try_to_load_from_cache
 from monty.serialization import loadfn
 from pymatgen.core import Structure
 from torch import nn
@@ -898,6 +898,46 @@ def _resolve_cache_dir(cache_dir: str | Path | None) -> str:
     return str(cache_dir) if cache_dir is not None else str(MATGL_CACHE)
 
 
+def _hf_download_cached_first(
+    *,
+    repo_id: str,
+    filename: str,
+    repo_type: str,
+    revision: str | None,
+    token: str | None,
+    cache_dir: str | Path | None,
+) -> str:
+    """Return the local path for an HF Hub file, using the cache when available.
+
+    ``hf_hub_download`` already caches blobs but still makes an HTTP HEAD
+    request to validate the etag on every call, which slows repeated loads
+    and fails entirely when offline. ``try_to_load_from_cache`` resolves the
+    cached snapshot path with no network access, so we use it as a fast path
+    and only fall through to ``hf_hub_download`` on a miss.
+    """
+    resolved = _resolve_cache_dir(cache_dir)
+    cached = try_to_load_from_cache(
+        repo_id=repo_id,
+        filename=filename,
+        repo_type=repo_type,
+        cache_dir=resolved,
+        revision=revision,
+    )
+    # ``cached`` is a path string when the file is in cache, ``None`` when not
+    # cached, and the ``_CACHED_NO_EXIST`` sentinel when a previous lookup
+    # cached a known-missing status.
+    if isinstance(cached, str) and cached is not _CACHED_NO_EXIST:
+        return cached
+    return hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        repo_type=repo_type,
+        revision=revision,
+        token=token,
+        cache_dir=resolved,
+    )
+
+
 def _classify_extxyz_split(filename: str) -> str | None:
     """Return ``"train"`` / ``"test"`` / ``"valid"`` for a filename, or ``None`` if none match."""
     for tag, pattern in _EXTXYZ_SPLIT_PATTERNS.items():
@@ -1324,13 +1364,13 @@ class MatGLPotentialTrainer:
             environments use ``split="train"`` / ``"test"`` / ``"valid"``.
         """
         filename = _matpes_dataset_filename(version, split)
-        local_path = hf_hub_download(
+        local_path = _hf_download_cached_first(
             repo_id=repo_id,
             filename=filename,
             repo_type="dataset",
             revision=revision,
             token=token,
-            cache_dir=_resolve_cache_dir(cache_dir),
+            cache_dir=cache_dir,
         )
         return _read_matpes_dataset_local(
             local_path,
@@ -1373,13 +1413,13 @@ class MatGLPotentialTrainer:
         if element_types is None:
             all_structures: list[Structure] = []
             for sp in VALID_SPLITS:
-                local_path = hf_hub_download(
+                local_path = _hf_download_cached_first(
                     repo_id=repo_id,
                     filename=_matpes_dataset_filename(version, sp),
                     repo_type="dataset",
                     revision=revision,
                     token=token,
-                    cache_dir=_resolve_cache_dir(cache_dir),
+                    cache_dir=cache_dir,
                 )
                 samples = _matpes_payload_to_samples(loadfn(str(local_path)), local_path)
                 structs, _, _, _ = _matpes_samples_to_lists(samples)
@@ -1421,13 +1461,13 @@ class MatGLPotentialTrainer:
         ``refs[i]`` is the offset for ``element_types[i]``.
         """
         filename = _matpes_atomrefs_filename(version)
-        local_path = hf_hub_download(
+        local_path = _hf_download_cached_first(
             repo_id=repo_id,
             filename=filename,
             repo_type="dataset",
             revision=revision,
             token=token,
-            cache_dir=_resolve_cache_dir(cache_dir),
+            cache_dir=cache_dir,
         )
         payload = loadfn(str(local_path))
         file_elements: list[str] = list(payload["element_types"])

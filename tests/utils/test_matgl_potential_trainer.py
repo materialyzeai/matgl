@@ -264,6 +264,58 @@ class TestLoadMatpesDataset:
                 stress_unit="bogus",  # type: ignore[arg-type]
             )
 
+    def test_uses_cached_file_without_calling_hf_hub_download(self, monkeypatch, tmp_path):
+        """When the file is already cached, hf_hub_download must not be called."""
+        # try_to_load_from_cache returns the cached path → fast path.
+        monkeypatch.setattr(
+            training_mod,
+            "try_to_load_from_cache",
+            lambda **kwargs: str(_NACL_PARITY),
+        )
+
+        download_calls: list[dict] = []
+
+        def fail_if_called(**kwargs):
+            download_calls.append(kwargs)
+            raise AssertionError("hf_hub_download must not be called when the file is cached")
+
+        monkeypatch.setattr(training_mod, "hf_hub_download", fail_if_called)
+
+        ds = MatGLPotentialTrainer.load_matpes_dataset(
+            version="r2SCAN-2025.2",
+            cutoff=4.0,
+            cache_dir=tmp_path,
+            save_cache=False,
+            stress_unit="eV/A3",
+        )
+        assert download_calls == []
+        assert len(ds) > 0
+        assert set(ds.element_types) == {"Na", "Cl"}
+
+    def test_falls_through_to_hf_hub_download_on_cache_miss(self, monkeypatch, tmp_path):
+        """A cache miss (try_to_load_from_cache returns None) routes to hf_hub_download."""
+        monkeypatch.setattr(training_mod, "try_to_load_from_cache", lambda **kwargs: None)
+
+        download_calls: list[dict] = []
+
+        def fake_download(**kwargs):
+            download_calls.append(kwargs)
+            return str(_NACL_PARITY)
+
+        monkeypatch.setattr(training_mod, "hf_hub_download", fake_download)
+
+        ds = MatGLPotentialTrainer.load_matpes_dataset(
+            version="r2SCAN-2025.2",
+            cutoff=4.0,
+            cache_dir=tmp_path,
+            save_cache=False,
+            stress_unit="eV/A3",
+        )
+        assert len(download_calls) == 1
+        assert download_calls[0]["repo_type"] == "dataset"
+        assert download_calls[0]["filename"] == "MatPES-R2SCAN-2025.2.json"
+        assert len(ds) > 0
+
 
 class TestLoadMatpesElementRefs:
     def test_no_reorder_returns_file_order(self, monkeypatch, tmp_path):
