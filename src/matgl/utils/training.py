@@ -820,6 +820,28 @@ _EXTXYZ_SPLIT_PATTERNS: dict[str, re.Pattern[str]] = {
     "valid": re.compile(r"[-_]val(?:id)?\.(?:ext)?xyz$", re.IGNORECASE),
 }
 
+# Stress-unit conversion to eV/Å³ (matgl's internal unit for ``Potential``
+# outputs and training labels). ``1 eV/Å³ = 160.21766208 GPa = 1602.1766208 kbar``.
+# Values are magnitude-only — no sign flip is applied. The MatPES JSONs ship
+# stress in kbar (raw VASP convention), hence the default; pass
+# ``stress_unit="eV/A3"`` to skip the conversion or ``"GPa"`` for GPa inputs.
+StressUnit = Literal["kbar", "GPa", "eV/A3"]
+_STRESS_UNIT_TO_EV_A3: dict[str, float] = {
+    "eV/A3": 1.0,
+    "GPa": 1.0 / 160.21766208,
+    "kbar": 1.0 / 1602.1766208,
+}
+
+
+def _stress_unit_factor(stress_unit: str) -> float:
+    """Return the multiplicative factor that converts ``stress_unit`` into eV/Å³."""
+    try:
+        return _STRESS_UNIT_TO_EV_A3[stress_unit]
+    except KeyError as exc:
+        raise ValueError(
+            f"Invalid stress_unit {stress_unit!r}; expected one of {sorted(_STRESS_UNIT_TO_EV_A3)}."
+        ) from exc
+
 
 def _matpes_parse_version(version: str) -> tuple[str, str]:
     """Split a MatPES version into ``(functional_upper, version_tag)``.
@@ -993,6 +1015,23 @@ def _build_pes_dataset(
     return dataset
 
 
+def _matpes_payload_to_samples(payload: object, source: str | Path) -> list[Mapping]:
+    """Normalise a MatPES JSON payload to a list of sample records.
+
+    The HF ``materialyze/matpes`` JSONs are a flat list of records; older /
+    staging payloads occasionally wrap records under a ``"samples"`` key, so
+    both shapes are accepted.
+    """
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict) and "samples" in payload:
+        return payload["samples"]
+    raise ValueError(
+        f"Unrecognised MatPES payload at {str(source)!r}: expected a list of records "
+        f"or a dict with a 'samples' key, got {type(payload).__name__}."
+    )
+
+
 def _read_matpes_dataset_local(
     local_path: str | Path,
     *,
@@ -1000,10 +1039,20 @@ def _read_matpes_dataset_local(
     element_types: tuple[str, ...] | None = None,
     save_cache: bool = True,
     root: str | None = None,
+    stress_unit: StressUnit = "kbar",
 ) -> MGLDataset:
-    """Read a (locally cached) MatPES JSON file and build an ``MGLDataset``."""
-    payload = loadfn(str(local_path))
-    structures, energies, forces, stresses = _matpes_samples_to_lists(payload["samples"])
+    """Read a (locally cached) MatPES JSON file and build an ``MGLDataset``.
+
+    Stresses on disk are stored in **kbar** (raw VASP convention). They are
+    converted to eV/Å³ — matgl's internal unit for ``Potential`` outputs and
+    training labels — by ``stress_unit``'s conversion factor. Pass
+    ``stress_unit="eV/A3"`` if you have already converted the file in place.
+    """
+    samples = _matpes_payload_to_samples(loadfn(str(local_path)), local_path)
+    structures, energies, forces, stresses = _matpes_samples_to_lists(samples)
+    factor = _stress_unit_factor(stress_unit)
+    if factor != 1.0:
+        stresses = [(np.asarray(s, dtype="float64") * factor).tolist() for s in stresses]
     return _build_pes_dataset(
         structures,
         {"energies": energies, "forces": forces, "stresses": stresses},
@@ -1245,6 +1294,7 @@ class MatGLPotentialTrainer:
         cache_dir: str | Path | None = None,
         save_cache: bool = True,
         root: str | None = None,
+        stress_unit: StressUnit = "kbar",
     ) -> MGLDataset:
         """Download a MatPES JSON file from HF and build an ``MGLDataset``.
 
@@ -1260,6 +1310,13 @@ class MatGLPotentialTrainer:
             cache_dir: HF Hub download cache dir; defaults to ``MATGL_CACHE``.
             save_cache: Whether ``MGLDataset`` persists its processed cache.
             root: ``MGLDataset`` root directory; default lets it pick.
+            stress_unit: Unit of the on-disk ``stress`` field. Defaults to
+                ``"kbar"`` (raw VASP convention used by MatPES JSONs); values
+                are converted to eV/Å³ — matgl's internal unit for ``Potential``
+                outputs and training labels. Pass ``"eV/A3"`` to skip the
+                conversion or ``"GPa"`` for GPa inputs. **Magnitude only — no
+                sign flip is applied; verify the sign convention matches your
+                ``Potential`` if you've customised the pipeline.**
 
         Returns:
             An ``MGLDataset`` ready to drop into ``MGLDataLoader``. The
@@ -1270,6 +1327,7 @@ class MatGLPotentialTrainer:
         local_path = hf_hub_download(
             repo_id=repo_id,
             filename=filename,
+            repo_type="dataset",
             revision=revision,
             token=token,
             cache_dir=_resolve_cache_dir(cache_dir),
@@ -1280,6 +1338,7 @@ class MatGLPotentialTrainer:
             element_types=element_types,
             save_cache=save_cache,
             root=root,
+            stress_unit=stress_unit,
         )
 
     @staticmethod
@@ -1293,12 +1352,14 @@ class MatGLPotentialTrainer:
         token: str | None = None,
         cache_dir: str | Path | None = None,
         save_cache: bool = True,
+        stress_unit: StressUnit = "kbar",
     ) -> dict[str, MGLDataset]:
         """Download the canonical ``{train, test, valid}`` MatPES split trio.
 
         ``element_types`` is computed from the union of all three split's
         structures (when not explicitly supplied) so the three datasets share
-        a single ordering compatible with one model.
+        a single ordering compatible with one model. ``stress_unit`` follows
+        :meth:`load_matpes_dataset` (default ``"kbar"`` → eV/Å³).
         """
         if version not in _MATPES_VERSIONS_WITH_CANONICAL_SPLITS:
             raise ValueError(
@@ -1306,6 +1367,8 @@ class MatGLPotentialTrainer:
                 f"Use load_matpes_dataset(version, split=None) and split locally, or pick "
                 f"one of {sorted(_MATPES_VERSIONS_WITH_CANONICAL_SPLITS)}."
             )
+        # Validate eagerly so a bad value fails before any network I/O.
+        _stress_unit_factor(stress_unit)
 
         if element_types is None:
             all_structures: list[Structure] = []
@@ -1313,12 +1376,13 @@ class MatGLPotentialTrainer:
                 local_path = hf_hub_download(
                     repo_id=repo_id,
                     filename=_matpes_dataset_filename(version, sp),
+                    repo_type="dataset",
                     revision=revision,
                     token=token,
                     cache_dir=_resolve_cache_dir(cache_dir),
                 )
-                payload = loadfn(str(local_path))
-                structs, _, _, _ = _matpes_samples_to_lists(payload["samples"])
+                samples = _matpes_payload_to_samples(loadfn(str(local_path)), local_path)
+                structs, _, _, _ = _matpes_samples_to_lists(samples)
                 all_structures.extend(structs)
             from matgl.ext.pymatgen import get_element_list
 
@@ -1335,6 +1399,7 @@ class MatGLPotentialTrainer:
                 token=token,
                 cache_dir=cache_dir,
                 save_cache=save_cache,
+                stress_unit=stress_unit,
             )
             for sp in VALID_SPLITS
         }
@@ -1359,6 +1424,7 @@ class MatGLPotentialTrainer:
         local_path = hf_hub_download(
             repo_id=repo_id,
             filename=filename,
+            repo_type="dataset",
             revision=revision,
             token=token,
             cache_dir=_resolve_cache_dir(cache_dir),

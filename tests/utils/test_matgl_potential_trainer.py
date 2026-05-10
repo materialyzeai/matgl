@@ -171,11 +171,98 @@ class TestLoadMatpesDataset:
             cutoff=4.0,
             cache_dir=tmp_path,
             save_cache=False,
+            stress_unit="eV/A3",  # parity payload is already in matgl-internal units
         )
         assert set(ds.labels.keys()) == {"energies", "forces", "stresses"}
         assert len(ds) == len(ds.labels["energies"])
         assert hasattr(ds, "element_types")
         assert set(ds.element_types) == {"Na", "Cl"}
+
+    def test_accepts_flat_list_payload(self, monkeypatch, tmp_path):
+        """The HF MatPES JSONs are a flat list of records (no 'samples' wrapper)."""
+        # Load the parity payload (dict shape) and unwrap it to mimic the HF schema.
+        with gzip.open(_NACL_PARITY) as fh:
+            wrapped = json.load(fh)
+        flat_path = tmp_path / "MatPES-R2SCAN-2025.2.json"
+        flat_path.write_text(json.dumps(wrapped["samples"]))
+
+        def fake(**kwargs):
+            return str(flat_path)
+
+        monkeypatch.setattr(training_mod, "hf_hub_download", fake)
+        ds = MatGLPotentialTrainer.load_matpes_dataset(
+            version="r2SCAN-2025.2",
+            cutoff=4.0,
+            cache_dir=tmp_path,
+            save_cache=False,
+            stress_unit="eV/A3",
+        )
+        assert len(ds) == len(wrapped["samples"])
+        assert set(ds.element_types) == {"Na", "Cl"}
+
+    def test_unrecognised_payload_raises(self, monkeypatch, tmp_path):
+        bad_path = tmp_path / "bad.json"
+        bad_path.write_text(json.dumps({"unexpected": []}))
+
+        def fake(**kwargs):
+            return str(bad_path)
+
+        monkeypatch.setattr(training_mod, "hf_hub_download", fake)
+        with pytest.raises(ValueError, match="Unrecognised MatPES payload"):
+            MatGLPotentialTrainer.load_matpes_dataset(
+                version="r2SCAN-2025.2", cutoff=4.0, cache_dir=tmp_path, save_cache=False
+            )
+
+    def test_stress_unit_kbar_scales_to_ev_per_a3(self, monkeypatch, tmp_path):
+        """Default ``stress_unit='kbar'`` divides by 1602.1766208 (kbar → eV/Å³)."""
+        _patch_hf_dataset_download(monkeypatch)
+        ds_raw = MatGLPotentialTrainer.load_matpes_dataset(
+            version="r2SCAN-2025.2",
+            cutoff=4.0,
+            cache_dir=tmp_path,
+            save_cache=False,
+            stress_unit="eV/A3",
+        )
+        ds_kbar = MatGLPotentialTrainer.load_matpes_dataset(
+            version="r2SCAN-2025.2",
+            cutoff=4.0,
+            cache_dir=tmp_path,
+            save_cache=False,  # default stress_unit="kbar"
+        )
+        raw = np.asarray(ds_raw.labels["stresses"], dtype="float64")
+        scaled = np.asarray(ds_kbar.labels["stresses"], dtype="float64")
+        np.testing.assert_allclose(scaled, raw / 1602.1766208, rtol=1e-12, atol=0.0)
+
+    def test_stress_unit_gpa_scales_correctly(self, monkeypatch, tmp_path):
+        _patch_hf_dataset_download(monkeypatch)
+        ds_raw = MatGLPotentialTrainer.load_matpes_dataset(
+            version="r2SCAN-2025.2",
+            cutoff=4.0,
+            cache_dir=tmp_path,
+            save_cache=False,
+            stress_unit="eV/A3",
+        )
+        ds_gpa = MatGLPotentialTrainer.load_matpes_dataset(
+            version="r2SCAN-2025.2",
+            cutoff=4.0,
+            cache_dir=tmp_path,
+            save_cache=False,
+            stress_unit="GPa",
+        )
+        raw = np.asarray(ds_raw.labels["stresses"], dtype="float64")
+        scaled = np.asarray(ds_gpa.labels["stresses"], dtype="float64")
+        np.testing.assert_allclose(scaled, raw / 160.21766208, rtol=1e-12, atol=0.0)
+
+    def test_invalid_stress_unit_raises(self, monkeypatch, tmp_path):
+        _patch_hf_dataset_download(monkeypatch)
+        with pytest.raises(ValueError, match="Invalid stress_unit"):
+            MatGLPotentialTrainer.load_matpes_dataset(
+                version="r2SCAN-2025.2",
+                cutoff=4.0,
+                cache_dir=tmp_path,
+                save_cache=False,
+                stress_unit="bogus",  # type: ignore[arg-type]
+            )
 
 
 class TestLoadMatpesElementRefs:
