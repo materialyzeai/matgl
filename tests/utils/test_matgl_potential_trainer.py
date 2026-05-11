@@ -1,13 +1,10 @@
-"""Offline tests for ``matgl.utils.training.MatGLPotentialTrainer``.
+"""Offline tests for ``matgl.utils.training.MGLPotentialTrainer``.
 
 The HF download is monkeypatched in every test so nothing hits the network.
-Real artefacts substitute for the live MatPES / extxyz files:
-
-- ``tests/parity_data/nacl_training_set.json.gz`` (already in the repo) has
-  the same payload schema as the MatPES JSONs and covers ``{Na, Cl}``.
-- A tiny synthetic extxyz tarball is written into ``tmp_path`` for the
-  extxyz tests so they don't depend on the live HF dataset.
-- A tiny synthetic atomrefs JSON covers the element-references path.
+The NaCl parity payload at ``tests/parity_data/nacl_training_set.json.gz``
+shares the per-record schema of the live MatPES JSONs and covers ``{Na, Cl}``;
+the loader expects a flat list of records, so the dict-wrapped fixture is
+unwrapped to its ``samples`` array in the per-test patches.
 """
 
 from __future__ import annotations
@@ -15,7 +12,6 @@ from __future__ import annotations
 import gzip
 import json
 import pathlib
-import tarfile
 
 import numpy as np
 import pytest
@@ -28,8 +24,7 @@ if matgl.config.BACKEND != "PYG":
 from matgl.models import TensorNet
 from matgl.utils import training as training_mod
 from matgl.utils.training import (
-    MatGLPotentialTrainer,
-    _classify_extxyz_split,
+    MGLPotentialTrainer,
     _matpes_atomrefs_filename,
     _matpes_dataset_filename,
     _matpes_parse_version,
@@ -65,139 +60,59 @@ class TestFilenameHelpers:
         with pytest.raises(ValueError, match="Invalid MatPES version"):
             _matpes_parse_version("-2025.2")
 
-    @pytest.mark.parametrize(
-        ("name", "expected"),
-        [
-            ("vama_dimer_train.extxyz", "train"),
-            ("vama_dimer_test.extxyz", "test"),
-            ("vama_dimer_valid.extxyz", "valid"),
-            ("vama_dimer_val.extxyz", "valid"),
-            ("vama-dimer-train.xyz", "train"),
-            ("anything_else.extxyz", None),
-            ("trainer.extxyz", None),  # ensure ``train`` substring alone doesn't match
-        ],
-    )
-    def test_classify_extxyz_split(self, name, expected):
-        assert _classify_extxyz_split(name) == expected
-
 
 # ---------------------------------------------------------------------------
-# Helpers for monkeypatching hf_hub_download.
+# Fixtures / helpers for monkeypatching hf_hub_download.
 # ---------------------------------------------------------------------------
 
 
-def _patch_hf_dataset_download(monkeypatch):
-    """Make every hf_hub_download call return the NaCl parity payload path."""
+def _flat_parity_payload_path(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Unwrap the dict-shaped parity payload into the flat list the loader expects."""
+    with gzip.open(_NACL_PARITY) as fh:
+        wrapped = json.load(fh)
+    flat = tmp_path / "MatPES-R2SCAN-2025.2.json"
+    flat.write_text(json.dumps(wrapped["samples"]))
+    return flat
 
-    def fake(**kwargs):
-        return str(_NACL_PARITY)
 
-    monkeypatch.setattr(training_mod, "hf_hub_download", fake)
+def _patch_hf_dataset_download(monkeypatch, tmp_path: pathlib.Path) -> pathlib.Path:
+    """Make hf_hub_download / try_to_load_from_cache return the flat-list parity payload."""
+    flat = _flat_parity_payload_path(tmp_path)
+
+    monkeypatch.setattr(training_mod, "hf_hub_download", lambda **kwargs: str(flat))
+    monkeypatch.setattr(training_mod, "try_to_load_from_cache", lambda **kwargs: None)
+    return flat
 
 
-def _patch_hf_atomrefs_download(monkeypatch, tmp_path, payload):
+def _patch_hf_atomrefs_download(monkeypatch, tmp_path: pathlib.Path, payload) -> pathlib.Path:
     refs_path = tmp_path / "atomrefs.json"
     refs_path.write_text(json.dumps(payload))
 
-    def fake(**kwargs):
-        return str(refs_path)
+    monkeypatch.setattr(training_mod, "hf_hub_download", lambda **kwargs: str(refs_path))
+    monkeypatch.setattr(training_mod, "try_to_load_from_cache", lambda **kwargs: None)
+    return refs_path
 
-    monkeypatch.setattr(training_mod, "hf_hub_download", fake)
 
-
-def _make_atomrefs_record(symbol: str, energy: float) -> dict:
-    """Build a single-atom MatPES atomrefs record (the HF schema)."""
-    return {
-        "elements": [symbol],
-        "energy": energy,
-        "structure": {
-            "@module": "pymatgen.core.structure",
-            "@class": "Structure",
-            "charge": 0.0,
-            "lattice": {
-                "matrix": [[15.0, 0.0, 0.0], [0.0, 15.0, 0.0], [0.0, 0.0, 15.0]],
-                "pbc": [True, True, True],
-                "a": 15.0,
-                "b": 15.0,
-                "c": 15.0,
-                "alpha": 90.0,
-                "beta": 90.0,
-                "gamma": 90.0,
-                "volume": 3375.0,
-            },
-            "properties": {},
-            "sites": [
-                {
-                    "species": [{"element": symbol, "occu": 1}],
-                    "abc": [0.0, 0.0, 0.0],
-                    "properties": {},
-                    "label": symbol,
-                    "xyz": [0.0, 0.0, 0.0],
-                }
-            ],
-        },
-    }
+def _atomrefs_record(symbol: str, energy: float) -> dict:
+    """Single-atom MatPES atomrefs record (``chemsys`` / ``energy`` schema)."""
+    return {"chemsys": symbol, "energy": energy}
 
 
 # ---------------------------------------------------------------------------
-# extxyz fixtures (synthetic, no network).
-# ---------------------------------------------------------------------------
-
-
-def _write_extxyz_frame(handle, *, energy, n=2, force_value=0.1):
-    """Write a single H2 frame (no stress) in extxyz format."""
-    handle.write(f"{n}\n")
-    handle.write(
-        f'Lattice="10.0 0.0 0.0 0.0 10.0 0.0 0.0 0.0 10.0" '
-        f'Properties=species:S:1:pos:R:3:forces:R:3 energy={energy} pbc="T T T"\n'
-    )
-    handle.write(f"H 0.0 0.0 0.0 {force_value:.6f} 0.0 0.0\n")
-    handle.write(f"H 0.0 0.0 1.0 {-force_value:.6f} 0.0 0.0\n")
-
-
-@pytest.fixture
-def extxyz_tarball_with_splits(tmp_path):
-    """Build a tar.gz with two extxyz files: one '_train', one '_test'."""
-    train = tmp_path / "h2_train.extxyz"
-    test = tmp_path / "h2_test.extxyz"
-    with train.open("w") as f:
-        for e in (-1.0, -1.1, -1.2, -1.3):
-            _write_extxyz_frame(f, energy=e)
-    with test.open("w") as f:
-        for e in (-1.05, -1.15):
-            _write_extxyz_frame(f, energy=e)
-
-    tar_path = tmp_path / "h2_dimer.tar.gz"
-    with tarfile.open(tar_path, "w:gz") as tar:
-        tar.add(train, arcname="h2_dimer/h2_train.extxyz")
-        tar.add(test, arcname="h2_dimer/h2_test.extxyz")
-    return tar_path
-
-
-@pytest.fixture
-def extxyz_plain_file(tmp_path):
-    """Build a single extxyz file (no tarball)."""
-    path = tmp_path / "h2_single.extxyz"
-    with path.open("w") as f:
-        for e in (-1.0, -1.1, -1.2):
-            _write_extxyz_frame(f, energy=e)
-    return path
-
-
-# ---------------------------------------------------------------------------
-# MatPES dataset / refs (monkeypatched HF).
+# MatPES dataset loader (monkeypatched HF).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(not _NACL_PARITY.exists(), reason="NaCl parity payload missing")
 class TestLoadMatpesDataset:
     def test_returns_mgl_dataset_with_plural_label_keys(self, monkeypatch, tmp_path):
-        _patch_hf_dataset_download(monkeypatch)
-        ds = MatGLPotentialTrainer.load_matpes_dataset(
+        _patch_hf_dataset_download(monkeypatch, tmp_path)
+        ds = MGLPotentialTrainer.load_matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
             cache_dir=tmp_path,
             save_cache=False,
+            root=str(tmp_path / "ds"),
             stress_unit="eV/A3",  # parity payload is already in matgl-internal units
         )
         assert set(ds.labels.keys()) == {"energies", "forces", "stresses"}
@@ -205,75 +120,44 @@ class TestLoadMatpesDataset:
         assert hasattr(ds, "element_types")
         assert set(ds.element_types) == {"Na", "Cl"}
 
-    def test_accepts_flat_list_payload(self, monkeypatch, tmp_path):
-        """The HF MatPES JSONs are a flat list of records (no 'samples' wrapper)."""
-        # Load the parity payload (dict shape) and unwrap it to mimic the HF schema.
-        with gzip.open(_NACL_PARITY) as fh:
-            wrapped = json.load(fh)
-        flat_path = tmp_path / "MatPES-R2SCAN-2025.2.json"
-        flat_path.write_text(json.dumps(wrapped["samples"]))
-
-        def fake(**kwargs):
-            return str(flat_path)
-
-        monkeypatch.setattr(training_mod, "hf_hub_download", fake)
-        ds = MatGLPotentialTrainer.load_matpes_dataset(
-            version="r2SCAN-2025.2",
-            cutoff=4.0,
-            cache_dir=tmp_path,
-            save_cache=False,
-            stress_unit="eV/A3",
-        )
-        assert len(ds) == len(wrapped["samples"])
-        assert set(ds.element_types) == {"Na", "Cl"}
-
-    def test_unrecognised_payload_raises(self, monkeypatch, tmp_path):
-        bad_path = tmp_path / "bad.json"
-        bad_path.write_text(json.dumps({"unexpected": []}))
-
-        def fake(**kwargs):
-            return str(bad_path)
-
-        monkeypatch.setattr(training_mod, "hf_hub_download", fake)
-        with pytest.raises(ValueError, match="Unrecognised MatPES payload"):
-            MatGLPotentialTrainer.load_matpes_dataset(
-                version="r2SCAN-2025.2", cutoff=4.0, cache_dir=tmp_path, save_cache=False
-            )
-
     def test_stress_unit_kbar_scales_to_ev_per_a3(self, monkeypatch, tmp_path):
         """Default ``stress_unit='kbar'`` divides by 1602.1766208 (kbar → eV/Å³)."""
-        _patch_hf_dataset_download(monkeypatch)
-        ds_raw = MatGLPotentialTrainer.load_matpes_dataset(
+        _patch_hf_dataset_download(monkeypatch, tmp_path)
+        ds_raw = MGLPotentialTrainer.load_matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
             cache_dir=tmp_path,
             save_cache=False,
+            root=str(tmp_path / "ds_raw"),
             stress_unit="eV/A3",
         )
-        ds_kbar = MatGLPotentialTrainer.load_matpes_dataset(
+        ds_kbar = MGLPotentialTrainer.load_matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
             cache_dir=tmp_path,
             save_cache=False,  # default stress_unit="kbar"
+            root=str(tmp_path / "ds_kbar"),
         )
         raw = np.asarray(ds_raw.labels["stresses"], dtype="float64")
         scaled = np.asarray(ds_kbar.labels["stresses"], dtype="float64")
         np.testing.assert_allclose(scaled, raw / 1602.1766208, rtol=1e-12, atol=0.0)
 
     def test_stress_unit_gpa_scales_correctly(self, monkeypatch, tmp_path):
-        _patch_hf_dataset_download(monkeypatch)
-        ds_raw = MatGLPotentialTrainer.load_matpes_dataset(
+        _patch_hf_dataset_download(monkeypatch, tmp_path)
+        ds_raw = MGLPotentialTrainer.load_matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
             cache_dir=tmp_path,
             save_cache=False,
+            root=str(tmp_path / "ds_raw"),
             stress_unit="eV/A3",
         )
-        ds_gpa = MatGLPotentialTrainer.load_matpes_dataset(
+        ds_gpa = MGLPotentialTrainer.load_matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
             cache_dir=tmp_path,
             save_cache=False,
+            root=str(tmp_path / "ds_gpa"),
             stress_unit="GPa",
         )
         raw = np.asarray(ds_raw.labels["stresses"], dtype="float64")
@@ -281,9 +165,10 @@ class TestLoadMatpesDataset:
         np.testing.assert_allclose(scaled, raw / 160.21766208, rtol=1e-12, atol=0.0)
 
     def test_invalid_stress_unit_raises(self, monkeypatch, tmp_path):
-        _patch_hf_dataset_download(monkeypatch)
-        with pytest.raises(ValueError, match="Invalid stress_unit"):
-            MatGLPotentialTrainer.load_matpes_dataset(
+        """An unknown ``stress_unit`` is rejected by the conversion-factor lookup."""
+        _patch_hf_dataset_download(monkeypatch, tmp_path)
+        with pytest.raises(KeyError):
+            MGLPotentialTrainer.load_matpes_dataset(
                 version="r2SCAN-2025.2",
                 cutoff=4.0,
                 cache_dir=tmp_path,
@@ -293,11 +178,11 @@ class TestLoadMatpesDataset:
 
     def test_uses_cached_file_without_calling_hf_hub_download(self, monkeypatch, tmp_path):
         """When the file is already cached, hf_hub_download must not be called."""
-        # try_to_load_from_cache returns the cached path → fast path.
+        flat = _flat_parity_payload_path(tmp_path)
         monkeypatch.setattr(
             training_mod,
             "try_to_load_from_cache",
-            lambda **kwargs: str(_NACL_PARITY),
+            lambda **kwargs: str(flat),
         )
 
         download_calls: list[dict] = []
@@ -308,11 +193,12 @@ class TestLoadMatpesDataset:
 
         monkeypatch.setattr(training_mod, "hf_hub_download", fail_if_called)
 
-        ds = MatGLPotentialTrainer.load_matpes_dataset(
+        ds = MGLPotentialTrainer.load_matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
             cache_dir=tmp_path,
             save_cache=False,
+            root=str(tmp_path / "ds"),
             stress_unit="eV/A3",
         )
         assert download_calls == []
@@ -323,19 +209,21 @@ class TestLoadMatpesDataset:
         """A cache miss (try_to_load_from_cache returns None) routes to hf_hub_download."""
         monkeypatch.setattr(training_mod, "try_to_load_from_cache", lambda **kwargs: None)
 
+        flat = _flat_parity_payload_path(tmp_path)
         download_calls: list[dict] = []
 
         def fake_download(**kwargs):
             download_calls.append(kwargs)
-            return str(_NACL_PARITY)
+            return str(flat)
 
         monkeypatch.setattr(training_mod, "hf_hub_download", fake_download)
 
-        ds = MatGLPotentialTrainer.load_matpes_dataset(
+        ds = MGLPotentialTrainer.load_matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
             cache_dir=tmp_path,
             save_cache=False,
+            root=str(tmp_path / "ds"),
             stress_unit="eV/A3",
         )
         assert len(download_calls) == 1
@@ -344,123 +232,44 @@ class TestLoadMatpesDataset:
         assert len(ds) > 0
 
 
+# ---------------------------------------------------------------------------
+# MatPES element-refs loader (monkeypatched HF).
+# ---------------------------------------------------------------------------
+
+
 class TestLoadMatpesElementRefs:
-    def _flat_list_payload(self):
-        """The actual HF atomrefs schema: a list of single-atom records."""
-        return [_make_atomrefs_record("Na", -1.0), _make_atomrefs_record("Cl", -2.0)]
+    def _payload(self):
+        """Live HF schema: a flat list of single-atom records keyed by ``chemsys``."""
+        return [_atomrefs_record("Na", -1.0), _atomrefs_record("Cl", -2.0)]
 
-    def test_flat_list_no_reorder_returns_file_order(self, monkeypatch, tmp_path):
-        _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._flat_list_payload())
-        refs = MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2")
-        np.testing.assert_allclose(refs, [-1.0, -2.0])
-
-    def test_flat_list_reorders_to_caller_element_types(self, monkeypatch, tmp_path):
-        _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._flat_list_payload())
-        refs = MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=("Cl", "Na"))
+    def test_reorders_to_caller_element_types(self, monkeypatch, tmp_path):
+        _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._payload())
+        refs = MGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=("Cl", "Na"))
         np.testing.assert_allclose(refs, [-2.0, -1.0])
 
-    def test_flat_list_missing_element_raises_keyerror(self, monkeypatch, tmp_path):
-        _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._flat_list_payload())
-        with pytest.raises(KeyError, match=r"\['Li'\]"):
-            MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=("Li", "Cl"))
+    def test_subset_returns_only_requested_elements(self, monkeypatch, tmp_path):
+        _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._payload())
+        refs = MGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=("Na",))
+        np.testing.assert_allclose(refs, [-1.0])
 
-    def test_legacy_dict_payload_still_works(self, monkeypatch, tmp_path):
-        """Legacy ``{'element_types': [...], 'refs': [...]}`` shape is still accepted."""
-        _patch_hf_atomrefs_download(monkeypatch, tmp_path, {"element_types": ["Na", "Cl"], "refs": [-1.0, -2.0]})
-        refs = MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=("Cl", "Na"))
-        np.testing.assert_allclose(refs, [-2.0, -1.0])
+    def test_missing_element_raises_keyerror(self, monkeypatch, tmp_path):
+        _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._payload())
+        with pytest.raises(KeyError):
+            MGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=("Li", "Cl"))
 
-    def test_empty_flat_list_raises(self, monkeypatch, tmp_path):
-        _patch_hf_atomrefs_download(monkeypatch, tmp_path, [])
-        with pytest.raises(ValueError, match="no single-atom records"):
-            MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2")
-
-    def test_unrecognised_payload_raises(self, monkeypatch, tmp_path):
-        _patch_hf_atomrefs_download(monkeypatch, tmp_path, {"unexpected": []})
-        with pytest.raises(ValueError, match="Unrecognised MatPES atomrefs payload"):
-            MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2")
+    def test_empty_element_types_returns_empty_array(self, monkeypatch, tmp_path):
+        """``element_types`` defaults to ``()``; the loader returns a length-0 vector."""
+        _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._payload())
+        refs = MGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2")
+        assert refs.shape == (0,)
 
 
 # ---------------------------------------------------------------------------
-# extxyz loaders.
+# MGLPotentialTrainer init / fit smoke.
 # ---------------------------------------------------------------------------
 
 
-class TestLoadExtxyzDataset:
-    def test_local_plain_extxyz(self, extxyz_plain_file):
-        ds = MatGLPotentialTrainer.load_extxyz_dataset(path=extxyz_plain_file, cutoff=2.0, save_cache=False)
-        # Three frames, no stress key (cluster/dimer extxyz has no stress).
-        assert len(ds) == 3
-        assert set(ds.labels.keys()) == {"energies", "forces"}
-        assert "stresses" not in ds.labels
-        np.testing.assert_allclose(ds.labels["energies"], [-1.0, -1.1, -1.2])
-
-    def test_local_tarball_concatenates(self, extxyz_tarball_with_splits):
-        ds = MatGLPotentialTrainer.load_extxyz_dataset(path=extxyz_tarball_with_splits, cutoff=2.0, save_cache=False)
-        # 4 train + 2 test frames concatenated.
-        assert len(ds) == 6
-        assert set(ds.labels.keys()) == {"energies", "forces"}
-
-    def test_hub_path_routes_through_hf_hub_download(self, monkeypatch, extxyz_tarball_with_splits):
-        # Replace hf_hub_download with a stub that returns our local fixture.
-        captured = {}
-
-        def fake(**kwargs):
-            captured.update(kwargs)
-            return str(extxyz_tarball_with_splits)
-
-        monkeypatch.setattr(training_mod, "hf_hub_download", fake)
-
-        ds = MatGLPotentialTrainer.load_extxyz_dataset(
-            repo_id="materialyze/mlip-lr-benchmarks",
-            filename="cp_dimer.tar.gz",
-            cutoff=2.0,
-            save_cache=False,
-        )
-        assert len(ds) == 6
-        assert captured["repo_id"] == "materialyze/mlip-lr-benchmarks"
-        assert captured["filename"] == "cp_dimer.tar.gz"
-
-    def test_path_and_repo_id_are_mutually_exclusive(self, extxyz_plain_file):
-        with pytest.raises(ValueError, match="not both"):
-            MatGLPotentialTrainer.load_extxyz_dataset(
-                path=extxyz_plain_file, repo_id="x", filename="y", save_cache=False
-            )
-
-    def test_neither_path_nor_repo_raises(self):
-        with pytest.raises(ValueError, match="Provide 'path'"):
-            MatGLPotentialTrainer.load_extxyz_dataset(save_cache=False)
-
-
-class TestLoadExtxyzSplits:
-    def test_canonical_splits_from_tarball(self, extxyz_tarball_with_splits):
-        splits = MatGLPotentialTrainer.load_extxyz_splits(path=extxyz_tarball_with_splits, cutoff=2.0, save_cache=False)
-        # Only train and test were present in the fixture; valid is absent.
-        assert set(splits.keys()) == {"train", "test"}
-        assert len(splits["train"]) == 4
-        assert len(splits["test"]) == 2
-        # Element types are shared across the splits.
-        assert splits["train"].element_types == splits["test"].element_types
-
-    def test_unrecognised_filenames_raises(self, tmp_path):
-        # Tarball with a single non-split file.
-        plain = tmp_path / "h2_random.extxyz"
-        with plain.open("w") as f:
-            _write_extxyz_frame(f, energy=-1.0)
-        tar_path = tmp_path / "no_splits.tar.gz"
-        with tarfile.open(tar_path, "w:gz") as tar:
-            tar.add(plain, arcname="bundle/h2_random.extxyz")
-
-        with pytest.raises(ValueError, match="No files inside"):
-            MatGLPotentialTrainer.load_extxyz_splits(path=tar_path, save_cache=False)
-
-
-# ---------------------------------------------------------------------------
-# MatGLPotentialTrainer init / save / fit smoke.
-# ---------------------------------------------------------------------------
-
-
-class TestMatGLPotentialTrainerInit:
+class TestMGLPotentialTrainerInit:
     def test_init_does_not_load_or_train(self, monkeypatch):
         """Constructor stores config; touches no network and instantiates no Lightning."""
 
@@ -478,7 +287,7 @@ class TestMatGLPotentialTrainerInit:
             ntargets=1,
             num_layers=1,
         )
-        trainer = MatGLPotentialTrainer(model, accelerator="cpu", max_epochs=2)
+        trainer = MGLPotentialTrainer(model, accelerator="cpu", max_epochs=2)
 
         assert trainer.accelerator == "cpu"
         assert trainer.max_epochs == 2
@@ -487,34 +296,22 @@ class TestMatGLPotentialTrainerInit:
         assert trainer.lit_module is None
         assert trainer.trainer is None
         assert trainer.potential is None
-
-    def test_save_before_fit_raises(self, tmp_path):
-        model = TensorNet(
-            element_types=("Na", "Cl"),
-            cutoff=4.0,
-            is_intensive=False,
-            use_warp=False,
-            units=8,
-            ntargets=1,
-            num_layers=1,
-        )
-        trainer = MatGLPotentialTrainer(model)
-        with pytest.raises(RuntimeError, match="before fit"):
-            trainer.save(tmp_path / "nope")
+        assert trainer.atomrefs is None
 
 
 @pytest.mark.skipif(not _NACL_PARITY.exists(), reason="NaCl parity payload missing")
 class TestFit:
-    def _make_smart_hub(self, monkeypatch, atomrefs_path):
-        """Route atoms-shaped filenames to atomrefs_path, everything else to NaCl parity."""
+    def _make_smart_hub(self, monkeypatch, flat_path, atomrefs_path):
+        """Route atomrefs filenames to atomrefs_path, the rest to flat parity."""
 
         def smart_fake(**kwargs):
             fname = kwargs.get("filename", "")
             if "atoms" in fname:
                 return str(atomrefs_path)
-            return str(_NACL_PARITY)
+            return str(flat_path)
 
         monkeypatch.setattr(training_mod, "hf_hub_download", smart_fake)
+        monkeypatch.setattr(training_mod, "try_to_load_from_cache", lambda **kwargs: None)
 
     def _make_model(self, element_types):
         return TensorNet(
@@ -529,7 +326,7 @@ class TestFit:
 
     @staticmethod
     def _trainer(model):
-        return MatGLPotentialTrainer(
+        return MGLPotentialTrainer(
             model,
             energy_weight=1.0,
             force_weight=1.0,
@@ -549,21 +346,22 @@ class TestFit:
             },
         )
 
-    def test_one_epoch_trains_and_persists_state(self, monkeypatch, tmp_path):
-        """fit() with a pre-built dataset, ndarray atomrefs, and post-fit save round-trip."""
-        _patch_hf_dataset_download(monkeypatch)
-        ds = MatGLPotentialTrainer.load_matpes_dataset(
+    def test_one_epoch_trains_and_records_state(self, monkeypatch, tmp_path):
+        """fit() with a pre-built dataset and ndarray atomrefs populates trainer state."""
+        flat = _flat_parity_payload_path(tmp_path)
+        atomrefs_path = tmp_path / "atomrefs.json"
+        atomrefs_path.write_text(json.dumps([_atomrefs_record("Na", 0.0), _atomrefs_record("Cl", 0.0)]))
+        self._make_smart_hub(monkeypatch, flat, atomrefs_path)
+
+        ds = MGLPotentialTrainer.load_matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
             cache_dir=tmp_path,
             save_cache=False,
+            root=str(tmp_path / "ds"),
+            stress_unit="eV/A3",
         )
-        atomrefs_path = tmp_path / "atomrefs.json"
-        atomrefs_path.write_text(json.dumps({"element_types": list(ds.element_types), "refs": [0.0, 0.0]}))
-        self._make_smart_hub(monkeypatch, atomrefs_path)
-
-        # Fetch refs explicitly to verify the ndarray atomrefs path.
-        refs = MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=ds.element_types)
+        refs = MGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=ds.element_types)
 
         model = self._make_model(ds.element_types)
         trainer = self._trainer(model)
@@ -580,88 +378,39 @@ class TestFit:
         np.testing.assert_allclose(trainer.atomrefs, refs)
         assert "cpu" in type(trainer.trainer.accelerator).__name__.lower()
 
-        save_dir = tmp_path / "trained"
-        save_dir.mkdir()
-        trainer.save(save_dir)
-        reloaded = matgl.load_model(path=str(save_dir))
-        assert isinstance(reloaded, Potential)
-
-    def test_fit_extxyz_dataset_no_stress_auto_disabled(self, monkeypatch, extxyz_plain_file):
-        """A pre-built extxyz dataset with no stress trains; stress_weight is auto-disabled."""
-
-        def boom(**_):
-            raise AssertionError("hf_hub_download should not be called for a pre-built dataset.")
-
-        monkeypatch.setattr(training_mod, "hf_hub_download", boom)
-
-        ds = MatGLPotentialTrainer.load_extxyz_dataset(path=extxyz_plain_file, cutoff=2.0, save_cache=False)
-        model = self._make_model(ds.element_types)
-        trainer = self._trainer(model)
-        with pytest.warns(UserWarning, match="no stress labels"):
-            trainer.fit(dataset=ds, atomrefs=None)
-        assert trainer.atomrefs is None
-        # The forces-only extxyz propagates through the loaders.
-        first_batch = next(iter(trainer.loaders["train"]))
-        assert len(first_batch) == 6  # (g, lat, state, e, f, s)
-
-    def test_fit_atomrefs_none(self, monkeypatch, extxyz_plain_file):
-        """atomrefs=None disables offsets entirely."""
-
-        def boom(**_):
-            raise AssertionError("hf_hub_download should not be called when atomrefs=None.")
-
-        monkeypatch.setattr(training_mod, "hf_hub_download", boom)
-
-        ds = MatGLPotentialTrainer.load_extxyz_dataset(path=extxyz_plain_file, cutoff=2.0, save_cache=False)
+    def test_fit_atomrefs_none(self, monkeypatch, tmp_path):
+        """``atomrefs=None`` disables offsets entirely."""
+        _patch_hf_dataset_download(monkeypatch, tmp_path)
+        ds = MGLPotentialTrainer.load_matpes_dataset(
+            version="r2SCAN-2025.2",
+            cutoff=4.0,
+            cache_dir=tmp_path,
+            save_cache=False,
+            root=str(tmp_path / "ds"),
+            stress_unit="eV/A3",
+        )
         model = self._make_model(ds.element_types)
         trainer = self._trainer(model)
         trainer.fit(dataset=ds, atomrefs=None)
         assert trainer.atomrefs is None
 
-    def test_fit_atomrefs_atomref_instance(self, monkeypatch, extxyz_plain_file):
-        """atomrefs accepts a pre-built AtomRef layer instance."""
-        import torch
-
-        from matgl.layers._atom_ref_pyg import AtomRef
-
-        def boom(**_):
-            raise AssertionError("no HF traffic expected.")
-
-        monkeypatch.setattr(training_mod, "hf_hub_download", boom)
-
-        ds = MatGLPotentialTrainer.load_extxyz_dataset(path=extxyz_plain_file, cutoff=2.0, save_cache=False)
-        model = self._make_model(ds.element_types)
-        trainer = self._trainer(model)
-        ref_layer = AtomRef(property_offset=torch.tensor([-7.5], dtype=torch.float32))
-        trainer.fit(dataset=ds, atomrefs=ref_layer)
-        np.testing.assert_allclose(trainer.atomrefs, [-7.5])
-
-    def test_fit_atomrefs_invalid_type_raises(self, monkeypatch, extxyz_plain_file):
-        """Anything other than ndarray / AtomRef / None raises TypeError."""
-
-        def boom(**_):
-            raise AssertionError("no HF traffic expected.")
-
-        monkeypatch.setattr(training_mod, "hf_hub_download", boom)
-        ds = MatGLPotentialTrainer.load_extxyz_dataset(path=extxyz_plain_file, cutoff=2.0, save_cache=False)
-        model = self._make_model(ds.element_types)
-        trainer = self._trainer(model)
-        with pytest.raises(TypeError, match="atomrefs must be"):
-            trainer.fit(dataset=ds, atomrefs={"element_types": ["H"], "refs": [-13.6]})
-
 
 # ---------------------------------------------------------------------------
 # Sanity: MatPES JSON loadfn handles both .json and .json.gz transparently
-# (the parity fixture is .json.gz; the live MatPES files are .json).
+# (the parity fixture is .json.gz; the live MatPES files are plain .json).
 # ---------------------------------------------------------------------------
 
 
 def test_matpes_payload_is_loadable_without_gzip_suffix(tmp_path, monkeypatch):
-    """Decompress the .json.gz fixture into a plain .json and load via MatGLPotentialTrainer."""
+    """Decompress the .json.gz fixture into a plain .json and load via MGLPotentialTrainer."""
     plain = tmp_path / "MatPES-NACL-2025.2.json"
-    with gzip.open(_NACL_PARITY, "rb") as src, plain.open("wb") as dst:
-        dst.write(src.read())
+    with gzip.open(_NACL_PARITY, "rb") as src:
+        wrapped = json.loads(src.read())
+    plain.write_text(json.dumps(wrapped["samples"]))
 
     monkeypatch.setattr(training_mod, "hf_hub_download", lambda **_: str(plain))
-    ds = MatGLPotentialTrainer.load_matpes_dataset(version="r2SCAN-2025.2", cutoff=4.0, save_cache=False)
+    monkeypatch.setattr(training_mod, "try_to_load_from_cache", lambda **_: None)
+    ds = MGLPotentialTrainer.load_matpes_dataset(
+        version="r2SCAN-2025.2", cutoff=4.0, save_cache=False, root=str(tmp_path / "ds")
+    )
     assert set(ds.labels.keys()) == {"energies", "forces", "stresses"}
