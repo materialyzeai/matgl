@@ -1,4 +1,13 @@
-"""Zbl repulsive potential.The official implementation can be found in https://github.com/atomistic-machine-learning/schnetpack."""
+"""PyG implementation of the ZBL screened-Coulomb repulsion.
+
+Provides :class:`NuclearRepulsion`, the short-range Ziegler-Biersack-Littmark
+correction commonly added to ML potentials to keep them well-behaved at
+small interatomic distances (where DFT training data is sparse and the
+model is poorly constrained). Used by :class:`~matgl.apps.pes.Potential`
+when ``calc_repuls=True``. Mirrors the schnetpack reference at
+https://github.com/atomistic-machine-learning/schnetpack; the DGL
+counterpart is in :mod:`matgl.layers._zbl_dgl`.
+"""
 
 from __future__ import annotations
 

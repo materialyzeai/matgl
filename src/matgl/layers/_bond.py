@@ -1,4 +1,11 @@
-"""Generate bond features based on spherical bessel functions or gaussian expansion."""
+"""Bond-distance feature expansion.
+
+Provides :class:`BondExpansion`, a thin dispatcher that selects a radial
+basis (spherical Bessel, Gaussian, or exp-normal) based on a string flag
+and applies it to a 1D tensor of pair distances. Model code typically
+instantiates this class rather than touching the underlying basis
+implementations in :mod:`matgl.layers._basis` directly.
+"""
 
 from __future__ import annotations
 

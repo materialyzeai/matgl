@@ -1,3 +1,12 @@
+"""DGL implementation of :class:`AtomRef`.
+
+``AtomRef`` adds a per-element constant offset to a model's prediction --
+the standard isolated-atom (or "elemental reference") correction used when
+training PES models on cohesive energies or absolute DFT energies. The
+backend-agnostic public name is re-exported from :mod:`matgl.layers`; the
+PyG counterpart lives in :mod:`matgl.layers._atom_ref_pyg`.
+"""
+
 from __future__ import annotations
 
 import dgl
@@ -27,7 +36,6 @@ class AtomRef(nn.Module):
 
         self.max_z = property_offset.shape[-1]
         self.register_buffer("property_offset", property_offset)
-        self.register_buffer("onehot", torch.eye(self.max_z))
 
     def get_feature_matrix(self, graphs: list[dgl.DGLGraph]) -> np.ndarray:
         """Get the number of atoms for different elements in the structure.
@@ -66,18 +74,19 @@ class AtomRef(nn.Module):
         Returns:
             offset_per_graph
         """
-        one_hot = torch.as_tensor(self.onehot)[g.ndata["node_type"]]  # type: ignore[index]
+        # Gather per-atom offsets directly: shape (N,) or (S, N) for multi-state refs.
+        # This replaces the previous (N, max_z) one-hot * repeat * multiply * sum pipeline,
+        # which allocated max_z times the memory and FLOPs for the same result.
+        node_type = g.ndata["node_type"]
         if self.property_offset.ndim > 1:
+            # Multi-state: (S, max_z) -> per-atom (S, N) -> per-graph (S, B)
+            atomic_offset = self.property_offset[:, node_type]  # (S, N)
             offset_batched_with_state = []
-            for i in range(self.property_offset.size(dim=0)):
-                property_offset_batched = self.property_offset[i].repeat(g.num_nodes(), 1)
-                offset = property_offset_batched * one_hot
-                g.ndata["atomic_offset"] = torch.sum(offset, 1)
-                offset_batched = dgl.readout_nodes(g, "atomic_offset")
-                offset_batched_with_state.append(offset_batched)
-            offset_batched_with_state = torch.stack(offset_batched_with_state)  # type: ignore
-            return offset_batched_with_state[state_attr]  # type: ignore
-        property_offset_batched = self.property_offset.repeat(g.num_nodes(), 1).to(one_hot.device)
-        offset = property_offset_batched * one_hot
-        g.ndata["atomic_offset"] = torch.sum(offset, 1)
+            for i in range(atomic_offset.size(0)):
+                g.ndata["atomic_offset"] = atomic_offset[i]
+                offset_batched_with_state.append(dgl.readout_nodes(g, "atomic_offset"))
+            stacked = torch.stack(offset_batched_with_state)  # (S, B)
+            return stacked[state_attr] if state_attr is not None else stacked
+
+        g.ndata["atomic_offset"] = self.property_offset[node_type]
         return dgl.readout_nodes(g, "atomic_offset")

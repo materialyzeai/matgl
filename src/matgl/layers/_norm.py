@@ -1,4 +1,20 @@
-"""Normalization modules."""
+"""Normalization layers for graph-structured features.
+
+Two layers are exposed:
+
+* :class:`GraphNorm` -- per-graph normalisation following
+  https://proceedings.mlr.press/v139/cai21e.html. Subtracts a learnable
+  fraction of the per-graph mean and divides by the per-graph standard
+  deviation, then applies a learnable affine. Operates over a DGL graph
+  with a ``batched_field`` selector for node- or edge-level features.
+* :class:`LayerNorm` -- a thin wrapper around ``nn.LayerNorm`` whose
+  ``forward`` accepts and silently ignores trailing positional / keyword
+  arguments, so it can be used in the same call-site as :class:`GraphNorm`.
+
+The PyG models currently rely on PyG's built-in normalisers; this module
+is exercised mainly from the DGL graph convolutions in
+:mod:`matgl.layers._graph_convolution_dgl`.
+"""
 
 from __future__ import annotations
 

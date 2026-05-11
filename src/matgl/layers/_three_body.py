@@ -1,4 +1,17 @@
-"""Three-Body interaction implementations."""
+"""Three-body (bond-angle) interaction terms.
+
+Implements :class:`ThreeBodyInteractions`, the M3GNet/CHGNet angular
+update that consumes a line graph (whose edges represent triplets of
+neighbours sharing a central atom) and produces an updated edge feature
+on the original graph. The combined radial-x-angular basis comes from
+:class:`~matgl.layers._basis.SphericalBesselWithHarmonics`, multiplied by
+two cosine cutoffs (one per bond in the triplet) and folded back into
+the bond messages by :func:`combine_sbf_shf`.
+
+This module is backend-agnostic: it operates on plain tensors and
+indices, with the line-graph construction handled by
+:mod:`matgl.graph._compute_pyg` / :mod:`matgl.graph._compute_dgl` upstream.
+"""
 
 from __future__ import annotations
 

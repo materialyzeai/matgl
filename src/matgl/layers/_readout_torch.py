@@ -1,4 +1,11 @@
-"""Pure PyTorch readout layers."""
+"""Backend-agnostic readout primitives.
+
+Houses readout-style modules that operate on plain tensors and a
+``batch`` index vector (PyG-style), making them usable from either
+backend code path. Used internally by both
+:mod:`matgl.layers._readout_pyg` and a handful of DGL readouts that
+expose tensor-level helpers.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,19 @@
-"""Readout layer in PYG."""
+"""PyG readout layers.
+
+PyG counterparts of the DGL readouts in
+:mod:`matgl.layers._readout_dgl`. Public exports re-exported from
+:mod:`matgl.layers` when ``MATGL_BACKEND=PYG`` are:
+
+* :class:`Set2SetReadOut` and :class:`EdgeSet2Set` (node / edge variants
+  of Set2Set);
+* :class:`ReduceReadOut` -- ``sum``/``mean``/``max`` pooling;
+* :class:`WeightedReadOut` and :class:`WeightedAtomReadOut` -- learned
+  per-atom weighting.
+
+DGL-only flavours such as :class:`GlobalPool`, ``AttentiveFPReadout``
+and ``WeightedReadOutPair`` are intentionally absent here; if you need
+one of these on PyG, file an issue.
+"""
 
 from __future__ import annotations
 

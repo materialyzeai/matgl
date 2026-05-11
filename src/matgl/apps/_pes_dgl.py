@@ -1,7 +1,16 @@
-"""Implementation of Interatomic Potentials."""
+"""DGL implementation of :class:`Potential`.
+
+Wraps an energy-predicting DGL graph model (see :mod:`matgl.models`) and
+exposes a single ``forward`` that returns energies, forces, stresses, and
+(optionally) Hessian / partial charges / magnetic moments. Selected when
+``MATGL_BACKEND=DGL``; the PyG counterpart lives in
+:mod:`matgl.apps._pes_pyg`. See :mod:`matgl.apps.pes` for the unit
+conventions and backend-selection logic.
+"""
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
 import dgl
@@ -18,11 +27,53 @@ if TYPE_CHECKING:
     import dgl
     import numpy as np
 
+# 1 eV/Å³ = 160.21766208 GPa. Stress is autograd of energy w.r.t. strain (eV)
+# divided by volume (Å³), giving eV/Å³; multiply by this constant for GPa.
+EV_PER_ANG3_TO_GPA = 160.21766208
+
 
 class Potential(nn.Module, IOMixIn):
-    """A class representing an interatomic potential."""
+    """Interatomic potential wrapping a DGL energy model.
+
+    ``Potential`` takes any DGL graph model that maps a graph to a scalar
+    per-graph energy (M3GNet, CHGNet, TensorNet, ...) and produces forces,
+    stress, and optionally the Hessian via PyTorch autograd. The wrapped
+    model's ``__call__`` is expected to accept the keyword arguments
+    ``g``, ``state_attr``, and ``l_g`` (and, when ``calc_charge=True``,
+    additionally ``lat``, ``total_charge``, ``ext_pot``, and ``lattice``),
+    and return a scalar energy tensor of shape ``(num_graphs,)``.
+
+    Outputs are denormalised with ``data_std * E_pred + data_mean`` and,
+    if ``element_refs`` is supplied, shifted by a per-atomic-number
+    reference summed over the structure (see :class:`AtomRef`). The ZBL
+    repulsion (:class:`NuclearRepulsion`) is optionally added when
+    ``calc_repuls=True``; it requires ``model.cutoff`` and
+    ``model.element_types`` to be defined.
+
+    Units (matching matgl's conventions):
+
+    * energy: eV per structure;
+    * forces: eV/A;
+    * stress: GPa, compressive-negative -- see the "Model Training"
+      section of the project README;
+    * Hessian (when ``calc_hessian=True``): eV/A^2, shape
+      ``(3*num_atoms, 3*num_atoms)``.
+
+    Save/load goes through :class:`~matgl.utils.io.IOMixIn`: ``self.save_args(locals())``
+    in ``__init__`` records the constructor arguments, so the standard
+    ``model.pt`` / ``state.pt`` / ``model.json`` triple round-trips the
+    wrapped model and all options. ``__version__`` is bumped whenever
+    serialised checkpoints would otherwise become invalid.
+    """
 
     __version__ = 3
+
+    # Class-level annotations narrow ``nn.Module.__getattr__``'s ``Tensor | Module``
+    # return type to ``Tensor`` for these registered buffers, so mypy accepts
+    # ``self._eye3 + st`` below.
+    data_mean: torch.Tensor
+    data_std: torch.Tensor
+    _eye3: torch.Tensor
 
     def __init__(
         self,
@@ -87,6 +138,9 @@ class Potential(nn.Module, IOMixIn):
 
         self.register_buffer("data_mean", data_mean)
         self.register_buffer("data_std", data_std)
+        # Identity used in strain expansion `lat @ (I + ε)`. Registering as a buffer
+        # avoids allocating a fresh 3x3 every forward and follows .to(device) moves.
+        self.register_buffer("_eye3", torch.eye(3, dtype=matgl.float_th), persistent=False)
 
     def forward(
         self,
@@ -99,22 +153,49 @@ class Potential(nn.Module, IOMixIn):
     ) -> tuple[torch.Tensor, ...]:
         """Compute energies, forces, stresses, and (optionally) the Hessian.
 
+        Stress is obtained by introducing a symbolic strain tensor
+        ``eps`` of shape ``(B, 3, 3)`` and using ``dE/d_eps`` from autograd,
+        scaled by ``1/V`` and converted to GPa.
+
         Args:
-            g: DGL graph
-            lat: lattice
-            state_attr: State attrs
-            l_g: Line graph
-            total_charge: total charge of the system
-            ext_pot: external potential (Natoms).
+            g: ``dgl.DGLGraph`` carrying ``g.ndata['frac_coords']`` and
+                ``g.edata['pbc_offset']`` as set by the matgl converters.
+                ``Potential.forward`` writes ``g.edata['lattice']``,
+                ``g.edata['pbc_offshift']``, and ``g.ndata['pos']`` in
+                place.
+            lat: lattice in Cartesian frame, shape ``(B, 3, 3)`` (or
+                ``(3, 3)`` for a single graph). Units of A.
+            state_attr: optional global state features, shape
+                ``(B, dim_state)``.
+            l_g: optional line graph used by three-body interactions
+                (M3GNet/CHGNet/SO3Net). May be ``None`` for two-body
+                models such as TensorNet.
+            total_charge: optional per-graph total charge, shape ``(B,)``,
+                consumed only when ``calc_charge=True``.
+            ext_pot: optional per-atom external potential, shape ``(N,)``,
+                consumed only when ``calc_charge=True``.
 
         Returns:
-            (energies, forces, stresses, hessian) or (energies, forces, stresses, hessian, site-wise properties)
+            A tuple whose contents depend on the active ``calc_*`` flags.
+            The base form is ``(energies, forces, stresses, hessian)`` --
+            quantities not requested are populated with a singleton
+            ``torch.zeros(1)`` placeholder rather than being omitted.
+            Optional site-wise quantities are appended in fixed order:
+
+            * ``calc_magmom and calc_charge`` -> ``(..., charges, magmoms)``;
+            * ``calc_magmom`` -> ``(..., magmoms)``;
+            * ``calc_charge`` -> ``(..., charges)``;
+            * ``debug_mode`` -> ``(energies, dE/dpos, dE/deps)``
+              (3-tuple, bypasses the standard layout).
+
+            Shapes: ``energies (B,)``, ``forces (N, 3)``, ``stresses``
+            in GPa with compressive-negative sign, ``hessian (3*N, 3*N)``.
         """
         # st (strain) for stress calculations
         st = lat.new_zeros([g.batch_size, 3, 3])
         if self.calc_stresses:
             st.requires_grad_(True)
-        lattice = lat @ (torch.eye(3, device=lat.device) + st)
+        lattice = lat @ (self._eye3 + st)
         g.edata["lattice"] = torch.repeat_interleave(lattice, g.batch_num_edges(), dim=0)
         g.edata["pbc_offshift"] = (g.edata["pbc_offset"].unsqueeze(dim=-1) * g.edata["lattice"]).sum(dim=1)
         g.ndata["pos"] = (
@@ -122,28 +203,35 @@ class Potential(nn.Module, IOMixIn):
         ).sum(dim=1)
         if self.calc_forces:
             g.ndata["pos"].requires_grad_(True)
-        total_energies = (
-            self.model(
-                g=g,
-                state_attr=state_attr,
-                l_g=l_g,
-                lat=lat,
-                total_charge=total_charge,
-                ext_pot=ext_pot,
-                lattice=lat,
+
+        # If no derivatives are requested, suppress autograd graph construction entirely.
+        # ``calc_stresses`` already required ``st.requires_grad_(True)`` above, so we only
+        # enter the no_grad context when forces/stresses/hessian are all off.
+        needs_autograd = self.calc_forces or self.calc_stresses or self.calc_hessian
+        autograd_ctx = nullcontext() if needs_autograd else torch.no_grad()
+        with autograd_ctx:
+            total_energies = (
+                self.model(
+                    g=g,
+                    state_attr=state_attr,
+                    l_g=l_g,
+                    lat=lat,
+                    total_charge=total_charge,
+                    ext_pot=ext_pot,
+                    lattice=lat,
+                )
+                if self.calc_charge is True
+                else self.model(g=g, l_g=l_g, state_attr=state_attr)
             )
-            if self.calc_charge is True
-            else self.model(g=g, l_g=l_g, state_attr=state_attr)
-        )
 
-        total_energies = self.data_std * total_energies + self.data_mean
+            total_energies = self.data_std * total_energies + self.data_mean
 
-        if self.calc_repuls:
-            total_energies += self.repuls(self.model.element_types, g)
+            if self.calc_repuls:
+                total_energies += self.repuls(self.model.element_types, g)
 
-        if self.element_refs is not None:
-            property_offset = torch.squeeze(self.element_refs(g))
-            total_energies += property_offset
+            if self.element_refs is not None:
+                property_offset = torch.squeeze(self.element_refs(g))
+                total_energies += property_offset
 
         forces = torch.zeros(1)
         stresses = torch.zeros(1)
@@ -151,13 +239,19 @@ class Potential(nn.Module, IOMixIn):
 
         grad_vars = [g.ndata["pos"], st] if self.calc_stresses else [g.ndata["pos"]]
 
+        # create_graph is only needed if we'll backprop through the gradient itself —
+        # i.e. during training (force-loss double-backward) or for Hessian. At inference
+        # this roughly halves autograd memory and saves wall time. Stress is captured in
+        # the same grad() call as forces, so it does not require retain_graph on its own.
+        needs_double_back = self.training or self.calc_hessian
+
         if self.calc_forces:
             grads = grad(
                 total_energies,
                 grad_vars,
                 grad_outputs=torch.ones_like(total_energies),
-                create_graph=True,
-                retain_graph=True,
+                create_graph=needs_double_back,
+                retain_graph=needs_double_back,
             )
             forces = -grads[0]
 
@@ -166,7 +260,7 @@ class Potential(nn.Module, IOMixIn):
             s = r.size(0)
             hessian = total_energies.new_zeros((s, s))
             for iatom in range(s):
-                tmp = grad([r[iatom]], g.ndata["pos"], retain_graph=iatom < s)[0]
+                tmp = grad([r[iatom]], g.ndata["pos"], retain_graph=iatom < s - 1)[0]
                 if tmp is not None:
                     hessian[iatom] = tmp.view(-1)
 
@@ -176,10 +270,14 @@ class Potential(nn.Module, IOMixIn):
                 if matgl.float_th == torch.float16
                 else torch.abs(torch.det(lattice))
             )
+            # grads[1] is dE/dε with shape either (3, 3) [unbatched] or (B, 3, 3) [batched].
+            # Stress = (1/V) * dE/dε in eV/Å³, converted to GPa.
             sts = grads[1]
-            scale = 1.0 / volume * 160.21766208
-            sts = [i * j for i, j in zip(sts, scale, strict=False)] if sts.dim() == 3 else [sts * scale]  # type:ignore[assignment]
-            stresses = torch.cat(sts)  # type:ignore[call-overload]
+            if sts.dim() == 3:
+                scaled = sts * (EV_PER_ANG3_TO_GPA / volume).view(-1, 1, 1)
+                stresses = scaled.reshape(-1, 3)
+            else:
+                stresses = sts * (EV_PER_ANG3_TO_GPA / volume)
 
         if self.debug_mode:
             return total_energies, grads[0], grads[1]

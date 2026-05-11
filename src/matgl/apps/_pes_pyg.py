@@ -1,7 +1,15 @@
-"""Implementation of Interatomic Potentials."""
+"""PyTorch Geometric implementation of :class:`Potential`.
+
+Wraps an energy-predicting PyG graph model (see :mod:`matgl.models`) and
+exposes a single ``forward`` that returns energies, forces, stresses, and
+(optionally) Hessian / partial charges / magnetic moments. Selected by
+default; the DGL counterpart lives in :mod:`matgl.apps._pes_dgl`. See
+:mod:`matgl.apps.pes` for the unit conventions and backend-selection logic.
+"""
 
 from __future__ import annotations
 
+import copy
 from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
@@ -24,7 +32,38 @@ EV_PER_ANG3_TO_GPA = 160.21766208
 
 
 class Potential(nn.Module, IOMixIn):
-    """A class representing an interatomic potential."""
+    """Interatomic potential wrapping a PyG energy model.
+
+    ``Potential`` takes any PyG graph model that maps a graph to a scalar
+    per-graph energy (M3GNet, CHGNet, TensorNet, ...) and produces forces,
+    stress, and optionally the Hessian via PyTorch autograd. The wrapped
+    model's ``__call__`` is expected to accept the keyword arguments
+    ``g``, ``state_attr``, and ``l_g`` (and, when ``calc_charge=True``,
+    additionally ``total_charge`` and ``ext_pot``), and return a scalar
+    energy tensor of shape ``(num_graphs,)``.
+
+    Outputs are denormalised with ``data_std * E_pred + data_mean`` and,
+    if ``element_refs`` is supplied, shifted by a per-atomic-number
+    reference summed over the structure (see :class:`AtomRef`). The ZBL
+    repulsion (:class:`NuclearRepulsion`) is optionally added when
+    ``calc_repuls=True``; it requires ``model.cutoff`` and
+    ``model.element_types`` to be defined.
+
+    Units (matching matgl's conventions):
+
+    * energy: eV per structure;
+    * forces: eV/A;
+    * stress: GPa, compressive-negative -- see the "Model Training"
+      section of the project README;
+    * Hessian (when ``calc_hessian=True``): eV/A^2, shape
+      ``(3*num_atoms, 3*num_atoms)``.
+
+    Save/load goes through :class:`~matgl.utils.io.IOMixIn`: ``self.save_args(locals())``
+    in ``__init__`` records the constructor arguments, so the standard
+    ``model.pt`` / ``state.pt`` / ``model.json`` triple round-trips the
+    wrapped model and all options. ``__version__`` is bumped whenever
+    serialised checkpoints would otherwise become invalid.
+    """
 
     __version__ = 3
 
@@ -143,29 +182,71 @@ class Potential(nn.Module, IOMixIn):
     ) -> tuple[torch.Tensor, ...]:
         """Compute energies, forces, stresses, and (optionally) the Hessian.
 
+        Stress is obtained by introducing a symbolic strain tensor
+        ``eps`` of shape ``(B, 3, 3)`` and using ``dE/d_eps`` from autograd,
+        scaled by ``1/V`` and converted to GPa.
+
+        The input ``g`` is **not mutated**: this method shallow-clones it
+        before attaching ``lattice`` / ``pbc_offshift`` / ``pos`` so the
+        same graph can be reused across multiple ``Potential.forward``
+        calls and shared between callers (e.g. two ``Potential`` instances)
+        without re-conversion.
+
         Args:
-            g: PyG graph
-            lat: lattice
-            state_attr: State attrs
-            l_g: PyG Line graph.
-            total_charge: total charge of the system
-            ext_pot: external potential (Natoms).
+            g: PyG graph (or ``Batch``) with the following attributes set by
+                the matgl converters. Read-only -- a shallow clone is taken
+                internally so the caller's ``g`` is untouched.
+
+                * ``g.frac_coords`` -- fractional coordinates, shape (N, 3);
+                * ``g.edge_index`` -- COO connectivity, shape (2, E);
+                * ``g.pbc_offset`` -- integer PBC image offsets per edge,
+                  shape (E, 3);
+                * ``g.batch`` -- per-node graph index when batched.
+            lat: lattice in Cartesian frame, shape ``(B, 3, 3)`` (or
+                ``(3, 3)`` for a single graph). Units of A.
+            state_attr: optional global state features, shape
+                ``(B, dim_state)``.
+            l_g: optional line graph used by three-body interactions
+                (M3GNet/CHGNet/SO3Net). May be ``None`` for two-body
+                models such as TensorNet.
+            total_charge: optional per-graph total charge, shape ``(B,)``,
+                consumed only when ``calc_charge=True``.
+            ext_pot: optional per-atom external potential, shape ``(N,)``,
+                consumed only when ``calc_charge=True``.
 
         Returns:
-            (energies, forces, stresses, hessian) or (energies, forces, stresses, hessian, site-wise properties)
+            A tuple whose contents depend on the active ``calc_*`` flags.
+            The base form is ``(energies, forces, stresses, hessian)`` --
+            quantities not requested are populated with a singleton
+            ``torch.zeros(1)`` placeholder rather than being omitted.
+            Optional site-wise quantities are appended in fixed order:
+
+            * ``calc_magmom and calc_charge`` -> ``(..., charges, magmoms)``;
+            * ``calc_magmom`` -> ``(..., magmoms)``;
+            * ``calc_charge`` -> ``(..., charges)``;
+            * ``debug_mode`` -> ``(energies, dE/dpos, dE/deps)``
+              (3-tuple, bypasses the standard layout).
+
+            Shapes: ``energies (B,)``, ``forces (N, 3)``, ``stresses (3*B, 3)``
+            in GPa with compressive-negative sign, ``hessian (3*N, 3*N)``.
         """
-        # Use a registered buffer's device rather than walking parameters every step.
-        # The .to() calls are kept unconditional because PyG ``Data.to()`` returns a
-        # shallow copy — skipping it when on-device would cause the in-place mutations
-        # of ``g.lattice``/``g.pos``/``g.pbc_offshift`` below to leak into the caller's
-        # graph object and break reuse across training steps.
+        # Shallow-clone the input graph so the in-place attribute assignments below
+        # (``g.lattice`` / ``g.pbc_offshift`` / ``g.pos``) do not leak back to the
+        # caller. PyG's ``Data.to(device)`` migrates tensors in place and returns
+        # ``self``, so it cannot be relied on for isolation. ``copy.copy`` produces
+        # a new ``Data`` with its own attribute namespace but shares tensor refs,
+        # so this is O(1) — the migration cost (if any) is in the ``.to(device)``
+        # call that follows. Skipping the device migration when already co-located
+        # also saves a per-step ``.apply(func)`` walk on the ASE/MD hot path.
         device = self.data_mean.device
-        g = g.to(device)
-        lat = lat.to(device)
-        if isinstance(state_attr, torch.Tensor):
-            state_attr = state_attr.to(device)
-        if l_g is not None:
-            l_g = l_g.to(device)
+        g = copy.copy(g)
+        if lat.device != device:
+            g = g.to(device)
+            lat = lat.to(device)
+            if isinstance(state_attr, torch.Tensor):
+                state_attr = state_attr.to(device)
+            if l_g is not None:
+                l_g = l_g.to(device)
 
         batch_size = g.num_graphs if hasattr(g, "num_graphs") else 1
         # st (strain) for stress calculations

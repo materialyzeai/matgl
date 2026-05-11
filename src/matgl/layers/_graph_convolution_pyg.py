@@ -1,3 +1,22 @@
+"""PyG graph-convolution / interaction blocks for M3GNet, MEGNet and TensorNet.
+
+Each block consumes a ``torch_geometric`` ``Data`` / ``Batch`` graph (plus,
+for M3GNet, an optional line graph) and updates node, edge, and optional
+state features. Public classes mirror the DGL counterparts in
+:mod:`matgl.layers._graph_convolution_dgl` so model code in
+:mod:`matgl.models` can be backend-agnostic:
+
+* :class:`MEGNetGraphConv` / :class:`MEGNetBlock` -- the classic
+  edge-node-state update of MEGNet.
+* :class:`M3GNetGraphConv` / :class:`M3GNetBlock` -- M3GNet's two-body
+  edge update, three-body angular term, and optional state coupling.
+* :class:`TensorNetInteraction` -- the equivariant Cartesian-tensor
+  message passing of TensorNet (works under either ``O(3)`` or ``SO(3)``).
+
+CHGNet's atom-/bond-/line-graph blocks remain DGL-only and are not
+re-exported here.
+"""
+
 from __future__ import annotations
 
 import torch

@@ -1,4 +1,19 @@
-"""Implementations of multi-layer perceptron (MLP) and other helper classes."""
+"""Backend-agnostic neural-network primitives used across matgl.
+
+Collects the small reusable PyTorch building blocks that the graph
+convolutions and readouts compose:
+
+* :class:`MLP` -- a configurable multi-layer perceptron with a single
+  activation and optional final-layer activation;
+* :class:`GatedMLP` -- the gated variant (sigmoid-gate * value-branch)
+  used by M3GNet, CHGNet and MEGNet edge/node updates;
+* :class:`GatedEquivariantBlock` and
+  :func:`build_gated_equivariant_mlp` -- vector-aware MLPs that preserve
+  rotational equivariance (used by TensorNet readouts).
+
+DGL-only norm-fused variants (``MLPNorm`` / ``GatedMLPNorm``) live in
+:mod:`matgl.layers._core_dgl`.
+"""
 
 from __future__ import annotations
 

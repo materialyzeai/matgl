@@ -1,4 +1,12 @@
-"""Embedding node, edge and optional state attributes."""
+"""PyG-specific embedding layers.
+
+Currently exposes :class:`TensorEmbedding`, the TensorNet-style
+embedding that maps atomic numbers and edge vectors into a Cartesian
+rank-2 tensor representation ``(N, units, 3, 3)``. The
+backend-agnostic atom/edge/state :class:`EmbeddingBlock` lives in
+:mod:`matgl.layers._embedding`; the DGL counterpart (which adds
+``NeighborEmbedding`` on top) is in :mod:`matgl.layers._embedding_dgl`.
+"""
 
 from __future__ import annotations
 

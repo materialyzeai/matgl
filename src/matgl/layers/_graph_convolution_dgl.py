@@ -1,4 +1,20 @@
-"""Graph convolution layer (GCL) implementations."""
+"""DGL graph-convolution / interaction blocks.
+
+Provides every graph-convolution variant available on the DGL backend:
+
+* :class:`MEGNetGraphConv` / :class:`MEGNetBlock` -- the classic
+  edge-node-state update of MEGNet;
+* :class:`M3GNetGraphConv` / :class:`M3GNetBlock` -- M3GNet's two-body
+  edge update, three-body angular term, and optional state coupling;
+* :class:`TensorNetInteraction` -- the equivariant Cartesian-tensor
+  message passing of TensorNet;
+* :class:`CHGNetAtomGraphBlock`, :class:`CHGNetBondGraphBlock`,
+  :class:`CHGNetGraphConv`, :class:`CHGNetLineGraphConv` -- the
+  atom/bond/line-graph hierarchy specific to CHGNet (DGL-only).
+
+The PyG counterpart (M3GNet/MEGNet/TensorNet only) is in
+:mod:`matgl.layers._graph_convolution_pyg`.
+"""
 
 from __future__ import annotations
 

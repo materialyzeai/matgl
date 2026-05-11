@@ -1,4 +1,26 @@
-"""Readout layer for M3GNet."""
+"""DGL readout layers.
+
+A readout converts per-node (or per-edge) features into a per-graph
+scalar / vector after the graph-convolution stack. The DGL backend ships
+the broadest selection:
+
+* :class:`Set2SetReadOut` -- the order-invariant Set2Set readout used by
+  MEGNet and M3GNet;
+* :class:`EdgeSet2Set` -- edge-feature variant for models that classify
+  on bond features;
+* :class:`WeightedReadOut` / :class:`WeightedReadOutPair` -- learned
+  per-atom or per-pair weighting before reduction;
+* :class:`WeightedAtomReadOut` -- attention-style atom weighting used by
+  CHGNet;
+* :class:`ReduceReadOut` / :class:`GlobalPool` -- simple ``sum``/``mean``/``max``
+  pooling primitives;
+* :class:`AttentiveFPReadout` -- gated-attention readout from
+  AttentiveFP (DGL-only).
+
+Some of these names are re-exported from :mod:`matgl.layers` only when
+``MATGL_BACKEND=DGL``; the PyG counterparts live in
+:mod:`matgl.layers._readout_pyg` and :mod:`matgl.layers._readout_torch`.
+"""
 
 from __future__ import annotations
 

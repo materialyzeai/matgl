@@ -1,4 +1,12 @@
-"""DGL-specific neural network building blocks mirroring the core MatGL layers."""
+"""DGL-specific neural-network building blocks.
+
+Counterparts of the primitives in :mod:`matgl.layers._core` that need to
+interact with a DGL graph (e.g. for per-graph normalisation inside the
+MLP, or for the Set2Set edge readout that depends on DGL message-passing
+primitives). Public exports re-exported from :mod:`matgl.layers` when
+``MATGL_BACKEND=DGL`` include :class:`EdgeSet2Set`, :class:`MLPNorm`,
+and :class:`GatedMLPNorm`.
+"""
 
 from __future__ import annotations
 

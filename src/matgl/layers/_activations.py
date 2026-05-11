@@ -1,4 +1,17 @@
-"""Custom activation functions."""
+"""Custom activation functions used across matgl architectures.
+
+Implements two non-standard activations not shipped with stock PyTorch:
+
+* :class:`SoftPlus2` -- ``softplus(x) - log(2)``; zero at the origin,
+  smooth, non-saturating. Used by MEGNet and the original M3GNet readout.
+* :class:`SoftExponential` -- a learnable activation with an adjustable
+  ``alpha`` parameter (https://arxiv.org/abs/1602.01321).
+
+Plus a small utility (:func:`softplus_inverse`) and an enum
+(:class:`ActivationFunction`) that maps human-readable names to
+constructors so config-driven model assembly can pick activations by
+string.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,14 @@
-"""Warp-accelerated TensorNet embedding layer."""
+"""NVIDIA Warp-accelerated TensorNet embedding.
+
+Drop-in replacement for the PyTorch ``TensorEmbedding`` in
+:mod:`matgl.layers._embedding_pyg` that dispatches the most expensive
+gather + outer-product step to a custom Warp kernel
+(:mod:`matgl.kernels` / :mod:`matgl.ops`). Only the embedding kernel is
+replaced; the upstream and downstream PyTorch ops remain the same so
+training and autograd behave identically. Requires the
+``nvalchemiops`` optional dependency and is selected automatically by
+TensorNet when running on a CUDA device with Warp installed.
+"""
 
 from __future__ import annotations
 
