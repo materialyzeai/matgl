@@ -113,22 +113,27 @@ class TestLoadMatpesDataset:
             cutoff=4.0,
             save_cache=False,
             root=str(tmp_path / "ds"),
-            stress_unit="eV/A3",  # parity payload is already in matgl-internal units
+            stress_unit="GPa",  # parity payload is already in matgl-internal units (GPa, compressive negative)
         )
         assert set(ds.labels.keys()) == {"energies", "forces", "stresses"}
         assert len(ds) == len(ds.labels["energies"])
         assert hasattr(ds, "element_types")
         assert set(ds.element_types) == {"Na", "Cl"}
 
-    def test_stress_unit_kbar_scales_to_ev_per_a3(self, monkeypatch, tmp_path):
-        """Default ``stress_unit='kbar'`` divides by 1602.1766208 (kbar → eV/Å³)."""
+    def test_stress_unit_kbar_scales_to_gpa_with_sign_flip(self, monkeypatch, tmp_path):
+        """Default ``stress_unit='kbar'`` applies ``-0.1`` (kbar VASP → GPa matgl).
+
+        matgl's internal stress unit is **GPa** with compressive = negative
+        (README, "Model Training"); VASP kbar is compressive = positive, so the
+        full conversion to matgl's convention is ``* -0.1``.
+        """
         _patch_hf_dataset_download(monkeypatch, tmp_path)
-        ds_raw = MGLDatasetLoader().matpes_dataset(
+        ds_gpa = MGLDatasetLoader().matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
             save_cache=False,
-            root=str(tmp_path / "ds_raw"),
-            stress_unit="eV/A3",
+            root=str(tmp_path / "ds_gpa"),
+            stress_unit="GPa",  # identity — payload values already match matgl's GPa convention
         )
         ds_kbar = MGLDatasetLoader().matpes_dataset(
             version="r2SCAN-2025.2",
@@ -136,19 +141,13 @@ class TestLoadMatpesDataset:
             save_cache=False,  # default stress_unit="kbar"
             root=str(tmp_path / "ds_kbar"),
         )
-        raw = np.asarray(ds_raw.labels["stresses"], dtype="float64")
+        gpa = np.asarray(ds_gpa.labels["stresses"], dtype="float64")
         scaled = np.asarray(ds_kbar.labels["stresses"], dtype="float64")
-        np.testing.assert_allclose(scaled, raw / 1602.1766208, rtol=1e-12, atol=0.0)
+        np.testing.assert_allclose(scaled, gpa * -0.1, rtol=1e-12, atol=0.0)
 
-    def test_stress_unit_gpa_scales_correctly(self, monkeypatch, tmp_path):
+    def test_stress_unit_ev_per_a3_scales_to_gpa(self, monkeypatch, tmp_path):
+        """``stress_unit='eV/A3'`` multiplies by 160.21766208 (eV/Å³ → GPa)."""
         _patch_hf_dataset_download(monkeypatch, tmp_path)
-        ds_raw = MGLDatasetLoader().matpes_dataset(
-            version="r2SCAN-2025.2",
-            cutoff=4.0,
-            save_cache=False,
-            root=str(tmp_path / "ds_raw"),
-            stress_unit="eV/A3",
-        )
         ds_gpa = MGLDatasetLoader().matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
@@ -156,9 +155,16 @@ class TestLoadMatpesDataset:
             root=str(tmp_path / "ds_gpa"),
             stress_unit="GPa",
         )
-        raw = np.asarray(ds_raw.labels["stresses"], dtype="float64")
-        scaled = np.asarray(ds_gpa.labels["stresses"], dtype="float64")
-        np.testing.assert_allclose(scaled, raw / 160.21766208, rtol=1e-12, atol=0.0)
+        ds_eva3 = MGLDatasetLoader().matpes_dataset(
+            version="r2SCAN-2025.2",
+            cutoff=4.0,
+            save_cache=False,
+            root=str(tmp_path / "ds_eva3"),
+            stress_unit="eV/A3",
+        )
+        gpa = np.asarray(ds_gpa.labels["stresses"], dtype="float64")
+        scaled = np.asarray(ds_eva3.labels["stresses"], dtype="float64")
+        np.testing.assert_allclose(scaled, gpa * 160.21766208, rtol=1e-12, atol=0.0)
 
     def test_invalid_stress_unit_raises(self, monkeypatch, tmp_path):
         """An unknown ``stress_unit`` is rejected by the conversion-factor lookup."""
@@ -193,7 +199,7 @@ class TestLoadMatpesDataset:
             cutoff=4.0,
             save_cache=False,
             root=str(tmp_path / "ds"),
-            stress_unit="eV/A3",
+            stress_unit="GPa",
         )
         assert download_calls == []
         assert len(ds) > 0
@@ -217,7 +223,7 @@ class TestLoadMatpesDataset:
             cutoff=4.0,
             save_cache=False,
             root=str(tmp_path / "ds"),
-            stress_unit="eV/A3",
+            stress_unit="GPa",
         )
         assert len(download_calls) == 1
         assert download_calls[0]["repo_type"] == "dataset"
@@ -291,6 +297,49 @@ class TestMGLPotentialTrainerInit:
         assert trainer.potential is None
         assert trainer.atomrefs is None
 
+    def test_loss_weights_stored(self):
+        """All five loss weights (energy/force/stress/magmom/charge) are stored verbatim."""
+        model = TensorNet(
+            element_types=("Na", "Cl"),
+            cutoff=4.0,
+            is_intensive=False,
+            use_warp=False,
+            units=8,
+            ntargets=1,
+            num_layers=1,
+        )
+        trainer = MGLPotentialTrainer(
+            model,
+            energy_weight=1.5,
+            force_weight=2.0,
+            stress_weight=0.25,
+            magmom_weight=0.5,
+            charge_weight=0.75,
+        )
+        assert trainer.energy_weight == 1.5
+        assert trainer.force_weight == 2.0
+        assert trainer.stress_weight == 0.25
+        assert trainer.magmom_weight == 0.5
+        assert trainer.charge_weight == 0.75
+
+    def test_loss_weight_defaults_match_matpes_recipe(self):
+        """Defaults: energy=1.0, force=1.0, stress=0.1, magmom=0.0, charge=0.0."""
+        model = TensorNet(
+            element_types=("Na", "Cl"),
+            cutoff=4.0,
+            is_intensive=False,
+            use_warp=False,
+            units=8,
+            ntargets=1,
+            num_layers=1,
+        )
+        trainer = MGLPotentialTrainer(model)
+        assert trainer.energy_weight == 1.0
+        assert trainer.force_weight == 1.0
+        assert trainer.stress_weight == 0.1
+        assert trainer.magmom_weight == 0.0
+        assert trainer.charge_weight == 0.0
+
 
 @pytest.mark.skipif(not _NACL_PARITY.exists(), reason="NaCl parity payload missing")
 class TestFit:
@@ -351,7 +400,7 @@ class TestFit:
             cutoff=4.0,
             save_cache=False,
             root=str(tmp_path / "ds"),
-            stress_unit="eV/A3",
+            stress_unit="GPa",
         )
         refs = MGLDatasetLoader().matpes_element_refs(version="r2SCAN-2025.2", element_types=ds.element_types)
 
@@ -378,7 +427,7 @@ class TestFit:
             cutoff=4.0,
             save_cache=False,
             root=str(tmp_path / "ds"),
-            stress_unit="eV/A3",
+            stress_unit="GPa",
         )
         model = self._make_model(ds.element_types)
         trainer = self._trainer(model)

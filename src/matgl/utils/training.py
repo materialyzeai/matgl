@@ -811,16 +811,21 @@ _EXTXYZ_SPLIT_PATTERNS: dict[str, re.Pattern[str]] = {
     "valid": re.compile(r"[-_]val(?:id)?\.(?:ext)?xyz$", re.IGNORECASE),
 }
 
-# Stress-unit conversion to eV/Å³ (matgl's internal unit for ``Potential``
-# outputs and training labels). ``1 eV/Å³ = 160.21766208 GPa = 1602.1766208 kbar``.
-# Values are magnitude-only — no sign flip is applied. The MatPES JSONs ship
-# stress in kbar (raw VASP convention), hence the default; pass
-# ``stress_unit="eV/A3"`` to skip the conversion or ``"GPa"`` for GPa inputs.
+# Stress-unit conversion to matgl's internal unit (**GPa**, compressive =
+# negative — see the "Model Training" section of the README). ``1 GPa = 10
+# kbar = 1/160.21766208 eV/Å³``. The ``"kbar"`` factor is ``-0.1``, which both
+# rescales (kbar → GPa, /10) **and** flips the sign from VASP's
+# compressive-positive convention to matgl's compressive-negative one — i.e.
+# applying ``stress_unit="kbar"`` is exactly the README's "multiply VASP
+# stresses by -0.1" recipe in one step. MatPES JSONs ship raw VASP stress in
+# kbar, hence the default; pass ``stress_unit="GPa"`` to skip the conversion
+# or ``"eV/A3"`` if your file is already in eV/Å³ (magnitude only — supply the
+# sign yourself for ``eV/A3``).
 StressUnit = Literal["kbar", "GPa", "eV/A3"]
-_STRESS_UNIT_TO_EV_A3: dict[str, float] = {
-    "eV/A3": 1.0,
-    "GPa": 1.0 / 160.21766208,
-    "kbar": 1.0 / 1602.1766208,
+_STRESS_UNIT_TO_GPA: dict[str, float] = {
+    "GPa": 1.0,
+    "kbar": -0.1,
+    "eV/A3": 160.21766208,
 }
 
 
@@ -862,7 +867,7 @@ def _matpes_samples_to_lists(
     energies: list[float] = []
     forces: list = []
     stresses: list = []
-    factor = _STRESS_UNIT_TO_EV_A3[stress_unit]
+    factor = _STRESS_UNIT_TO_GPA[stress_unit]
 
     for raw in samples:
         struct = raw["structure"]
@@ -960,10 +965,12 @@ def _read_matpes_dataset_local(
 ) -> MGLDataset:
     """Read a (locally cached) MatPES JSON file and build an ``MGLDataset``.
 
-    Stresses on disk are stored in **kbar** (raw VASP convention). They are
-    converted to eV/Å³ — matgl's internal unit for ``Potential`` outputs and
-    training labels — by ``stress_unit``'s conversion factor. Pass
-    ``stress_unit="eV/A3"`` if you have already converted the file in place.
+    Stresses on disk are stored in **kbar** (raw VASP convention,
+    compressive = positive). They are converted to **GPa** with the
+    compressive-negative sign convention used throughout matgl — see the
+    "Model Training" section of the README — by multiplying by the
+    ``stress_unit`` factor (``-0.1`` for the default ``"kbar"``).
+    Pass ``stress_unit="GPa"`` if the file is already in matgl convention.
     """
     samples = loadfn(local_path)
     structures, energies, forces, stresses = _matpes_samples_to_lists(samples, stress_unit=stress_unit)
@@ -1046,12 +1053,14 @@ class MGLDatasetLoader:
             save_cache: Whether ``MGLDataset`` persists its processed cache.
             root: ``MGLDataset`` root directory; default lets it pick.
             stress_unit: Unit of the on-disk ``stress`` field. Defaults to
-                ``"kbar"`` (raw VASP convention used by MatPES JSONs); values
-                are converted to eV/Å³ — matgl's internal unit for ``Potential``
-                outputs and training labels. Pass ``"eV/A3"`` to skip the
-                conversion or ``"GPa"`` for GPa inputs. **Magnitude only — no
-                sign flip is applied; verify the sign convention matches your
-                ``Potential`` if you've customised the pipeline.**
+                ``"kbar"`` (raw VASP convention, compressive = positive — the
+                standard for MatPES JSONs). matgl's internal unit is **GPa**
+                with compressive = negative (README, "Model Training"), so the
+                default ``"kbar"`` factor is ``-0.1`` and applies the
+                "multiply VASP stress by -0.1" recipe in one step. Pass
+                ``"GPa"`` if the file is already in matgl convention, or
+                ``"eV/A3"`` for an eV/Å³ source (magnitude only — supply the
+                correct sign yourself).
 
         Returns:
             An ``MGLDataset`` ready to drop into ``MGLDataLoader``. The
@@ -1146,6 +1155,8 @@ class MGLPotentialTrainer:
         energy_weight: float = 1.0,
         force_weight: float = 1.0,
         stress_weight: float = 0.1,
+        magmom_weight: float = 0.0,
+        charge_weight: float = 0.0,
         loss: str = "huber_loss",
         loss_params: dict | None = None,
         # Optimizer / scheduler defaults.
@@ -1173,6 +1184,16 @@ class MGLPotentialTrainer:
             force_weight: Force loss weight.
             stress_weight: Stress loss weight. Set to ``0`` for datasets
                 without stress labels (e.g. cluster / dimer extxyz files).
+                Stress labels are expected in **GPa** with compressive =
+                negative (matgl convention; see the README "Model Training"
+                section). The MatPES loaders apply the kbar → GPa /
+                sign-flip conversion automatically.
+            magmom_weight: Site-wise magmom loss weight. Set ``> 0`` to train
+                on ``"magmoms"`` labels (e.g. CHGNet-style fits); ``0``
+                (default) disables the head and the loss term.
+            charge_weight: Site-wise charge loss weight. Set ``> 0`` to train
+                on ``"charges"`` labels (e.g. QET-style fits); ``0`` (default)
+                disables the head and the loss term.
             loss: One of ``"mse_loss"``, ``"huber_loss"`` (default; robust),
                 ``"smooth_l1_loss"``, or ``"l1_loss"``.
             loss_params: Optional kwargs forwarded to the loss function (e.g.
@@ -1200,6 +1221,8 @@ class MGLPotentialTrainer:
         self.energy_weight = energy_weight
         self.force_weight = force_weight
         self.stress_weight = stress_weight
+        self.magmom_weight = magmom_weight
+        self.charge_weight = charge_weight
         self.loss = loss
         self.loss_params = loss_params
 
@@ -1301,11 +1324,11 @@ class MGLPotentialTrainer:
             ``self.atomrefs``) is updated.
 
         Notes:
-            When the dataset has no ``"stresses"`` label (e.g. a cluster /
-            dimer extxyz dataset like ``cp_dimer.tar.gz``), the stress loss
-            term is auto-disabled for this fit with a one-line warning so
-            the trainer-level default ``stress_weight=0.1`` doesn't trigger
-            a shape mismatch.
+            Loss-term toggling follows the constructor weights: set
+            ``stress_weight=0`` for datasets without stress labels (e.g.
+            cluster / dimer extxyz files), and set ``magmom_weight`` /
+            ``charge_weight`` ``> 0`` only when the dataset actually carries
+            ``"magmoms"`` / ``"charges"`` labels.
         """
         pl.seed_everything(self.seed, workers=True)
 
@@ -1321,6 +1344,8 @@ class MGLPotentialTrainer:
             energy_weight=self.energy_weight,
             force_weight=self.force_weight,
             stress_weight=self.stress_weight,
+            magmom_weight=self.magmom_weight,
+            charge_weight=self.charge_weight,
             loss=self.loss,
             loss_params=self.loss_params,
             lr=self.lr,
