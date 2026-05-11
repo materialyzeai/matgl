@@ -28,6 +28,13 @@ class Potential(nn.Module, IOMixIn):
 
     __version__ = 3
 
+    # Class-level annotations narrow ``nn.Module.__getattr__``'s ``Tensor | Module``
+    # return type to ``Tensor`` for these registered buffers, so mypy accepts
+    # ``self.data_mean.device`` and ``self._eye3 + st`` below.
+    data_mean: torch.Tensor
+    data_std: torch.Tensor
+    _eye3: torch.Tensor
+
     def __init__(
         self,
         model: nn.Module,
