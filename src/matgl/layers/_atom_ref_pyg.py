@@ -30,7 +30,6 @@ class AtomRef(nn.Module):
 
         self.max_z = property_offset.shape[-1]
         self.register_buffer("property_offset", property_offset)
-        self.register_buffer("onehot", torch.eye(self.max_z))
 
     def get_feature_matrix(self, graphs: list[Data]) -> np.ndarray:
         """Get the number of atoms for different elements in the structure.
@@ -69,19 +68,15 @@ class AtomRef(nn.Module):
         Returns:
             offset_per_graph
         """
-        one_hot = torch.as_tensor(self.onehot)[g.node_type]  # type: ignore[index]
-
+        # Gather per-atom offsets directly: shape (N,) or (S, N) for multi-state refs.
+        # This replaces the previous (N, max_z) one-hot * repeat * multiply * sum pipeline,
+        # which allocated max_z times the memory and FLOPs for the same result.
+        batch = getattr(g, "batch", None)
         if self.property_offset.ndim > 1:
-            offset_batched_with_state_list: list[torch.Tensor] = []
-            for i in range(self.property_offset.size(dim=0)):
-                property_offset_batched = self.property_offset[i].repeat(g.num_nodes, 1).to(one_hot.device)
-                offset = property_offset_batched * one_hot
-                atomic_offset = torch.sum(offset, dim=1)
-                offset_batched = global_add_pool(atomic_offset, g.batch)
-                offset_batched_with_state_list.append(offset_batched)
-            offset_batched_with_state: torch.Tensor = torch.stack(offset_batched_with_state_list)
-            return offset_batched_with_state[state_attr] if state_attr is not None else offset_batched_with_state
-        property_offset_batched = self.property_offset.repeat(g.num_nodes, 1).to(one_hot.device)
-        offset = property_offset_batched * one_hot
-        atomic_offset = torch.sum(offset, dim=1)
-        return global_add_pool(atomic_offset, g.batch)
+            # Multi-state: (S, max_z) -> per-atom (S, N) -> per-graph (S, B)
+            atomic_offset = self.property_offset[:, g.node_type]  # (S, N)
+            offset_per_graph = global_add_pool(atomic_offset.T, batch).T  # (S, B)
+            return offset_per_graph[state_attr] if state_attr is not None else offset_per_graph
+
+        atomic_offset = self.property_offset[g.node_type]  # (N,)
+        return global_add_pool(atomic_offset, batch)  # (B,)
