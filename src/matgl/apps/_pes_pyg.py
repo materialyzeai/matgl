@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
 import torch
@@ -17,11 +18,22 @@ from matgl.utils.io import IOMixIn
 if TYPE_CHECKING:
     import numpy as np
 
+# 1 eV/Å³ = 160.21766208 GPa. Stress is autograd of energy w.r.t. strain (eV)
+# divided by volume (Å³), giving eV/Å³; multiply by this constant for GPa.
+EV_PER_ANG3_TO_GPA = 160.21766208
+
 
 class Potential(nn.Module, IOMixIn):
     """A class representing an interatomic potential."""
 
     __version__ = 3
+
+    # Class-level annotations narrow ``nn.Module.__getattr__``'s ``Tensor | Module``
+    # return type to ``Tensor`` for these registered buffers, so mypy accepts
+    # ``self.data_mean.device`` and ``self._eye3 + st`` below.
+    data_mean: torch.Tensor
+    data_std: torch.Tensor
+    _eye3: torch.Tensor
 
     def __init__(
         self,
@@ -86,6 +98,9 @@ class Potential(nn.Module, IOMixIn):
 
         self.register_buffer("data_mean", data_mean)
         self.register_buffer("data_std", data_std)
+        # Identity used in strain expansion `lat @ (I + ε)`. Registering as a buffer
+        # avoids allocating a fresh 3x3 every forward and follows .to(device) moves.
+        self.register_buffer("_eye3", torch.eye(3, dtype=matgl.float_th), persistent=False)
 
     def forward(
         self,
@@ -109,7 +124,12 @@ class Potential(nn.Module, IOMixIn):
         Returns:
             (energies, forces, stresses, hessian) or (energies, forces, stresses, hessian, site-wise properties)
         """
-        device = next(self.parameters()).device
+        # Use a registered buffer's device rather than walking parameters every step.
+        # The .to() calls are kept unconditional because PyG ``Data.to()`` returns a
+        # shallow copy — skipping it when on-device would cause the in-place mutations
+        # of ``g.lattice``/``g.pos``/``g.pbc_offshift`` below to leak into the caller's
+        # graph object and break reuse across training steps.
+        device = self.data_mean.device
         g = g.to(device)
         lat = lat.to(device)
         if isinstance(state_attr, torch.Tensor):
@@ -123,7 +143,7 @@ class Potential(nn.Module, IOMixIn):
         if self.calc_stresses:
             st.requires_grad_(True)
 
-        lattice = lat @ (torch.eye(3, device=lat.device) + st)
+        lattice = lat @ (self._eye3 + st)
 
         # Attach lattice to edges
         if isinstance(g, Batch):
@@ -145,25 +165,31 @@ class Potential(nn.Module, IOMixIn):
         if self.calc_forces:
             g.pos.requires_grad_(True)
 
-        total_energies = (
-            self.model(
-                g=g,
-                state_attr=state_attr,
-                l_g=l_g,
-                total_charge=total_charge,
-                ext_pot=ext_pot,
+        # If no derivatives are requested, suppress autograd graph construction entirely.
+        # `calc_stresses` already required `st.requires_grad_(True)` above, so we only
+        # enter the no_grad context when forces/stresses/hessian are all off.
+        needs_autograd = self.calc_forces or self.calc_stresses or self.calc_hessian
+        autograd_ctx = nullcontext() if needs_autograd else torch.no_grad()
+        with autograd_ctx:
+            total_energies = (
+                self.model(
+                    g=g,
+                    state_attr=state_attr,
+                    l_g=l_g,
+                    total_charge=total_charge,
+                    ext_pot=ext_pot,
+                )
+                if self.calc_charge
+                else self.model(g=g, state_attr=state_attr, l_g=l_g)
             )
-            if self.calc_charge
-            else self.model(g=g, state_attr=state_attr, l_g=l_g)
-        )
-        total_energies = self.data_std * total_energies + self.data_mean
+            total_energies = self.data_std * total_energies + self.data_mean
 
-        if self.calc_repuls:
-            total_energies += self.repuls(self.model.element_types, g)
+            if self.calc_repuls:
+                total_energies += self.repuls(self.model.element_types, g)
 
-        if self.element_refs is not None:
-            property_offset = torch.squeeze(self.element_refs(g))
-            total_energies += property_offset
+            if self.element_refs is not None:
+                property_offset = torch.squeeze(self.element_refs(g))
+                total_energies += property_offset
 
         forces = torch.zeros(1)
         stresses = torch.zeros(1)
@@ -171,14 +197,20 @@ class Potential(nn.Module, IOMixIn):
 
         grad_vars = [g.pos, st] if self.calc_stresses else [g.pos]
 
+        # create_graph is only needed if we'll backprop through the gradient itself —
+        # i.e. during training (force-loss double-backward) or for Hessian. At inference
+        # this roughly halves autograd memory and saves wall time. Stress is captured in
+        # the same grad() call as forces, so it does not require retain_graph on its own.
+        needs_double_back = self.training or self.calc_hessian
+
         grads: tuple[torch.Tensor, ...] | None = None
         if self.calc_forces:
             grads = grad(
                 total_energies,
                 grad_vars,
                 grad_outputs=torch.ones_like(total_energies),
-                create_graph=True,
-                retain_graph=True,
+                create_graph=needs_double_back,
+                retain_graph=needs_double_back,
             )
             forces = -grads[0]
 
@@ -187,7 +219,7 @@ class Potential(nn.Module, IOMixIn):
             s = r.size(0)
             hessian = total_energies.new_zeros((s, s))
             for iatom in range(s):
-                tmp = grad([r[iatom]], g.pos, retain_graph=iatom < s)[0]
+                tmp = grad([r[iatom]], g.pos, retain_graph=iatom < s - 1)[0]
                 if tmp is not None:
                     hessian[iatom] = tmp.view(-1)
 
@@ -197,10 +229,14 @@ class Potential(nn.Module, IOMixIn):
                 if matgl.float_th == torch.float16
                 else torch.abs(torch.det(lattice))
             )
+            # grads[1] is dE/dε with shape either (3, 3) [unbatched] or (B, 3, 3) [batched].
+            # Stress = (1/V) * dE/dε in eV/Å³, converted to GPa.
             sts = grads[1]
-            scale = 1.0 / volume * 160.21766208
-            sts = [i * j for i, j in zip(sts, scale, strict=False)] if sts.dim() == 3 else [sts * scale]  # type:ignore[assignment]
-            stresses = torch.cat(sts)  # type:ignore[call-overload]
+            if sts.dim() == 3:
+                scaled = sts * (EV_PER_ANG3_TO_GPA / volume).view(-1, 1, 1)
+                stresses = scaled.reshape(-1, 3)
+            else:
+                stresses = sts * (EV_PER_ANG3_TO_GPA / volume)
 
         if self.debug_mode and grads is not None:
             return total_energies, grads[0], grads[1]
