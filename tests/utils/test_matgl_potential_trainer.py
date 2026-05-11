@@ -50,15 +50,8 @@ class TestFilenameHelpers:
     def test_matpes_dataset_uppercase(self):
         assert _matpes_dataset_filename("R2SCAN-2025.2") == "MatPES-R2SCAN-2025.2.json"
 
-    def test_matpes_dataset_with_split(self):
-        assert _matpes_dataset_filename("R2SCAN-2025.2", split="train") == "MatPES-R2SCAN-2025.2-train.json"
-
     def test_matpes_dataset_pbe(self):
         assert _matpes_dataset_filename("PBE-2025.1") == "MatPES-PBE-2025.1.json"
-
-    def test_matpes_dataset_invalid_split_raises(self):
-        with pytest.raises(ValueError, match="Invalid split"):
-            _matpes_dataset_filename("PBE-2025.2", split="dev")
 
     def test_atomrefs_filename(self):
         assert _matpes_atomrefs_filename("r2SCAN-2025.2") == "MatPES-R2SCAN-atoms.json"
@@ -110,6 +103,40 @@ def _patch_hf_atomrefs_download(monkeypatch, tmp_path, payload):
         return str(refs_path)
 
     monkeypatch.setattr(training_mod, "hf_hub_download", fake)
+
+
+def _make_atomrefs_record(symbol: str, energy: float) -> dict:
+    """Build a single-atom MatPES atomrefs record (the HF schema)."""
+    return {
+        "elements": [symbol],
+        "energy": energy,
+        "structure": {
+            "@module": "pymatgen.core.structure",
+            "@class": "Structure",
+            "charge": 0.0,
+            "lattice": {
+                "matrix": [[15.0, 0.0, 0.0], [0.0, 15.0, 0.0], [0.0, 0.0, 15.0]],
+                "pbc": [True, True, True],
+                "a": 15.0,
+                "b": 15.0,
+                "c": 15.0,
+                "alpha": 90.0,
+                "beta": 90.0,
+                "gamma": 90.0,
+                "volume": 3375.0,
+            },
+            "properties": {},
+            "sites": [
+                {
+                    "species": [{"element": symbol, "occu": 1}],
+                    "abc": [0.0, 0.0, 0.0],
+                    "properties": {},
+                    "label": symbol,
+                    "xyz": [0.0, 0.0, 0.0],
+                }
+            ],
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -318,20 +345,40 @@ class TestLoadMatpesDataset:
 
 
 class TestLoadMatpesElementRefs:
-    def test_no_reorder_returns_file_order(self, monkeypatch, tmp_path):
-        _patch_hf_atomrefs_download(monkeypatch, tmp_path, {"element_types": ["Na", "Cl"], "refs": [-1.0, -2.0]})
+    def _flat_list_payload(self):
+        """The actual HF atomrefs schema: a list of single-atom records."""
+        return [_make_atomrefs_record("Na", -1.0), _make_atomrefs_record("Cl", -2.0)]
+
+    def test_flat_list_no_reorder_returns_file_order(self, monkeypatch, tmp_path):
+        _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._flat_list_payload())
         refs = MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2")
         np.testing.assert_allclose(refs, [-1.0, -2.0])
 
-    def test_reorders_to_caller_element_types(self, monkeypatch, tmp_path):
+    def test_flat_list_reorders_to_caller_element_types(self, monkeypatch, tmp_path):
+        _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._flat_list_payload())
+        refs = MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=("Cl", "Na"))
+        np.testing.assert_allclose(refs, [-2.0, -1.0])
+
+    def test_flat_list_missing_element_raises_keyerror(self, monkeypatch, tmp_path):
+        _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._flat_list_payload())
+        with pytest.raises(KeyError, match=r"\['Li'\]"):
+            MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=("Li", "Cl"))
+
+    def test_legacy_dict_payload_still_works(self, monkeypatch, tmp_path):
+        """Legacy ``{'element_types': [...], 'refs': [...]}`` shape is still accepted."""
         _patch_hf_atomrefs_download(monkeypatch, tmp_path, {"element_types": ["Na", "Cl"], "refs": [-1.0, -2.0]})
         refs = MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=("Cl", "Na"))
         np.testing.assert_allclose(refs, [-2.0, -1.0])
 
-    def test_missing_element_raises_keyerror(self, monkeypatch, tmp_path):
-        _patch_hf_atomrefs_download(monkeypatch, tmp_path, {"element_types": ["Na", "Cl"], "refs": [-1.0, -2.0]})
-        with pytest.raises(KeyError, match=r"\['Li'\]"):
-            MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=("Li", "Cl"))
+    def test_empty_flat_list_raises(self, monkeypatch, tmp_path):
+        _patch_hf_atomrefs_download(monkeypatch, tmp_path, [])
+        with pytest.raises(ValueError, match="no single-atom records"):
+            MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2")
+
+    def test_unrecognised_payload_raises(self, monkeypatch, tmp_path):
+        _patch_hf_atomrefs_download(monkeypatch, tmp_path, {"unexpected": []})
+        with pytest.raises(ValueError, match="Unrecognised MatPES atomrefs payload"):
+            MatGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2")
 
 
 # ---------------------------------------------------------------------------

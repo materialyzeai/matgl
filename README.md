@@ -228,11 +228,9 @@ Note: For stresses, we use the convention that compressive stress gives negative
 from matgl.models import TensorNet
 from matgl.utils.training import MatGLPotentialTrainer
 
-# 1. Download the canonical r2SCAN training split + per-element offsets from
-#    materialyze/matpes on Hugging Face. Pass split=None for the full ~2 GB
-#    monolithic file or "train" / "valid" / "test" for the canonical splits
-#    (v2025.2+).
-ds = MatGLPotentialTrainer.load_matpes_dataset(version="r2SCAN-2025.2", split="train")
+# 1. Download the r2SCAN MatPES dataset + per-element isolated-atom offsets
+#    from materialyze/matpes on Hugging Face.
+ds = MatGLPotentialTrainer.load_matpes_dataset(version="r2SCAN-2025.2")
 refs = MatGLPotentialTrainer.load_matpes_element_refs(
     version="r2SCAN-2025.2", element_types=ds.element_types
 )
@@ -254,13 +252,6 @@ trainer = MatGLPotentialTrainer(
 )
 potential = trainer.fit(dataset=ds, atomrefs=refs, save_path="./MatPES-TensorNet")
 # trainer.potential / .lit_module / .trainer / .loaders are populated for inspection.
-```
-
-To use the canonical train / valid / test split trio (v2025.2+ only):
-
-```python
-splits = MatGLPotentialTrainer.load_matpes_splits(version="r2SCAN-2025.2")
-trainer.fit(dataset=splits, atomrefs=refs)   # no random split — uses the canonical splits as-is
 ```
 
 For a non-MatPES extxyz dataset (e.g. `materialyze/mlip-lr-benchmarks` `cp_dimer.tar.gz`) just swap the loader.
