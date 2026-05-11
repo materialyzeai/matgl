@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
@@ -143,8 +144,14 @@ class Potential(nn.Module, IOMixIn):
     ) -> tuple[torch.Tensor, ...]:
         """Compute energies, forces, stresses, and (optionally) the Hessian.
 
+        The input ``g`` is **not mutated**: this method shallow-clones it before
+        attaching ``lattice`` / ``pbc_offshift`` / ``pos`` so the same graph can
+        be reused across multiple ``Potential.forward`` calls and shared between
+        callers (e.g. two ``Potential`` instances) without re-conversion.
+
         Args:
-            g: PyG graph
+            g: PyG graph. Read-only — a shallow clone is taken internally so the
+                caller's ``g`` is untouched.
             lat: lattice
             state_attr: State attrs
             l_g: PyG Line graph.
@@ -154,18 +161,23 @@ class Potential(nn.Module, IOMixIn):
         Returns:
             (energies, forces, stresses, hessian) or (energies, forces, stresses, hessian, site-wise properties)
         """
-        # Use a registered buffer's device rather than walking parameters every step.
-        # The .to() calls are kept unconditional because PyG ``Data.to()`` returns a
-        # shallow copy — skipping it when on-device would cause the in-place mutations
-        # of ``g.lattice``/``g.pos``/``g.pbc_offshift`` below to leak into the caller's
-        # graph object and break reuse across training steps.
+        # Shallow-clone the input graph so the in-place attribute assignments below
+        # (``g.lattice`` / ``g.pbc_offshift`` / ``g.pos``) do not leak back to the
+        # caller. PyG's ``Data.to(device)`` migrates tensors in place and returns
+        # ``self``, so it cannot be relied on for isolation. ``copy.copy`` produces
+        # a new ``Data`` with its own attribute namespace but shares tensor refs,
+        # so this is O(1) — the migration cost (if any) is in the ``.to(device)``
+        # call that follows. Skipping the device migration when already co-located
+        # also saves a per-step ``.apply(func)`` walk on the ASE/MD hot path.
         device = self.data_mean.device
-        g = g.to(device)
-        lat = lat.to(device)
-        if isinstance(state_attr, torch.Tensor):
-            state_attr = state_attr.to(device)
-        if l_g is not None:
-            l_g = l_g.to(device)
+        g = copy.copy(g)
+        if lat.device != device:
+            g = g.to(device)
+            lat = lat.to(device)
+            if isinstance(state_attr, torch.Tensor):
+                state_attr = state_attr.to(device)
+            if l_g is not None:
+                l_g = l_g.to(device)
 
         batch_size = g.num_graphs if hasattr(g, "num_graphs") else 1
         # st (strain) for stress calculations

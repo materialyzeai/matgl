@@ -145,6 +145,21 @@ class TestPotential:
         fd = (e_plus - e_minus) / (2 * 0.01)
         assert np.allclose(fd.detach().numpy(), grad_dx_zero[0][0].detach().numpy(), atol=1e-05)
 
+    def test_forward_does_not_mutate_input_graph(self, graph_MoS_pyg, model_tensornet):
+        """``Potential.forward`` must shallow-clone ``g`` so the caller's graph keeps
+        its original attribute set and ``frac_coords``/``edge_index`` tensors are
+        not mutated. Regression test: previously ``lattice``/``pbc_offshift``/``pos``
+        leaked back onto the input graph."""
+        structure, graph, state = graph_MoS_pyg
+        lat = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
+        fields_before = set(graph.keys())
+        ff = Potential(model=model_tensornet)
+        ff(graph, lat, state)
+        fields_after = set(graph.keys())
+        assert fields_before == fields_after, (
+            f"Potential.forward mutated input graph; added: {fields_after - fields_before}"
+        )
+
     def test_potential_with_stress_fd(self, graph_MoS, model_tensornet):
         p2g = Structure2Graph(element_types=("O", "Zr"), cutoff=5.0)
         struct_minus = Structure.from_spacegroup(
