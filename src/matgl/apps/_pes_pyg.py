@@ -49,6 +49,8 @@ class Potential(nn.Module, IOMixIn):
         calc_repuls: bool = False,
         zbl_trainable: bool = False,
         debug_mode: bool = False,
+        compile_model: bool = False,
+        compile_mode: str = "reduce-overhead",
     ):
         """Initialize Potential from a model and elemental references.
 
@@ -65,10 +67,38 @@ class Potential(nn.Module, IOMixIn):
             calc_repuls: Whether the ZBL repulsion is included
             zbl_trainable: Whether zbl repulsion is trainable
             debug_mode: Return gradient of total energy with respect to atomic positions and lattices for checking
+            compile_model: If True, wrap ``model`` with ``torch.compile`` using
+                ``dynamic=True``. Off by default; opt in for inference / MD /
+                training where the ~1.6-2x reduction in per-step graph-kernel
+                overhead pays off. Compatible with training (``model.train()`` +
+                ``create_graph=True``) because we disable AOTAutograd's
+                donated-buffer optimization. Automatically falls back to eager
+                when ``calc_hessian=True`` because torch.compile cannot trace
+                double-backward.
+            compile_mode: ``mode`` argument forwarded to ``torch.compile``.
+                Defaults to ``"reduce-overhead"``.
         """
         super().__init__()
         self.save_args(locals())
-        self.model = model
+        # torch.compile cannot handle the Hessian path because AOTAutograd has no
+        # support for double-backward through compiled functions. Silently fall
+        # back to eager when the caller asks for both compile and Hessian — the
+        # Hessian path is rare and would otherwise crash deep inside the engine
+        # with "torch.compile with aot_autograd does not currently support double
+        # backward".
+        if compile_model and not calc_hessian:
+            # AOTAutograd's donated-buffer pass assumes ``create_graph=False`` and
+            # ``retain_graph=False`` on the backward call, which is incompatible
+            # with our training path (force-loss double-backward). Disable it so
+            # the compiled module survives ``model.train()`` invocations.
+            # See ``torch._functorch.config.donated_buffer`` and the error
+            # "This backward function was compiled with non-empty donated buffers".
+            import torch._functorch.config as _ftconfig
+
+            _ftconfig.donated_buffer = False
+            self.model = torch.compile(model, mode=compile_mode, dynamic=True)
+        else:
+            self.model = model
         self.calc_forces = calc_forces
         self.calc_stresses = calc_stresses
         self.calc_hessian = calc_hessian
@@ -79,7 +109,7 @@ class Potential(nn.Module, IOMixIn):
         self.calc_charge = calc_charge
 
         if calc_repuls:
-            cutoff: float = self.model.cutoff  # type: ignore[assignment]
+            cutoff: float = self.model.cutoff  # type: ignore[assignment,attr-defined]
             self.repuls = NuclearRepulsion(cutoff, trainable=zbl_trainable)
 
         if element_refs is not None:
@@ -185,7 +215,7 @@ class Potential(nn.Module, IOMixIn):
             total_energies = self.data_std * total_energies + self.data_mean
 
             if self.calc_repuls:
-                total_energies += self.repuls(self.model.element_types, g)
+                total_energies += self.repuls(self.model.element_types, g)  # type: ignore[attr-defined]
 
             if self.element_refs is not None:
                 property_offset = torch.squeeze(self.element_refs(g))
