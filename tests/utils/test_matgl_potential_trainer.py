@@ -1,10 +1,10 @@
-"""Offline tests for ``matgl.utils.training.MGLPotentialTrainer``.
+"""Offline tests for ``matgl.utils.training.MGLDatasetLoader`` and ``MGLPotentialTrainer``.
 
 The HF download is monkeypatched in every test so nothing hits the network.
 The NaCl parity payload at ``tests/parity_data/nacl_training_set.json.gz``
 shares the per-record schema of the live MatPES JSONs and covers ``{Na, Cl}``;
-the loader expects a flat list of records, so the dict-wrapped fixture is
-unwrapped to its ``samples`` array in the per-test patches.
+``MGLDatasetLoader`` expects a flat list of records, so the dict-wrapped
+fixture is unwrapped to its ``samples`` array in the per-test patches.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ if matgl.config.BACKEND != "PYG":
 from matgl.models import TensorNet
 from matgl.utils import training as training_mod
 from matgl.utils.training import (
+    MGLDatasetLoader,
     MGLPotentialTrainer,
     _matpes_atomrefs_filename,
     _matpes_dataset_filename,
@@ -107,10 +108,9 @@ def _atomrefs_record(symbol: str, energy: float) -> dict:
 class TestLoadMatpesDataset:
     def test_returns_mgl_dataset_with_plural_label_keys(self, monkeypatch, tmp_path):
         _patch_hf_dataset_download(monkeypatch, tmp_path)
-        ds = MGLPotentialTrainer.load_matpes_dataset(
+        ds = MGLDatasetLoader().matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
-            cache_dir=tmp_path,
             save_cache=False,
             root=str(tmp_path / "ds"),
             stress_unit="eV/A3",  # parity payload is already in matgl-internal units
@@ -123,18 +123,16 @@ class TestLoadMatpesDataset:
     def test_stress_unit_kbar_scales_to_ev_per_a3(self, monkeypatch, tmp_path):
         """Default ``stress_unit='kbar'`` divides by 1602.1766208 (kbar → eV/Å³)."""
         _patch_hf_dataset_download(monkeypatch, tmp_path)
-        ds_raw = MGLPotentialTrainer.load_matpes_dataset(
+        ds_raw = MGLDatasetLoader().matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
-            cache_dir=tmp_path,
             save_cache=False,
             root=str(tmp_path / "ds_raw"),
             stress_unit="eV/A3",
         )
-        ds_kbar = MGLPotentialTrainer.load_matpes_dataset(
+        ds_kbar = MGLDatasetLoader().matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
-            cache_dir=tmp_path,
             save_cache=False,  # default stress_unit="kbar"
             root=str(tmp_path / "ds_kbar"),
         )
@@ -144,18 +142,16 @@ class TestLoadMatpesDataset:
 
     def test_stress_unit_gpa_scales_correctly(self, monkeypatch, tmp_path):
         _patch_hf_dataset_download(monkeypatch, tmp_path)
-        ds_raw = MGLPotentialTrainer.load_matpes_dataset(
+        ds_raw = MGLDatasetLoader().matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
-            cache_dir=tmp_path,
             save_cache=False,
             root=str(tmp_path / "ds_raw"),
             stress_unit="eV/A3",
         )
-        ds_gpa = MGLPotentialTrainer.load_matpes_dataset(
+        ds_gpa = MGLDatasetLoader().matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
-            cache_dir=tmp_path,
             save_cache=False,
             root=str(tmp_path / "ds_gpa"),
             stress_unit="GPa",
@@ -168,10 +164,9 @@ class TestLoadMatpesDataset:
         """An unknown ``stress_unit`` is rejected by the conversion-factor lookup."""
         _patch_hf_dataset_download(monkeypatch, tmp_path)
         with pytest.raises(KeyError):
-            MGLPotentialTrainer.load_matpes_dataset(
+            MGLDatasetLoader().matpes_dataset(
                 version="r2SCAN-2025.2",
                 cutoff=4.0,
-                cache_dir=tmp_path,
                 save_cache=False,
                 stress_unit="bogus",  # type: ignore[arg-type]
             )
@@ -193,10 +188,9 @@ class TestLoadMatpesDataset:
 
         monkeypatch.setattr(training_mod, "hf_hub_download", fail_if_called)
 
-        ds = MGLPotentialTrainer.load_matpes_dataset(
+        ds = MGLDatasetLoader().matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
-            cache_dir=tmp_path,
             save_cache=False,
             root=str(tmp_path / "ds"),
             stress_unit="eV/A3",
@@ -218,10 +212,9 @@ class TestLoadMatpesDataset:
 
         monkeypatch.setattr(training_mod, "hf_hub_download", fake_download)
 
-        ds = MGLPotentialTrainer.load_matpes_dataset(
+        ds = MGLDatasetLoader().matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
-            cache_dir=tmp_path,
             save_cache=False,
             root=str(tmp_path / "ds"),
             stress_unit="eV/A3",
@@ -244,23 +237,23 @@ class TestLoadMatpesElementRefs:
 
     def test_reorders_to_caller_element_types(self, monkeypatch, tmp_path):
         _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._payload())
-        refs = MGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=("Cl", "Na"))
+        refs = MGLDatasetLoader().matpes_element_refs(version="r2SCAN-2025.2", element_types=("Cl", "Na"))
         np.testing.assert_allclose(refs, [-2.0, -1.0])
 
     def test_subset_returns_only_requested_elements(self, monkeypatch, tmp_path):
         _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._payload())
-        refs = MGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=("Na",))
+        refs = MGLDatasetLoader().matpes_element_refs(version="r2SCAN-2025.2", element_types=("Na",))
         np.testing.assert_allclose(refs, [-1.0])
 
     def test_missing_element_raises_keyerror(self, monkeypatch, tmp_path):
         _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._payload())
         with pytest.raises(KeyError):
-            MGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=("Li", "Cl"))
+            MGLDatasetLoader().matpes_element_refs(version="r2SCAN-2025.2", element_types=("Li", "Cl"))
 
     def test_empty_element_types_returns_empty_array(self, monkeypatch, tmp_path):
         """``element_types`` defaults to ``()``; the loader returns a length-0 vector."""
         _patch_hf_atomrefs_download(monkeypatch, tmp_path, self._payload())
-        refs = MGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2")
+        refs = MGLDatasetLoader().matpes_element_refs(version="r2SCAN-2025.2")
         assert refs.shape == (0,)
 
 
@@ -353,15 +346,14 @@ class TestFit:
         atomrefs_path.write_text(json.dumps([_atomrefs_record("Na", 0.0), _atomrefs_record("Cl", 0.0)]))
         self._make_smart_hub(monkeypatch, flat, atomrefs_path)
 
-        ds = MGLPotentialTrainer.load_matpes_dataset(
+        ds = MGLDatasetLoader().matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
-            cache_dir=tmp_path,
             save_cache=False,
             root=str(tmp_path / "ds"),
             stress_unit="eV/A3",
         )
-        refs = MGLPotentialTrainer.load_matpes_element_refs(version="r2SCAN-2025.2", element_types=ds.element_types)
+        refs = MGLDatasetLoader().matpes_element_refs(version="r2SCAN-2025.2", element_types=ds.element_types)
 
         model = self._make_model(ds.element_types)
         trainer = self._trainer(model)
@@ -381,10 +373,9 @@ class TestFit:
     def test_fit_atomrefs_none(self, monkeypatch, tmp_path):
         """``atomrefs=None`` disables offsets entirely."""
         _patch_hf_dataset_download(monkeypatch, tmp_path)
-        ds = MGLPotentialTrainer.load_matpes_dataset(
+        ds = MGLDatasetLoader().matpes_dataset(
             version="r2SCAN-2025.2",
             cutoff=4.0,
-            cache_dir=tmp_path,
             save_cache=False,
             root=str(tmp_path / "ds"),
             stress_unit="eV/A3",
@@ -410,7 +401,7 @@ def test_matpes_payload_is_loadable_without_gzip_suffix(tmp_path, monkeypatch):
 
     monkeypatch.setattr(training_mod, "hf_hub_download", lambda **_: str(plain))
     monkeypatch.setattr(training_mod, "try_to_load_from_cache", lambda **_: None)
-    ds = MGLPotentialTrainer.load_matpes_dataset(
+    ds = MGLDatasetLoader().matpes_dataset(
         version="r2SCAN-2025.2", cutoff=4.0, save_cache=False, root=str(tmp_path / "ds")
     )
     assert set(ds.labels.keys()) == {"energies", "forces", "stresses"}

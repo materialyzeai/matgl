@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import math
 import re
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import lightning as pl
@@ -33,6 +32,7 @@ else:
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
+    from pathlib import Path
 
     from numpy.typing import ArrayLike
     from torch.optim import Optimizer
@@ -797,7 +797,7 @@ def xavier_init(model: nn.Module, gain: float = 1.0, distribution: Literal["unif
 
 
 # ---------------------------------------------------------------------------
-# MGLPotentialTrainer — high-level "configure once, fit when asked" wrapper.
+# MGLDatasetLoader / MGLPotentialTrainer — dataset factory + training wrapper.
 # ---------------------------------------------------------------------------
 
 HF_MATPES_REPO_ID = "materialyze/matpes"
@@ -978,41 +978,164 @@ def _read_matpes_dataset_local(
     )
 
 
+class MGLDatasetLoader:
+    """Factory for building :class:`MGLDataset` objects from external sources.
+
+    Hoists the HF Hub auth / cache configuration to one place so successive
+    downloads (e.g. dataset + atomrefs) can share it without repeating
+    ``repo_id`` / ``revision`` / ``token`` / ``cache_dir`` per call::
+
+        loader = MGLDatasetLoader()  # defaults to ``materialyze/matpes``
+        ds = loader.matpes_dataset(version="r2SCAN-2025.2")
+        refs = loader.matpes_element_refs(
+            version="r2SCAN-2025.2", element_types=ds.element_types
+        )
+
+    Override the HF source for staging or forks::
+
+        loader = MGLDatasetLoader(
+            repo_id="my-org/matpes-fork", token="hf_...", revision="dev"
+        )
+
+    This class only constructs datasets; training itself is handled by
+    :class:`MGLPotentialTrainer`.
+    """
+
+    def __init__(
+        self,
+        *,
+        repo_id: str = HF_MATPES_REPO_ID,
+        revision: str | None = None,
+        token: str | None = None,
+        cache_dir: str | Path | None = None,
+    ) -> None:
+        """Initialise the loader with shared HF Hub config.
+
+        Args:
+            repo_id: Default HF Hub dataset repo id used by the ``matpes_*``
+                helpers. Override per-call by passing ``repo_id=...``.
+            revision: Optional branch / tag / commit forwarded to
+                ``hf_hub_download``.
+            token: Optional HF auth token for private repos.
+            cache_dir: HF Hub download cache directory; defaults to
+                ``MATGL_CACHE``.
+        """
+        self.repo_id = repo_id
+        self.revision = revision
+        self.token = token
+        self.cache_dir = cache_dir
+
+    def matpes_dataset(
+        self,
+        version: str = "r2SCAN-2025.2",
+        *,
+        cutoff: float = 5.0,
+        element_types: tuple[str, ...] | None = None,
+        repo_id: str | None = None,
+        save_cache: bool = True,
+        root: str | None = None,
+        stress_unit: StressUnit = "kbar",
+    ) -> MGLDataset:
+        """Download a MatPES JSON file from HF and build an ``MGLDataset``.
+
+        Args:
+            version: MatPES version, e.g. ``"r2SCAN-2025.2"`` (case-insensitive).
+            cutoff: Neighbour cutoff (Å) handed to ``Structure2Graph``.
+            element_types: Optional explicit ordering; auto-derived when None.
+            repo_id: Per-call override of the loader's default ``repo_id``.
+            save_cache: Whether ``MGLDataset`` persists its processed cache.
+            root: ``MGLDataset`` root directory; default lets it pick.
+            stress_unit: Unit of the on-disk ``stress`` field. Defaults to
+                ``"kbar"`` (raw VASP convention used by MatPES JSONs); values
+                are converted to eV/Å³ — matgl's internal unit for ``Potential``
+                outputs and training labels. Pass ``"eV/A3"`` to skip the
+                conversion or ``"GPa"`` for GPa inputs. **Magnitude only — no
+                sign flip is applied; verify the sign convention matches your
+                ``Potential`` if you've customised the pipeline.**
+
+        Returns:
+            An ``MGLDataset`` ready to drop into ``MGLDataLoader``. The
+            monolithic files are 1.6-2.4 GB.
+        """
+        filename = _matpes_dataset_filename(version)
+        local_path = _hf_download_cached_first(
+            repo_id=repo_id or self.repo_id,
+            filename=filename,
+            repo_type="dataset",
+            revision=self.revision,
+            token=self.token,
+            cache_dir=self.cache_dir,
+        )
+        return _read_matpes_dataset_local(
+            local_path,
+            cutoff=cutoff,
+            element_types=element_types,
+            save_cache=save_cache,
+            root=root,
+            stress_unit=stress_unit,
+        )
+
+    def matpes_element_refs(
+        self,
+        version: str = "r2SCAN-2025.2",
+        *,
+        repo_id: str | None = None,
+        element_types: tuple[str, ...] = (),
+    ) -> np.ndarray:
+        """Download per-element energy offsets shipped alongside MatPES.
+
+        File schema: a flat list of ``{"chemsys": <symbol>, "energy": <eV>}``
+        records (one per element). When ``element_types`` is supplied the
+        returned vector is reordered so ``refs[i]`` is the offset for
+        ``element_types[i]``; the default empty tuple returns a length-0 array.
+
+        Args:
+            version: MatPES version, e.g. ``"r2SCAN-2025.2"``.
+            repo_id: Per-call override of the loader's default ``repo_id``.
+            element_types: Element ordering for the returned vector. The
+                output is ``np.asarray([refs[sym] for sym in element_types])``;
+                pass ``model.element_types`` to align with a downstream
+                ``Potential``.
+
+        Returns:
+            ``np.ndarray`` of shape ``(len(element_types),)``, dtype
+            ``float64``, with offsets in the supplied element order.
+        """
+        filename = _matpes_atomrefs_filename(version)
+        local_path = _hf_download_cached_first(
+            repo_id=repo_id or self.repo_id,
+            filename=filename,
+            repo_type="dataset",
+            revision=self.revision,
+            token=self.token,
+            cache_dir=self.cache_dir,
+        )
+        payload = loadfn(str(local_path))
+        refs = {d["chemsys"]: d["energy"] for d in payload}
+        return np.asarray([refs[sym] for sym in element_types], dtype="float64")
+
+
 class MGLPotentialTrainer:
-    r"""Configure-once / fit-when-asked trainer for matgl ``Potential`` training.
+    """Configure-once / fit-when-asked trainer for matgl ``Potential`` training.
 
     ``__init__`` stores hyperparameters but does not download data, build a
     dataset, or instantiate Lightning. The first network / disk activity
     happens inside :meth:`fit`.
 
-    Dataset construction is delegated to :class:`staticmethod`\ helpers that
-    callers can invoke independently of the trainer:
+    Dataset construction is delegated to :class:`MGLDatasetLoader`, which
+    holds the HF Hub auth / cache configuration. A typical end-to-end MatPES
+    call::
 
-    - :meth:`load_matpes_dataset` / :meth:`load_matpes_splits` /
-      :meth:`load_matpes_element_refs` for the ``materialyze/matpes`` HF repo.
-
-    A typical end-to-end MatPES call:
-
-    >>> ds = MGLPotentialTrainer.load_matpes_dataset(version="r2SCAN-2025.2", split="train")
-    >>> refs = MGLPotentialTrainer.load_matpes_element_refs(
-    ...     version="r2SCAN-2025.2", element_types=ds.element_types
-    ... )
-    >>> trainer = MGLPotentialTrainer(model, accelerator="gpu")
-    >>> potential = trainer.fit(dataset=ds, atomrefs=refs)
-    >>> trainer.save("./MatPES-TensorNet")
-
-    For an extxyz dataset (e.g. ``materialyze/mlip-lr-benchmarks``
-    ``cp_dimer.tar.gz``) just swap the loader; cluster / dimer files have
-    no stress, so ``stress_weight`` is auto-disabled with a warning:
-
-    >>> ds = MGLPotentialTrainer.load_extxyz_dataset(
-    ...     repo_id="materialyze/mlip-lr-benchmarks", filename="cp_dimer.tar.gz"
-    ... )
-    >>> trainer.fit(dataset=ds)
+        loader = MGLDatasetLoader()
+        ds = loader.matpes_dataset(version="r2SCAN-2025.2")
+        refs = loader.matpes_element_refs(
+            version="r2SCAN-2025.2", element_types=ds.element_types
+        )
+        trainer = MGLPotentialTrainer(model, accelerator="gpu")
+        potential = trainer.fit(dataset=ds, atomrefs=refs, save_path="./MatPES-TensorNet")
 
     The trainer is PyG-only; DGL is being deprecated. The class itself
-    imports cleanly under DGL but its loader methods and ``fit`` raise
-    informatively when called.
+    imports cleanly under DGL but ``fit`` raises informatively when called.
     """
 
     def __init__(
@@ -1102,123 +1225,6 @@ class MGLPotentialTrainer:
         self.potential: Potential | None = None
         self.atomrefs: np.ndarray | None = None
 
-    # ------------------------------------------------------------------
-    # MatPES dataset loaders (HF: materialyze/matpes).
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def load_matpes_dataset(
-        version: str = "r2SCAN-2025.2",
-        *,
-        cutoff: float = 5.0,
-        element_types: tuple[str, ...] | None = None,
-        repo_id: str = HF_MATPES_REPO_ID,
-        revision: str | None = None,
-        token: str | None = None,
-        cache_dir: str | Path | None = None,
-        save_cache: bool = True,
-        root: str | None = None,
-        stress_unit: StressUnit = "kbar",
-    ) -> MGLDataset:
-        """Download a MatPES JSON file from HF and build an ``MGLDataset``.
-
-        Args:
-            version: MatPES version, e.g. ``"r2SCAN-2025.2"`` (case-insensitive).
-            cutoff: Neighbour cutoff (Å) handed to ``Structure2Graph``.
-            element_types: Optional explicit ordering; auto-derived when None.
-            repo_id: HF Hub repo id; override only for staging or forks.
-            revision: Optional branch / tag / commit for ``hf_hub_download``.
-            token: Optional HF auth token.
-            cache_dir: HF Hub download cache dir; defaults to ``MATGL_CACHE``.
-            save_cache: Whether ``MGLDataset`` persists its processed cache.
-            root: ``MGLDataset`` root directory; default lets it pick.
-            stress_unit: Unit of the on-disk ``stress`` field. Defaults to
-                ``"kbar"`` (raw VASP convention used by MatPES JSONs); values
-                are converted to eV/Å³ — matgl's internal unit for ``Potential``
-                outputs and training labels. Pass ``"eV/A3"`` to skip the
-                conversion or ``"GPa"`` for GPa inputs. **Magnitude only — no
-                sign flip is applied; verify the sign convention matches your
-                ``Potential`` if you've customised the pipeline.**
-
-        Returns:
-            An ``MGLDataset`` ready to drop into ``MGLDataLoader``. The
-            monolithic files are 1.6-2.4 GB; for memory-constrained
-            environments use ``split="train"`` / ``"test"`` / ``"valid"``.
-        """
-        filename = _matpes_dataset_filename(version)
-        local_path = _hf_download_cached_first(
-            repo_id=repo_id,
-            filename=filename,
-            repo_type="dataset",
-            revision=revision,
-            token=token,
-            cache_dir=cache_dir,
-        )
-        return _read_matpes_dataset_local(
-            local_path,
-            cutoff=cutoff,
-            element_types=element_types,
-            save_cache=save_cache,
-            root=root,
-            stress_unit=stress_unit,
-        )
-
-    @staticmethod
-    def load_matpes_element_refs(
-        version: str = "r2SCAN-2025.2",
-        *,
-        repo_id: str = HF_MATPES_REPO_ID,
-        revision: str | None = None,
-        token: str | None = None,
-        cache_dir: str | Path | None = None,
-        element_types: tuple[str, ...] = (),
-    ) -> np.ndarray:
-        """Download per-element energy offsets shipped alongside MatPES.
-
-        File schema: ``{"element_types": [...], "refs": [...]}``. When
-        ``element_types`` is supplied, the returned vector is reordered so
-        ``refs[i]`` is the offset for ``element_types[i]``.
-        """
-        filename = _matpes_atomrefs_filename(version)
-        local_path = _hf_download_cached_first(
-            repo_id=repo_id,
-            filename=filename,
-            repo_type="dataset",
-            revision=revision,
-            token=token,
-            cache_dir=cache_dir,
-        )
-        payload = loadfn(str(local_path))
-        refs = {d["chemsys"]: d["energy"] for d in payload}
-        return np.asarray([refs[sym] for sym in element_types], dtype="float64")
-
-    @staticmethod
-    def _resolve_local_path(
-        path: str | Path | None,
-        *,
-        repo_id: str | None,
-        filename: str | None,
-        revision: str | None,
-        token: str | None,
-        cache_dir: str | Path | None,
-    ) -> Path:
-        """Resolve the user-supplied source to a concrete local path."""
-        if path is not None and (repo_id is not None or filename is not None):
-            raise ValueError("Pass either 'path' (local) or 'repo_id'+'filename' (HF), not both.")
-        if path is not None:
-            return Path(path)
-        if repo_id is None or filename is None:
-            raise ValueError("Provide 'path', or both 'repo_id' and 'filename' for HF download.")
-        return Path(
-            hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                revision=revision,
-                token=token,
-                cache_dir=_resolve_cache_dir(cache_dir),
-            )
-        )
-
     def _build_dataloaders(
         self,
         dataset: MGLDataset | Mapping[str, MGLDataset],
@@ -1277,16 +1283,15 @@ class MGLPotentialTrainer:
         Args:
             dataset: An :class:`MGLDataset` (random split inside
                 :meth:`_build_dataloaders`) or a canonical-splits mapping with
-                keys ``"train"`` / ``"valid"`` / ``"test"``. Use the static
-                helpers :meth:`load_matpes_dataset` / :meth:`load_matpes_splits` /
-                :meth:`load_extxyz_dataset` / :meth:`load_extxyz_splits` to
-                build one.
+                keys ``"train"`` / ``"valid"`` / ``"test"``. Use
+                :class:`MGLDatasetLoader` (e.g.
+                ``MGLDatasetLoader().matpes_dataset(...)``) to build one.
             atomrefs: Optional per-element energy offsets. Either an
                 ``np.ndarray`` (in ``model.element_types`` order), an
                 :class:`AtomRef` instance (the layer's ``property_offset`` is
                 extracted), or ``None`` (no offsets, default). Use
-                :meth:`load_matpes_element_refs` (download from HF) or
-                :func:`fit_element_refs` (fit locally) to obtain one.
+                ``MGLDatasetLoader().matpes_element_refs(...)`` (download from
+                HF) or :func:`fit_element_refs` (fit locally) to obtain one.
             save_path: If given, ``potential.save(save_path)`` after training.
 
         Returns:
