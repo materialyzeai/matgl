@@ -80,6 +80,19 @@ class SphericalBesselFunction(nn.Module):
             self.funcs = self._calculate_smooth_symbolic_funcs()
         else:
             self.funcs = self._calculate_symbolic_funcs()
+            # Pre-compute non-smooth basis constants once. ``roots_slice`` holds
+            # the Bessel zeros used in ``_call_sbf``; ``inv_norm`` collapses the
+            # ``sqrt(2/c^3) / |j_{l+1}(root)|`` per-edge normalisation into a
+            # single broadcastable tensor of shape (max_l, max_n). Storing them
+            # as non-persistent buffers means they ride along on ``.to(device)``
+            # but never touch the saved ``state_dict`` (preserves checkpoint
+            # compatibility).
+            roots_slice = SPHERICAL_BESSEL_ROOTS[:max_l, :max_n].clone()
+            factor = sqrt(2.0 / float(cutoff) ** 3)
+            inv_norm_rows = [factor / torch.abs(self.funcs[i + 1](roots_slice[i])) for i in range(max_l)]
+            inv_norm = torch.stack(inv_norm_rows, dim=0)
+            self.register_buffer("roots_slice", roots_slice, persistent=False)
+            self.register_buffer("inv_norm", inv_norm, persistent=False)
 
     @lru_cache(maxsize=128)
     def _calculate_symbolic_funcs(self) -> list:
@@ -114,22 +127,17 @@ class SphericalBesselFunction(nn.Module):
         return torch.t(torch.stack(results))
 
     def _call_sbf(self, r):
-        r_c = r.clone()
-        r_c[r_c > self.cutoff] = self.cutoff
-        roots = SPHERICAL_BESSEL_ROOTS[: self.max_l, : self.max_n]
-        roots = roots.to(r.device)
-
+        # ``r`` is per-edge distance. The non-smooth spherical Bessel basis is
+        # j_l(root_{l,n} * r / cutoff) * sqrt(2/cutoff^3) / |j_{l+1}(root_{l,n})|
+        # for l in [0, max_l) and n in [0, max_n). All ``l``-independent
+        # constants are precomputed and stored as buffers in ``__init__``; the
+        # remaining work per call is one Bessel-function evaluation per ``l``.
+        scaled = r.clamp(max=self.cutoff).unsqueeze(-1) / self.cutoff  # (N, 1)
         results = []
-        factor = torch.tensor(sqrt(2.0 / self.cutoff**3))
-        factor = factor.to(r_c.device)
         for i in range(self.max_l):
-            root = roots[i].clone()
-            func = self.funcs[i]
-            func_add1 = self.funcs[i + 1]
-            results.append(
-                func(r_c[:, None] * root[None, :] / self.cutoff) * factor / torch.abs(func_add1(root[None, :]))
-            )
-        return torch.cat(results, axis=1)
+            x = scaled * self.roots_slice[i]  # (N, max_n)
+            results.append(self.funcs[i](x) * self.inv_norm[i])
+        return torch.cat(results, dim=1)
 
     @staticmethod
     def rbf_j0(r, cutoff: float = 5.0, max_n: int = 3):
