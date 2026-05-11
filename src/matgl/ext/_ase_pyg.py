@@ -218,8 +218,8 @@ class PESCalculator(Calculator):
                 "stress_weight to 1.0."
             )
         self.state_attr = state_attr
-        self.element_types: tuple[str, ...] = potential.model.element_types  # type: ignore[assignment,union-attr]
-        self.cutoff: float = potential.model.cutoff  # type: ignore[assignment,union-attr]
+        self.element_types: tuple[str, ...] = potential.model.element_types  # type: ignore[assignment,union-attr,attr-defined]
+        self.cutoff: float = potential.model.cutoff  # type: ignore[assignment,union-attr,attr-defined]
         self.use_voigt = use_voigt
         self._atoms2graph = Atoms2Graph(self.element_types, self.cutoff)
 
