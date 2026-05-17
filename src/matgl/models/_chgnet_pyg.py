@@ -347,7 +347,7 @@ class CHGNet(MatGLModel):
         if self.use_bond_graph:
             pbc_offset = getattr(g, "pbc_offset", torch.zeros(edge_index.size(1), 3, device=pos.device))
             with torch.no_grad():
-                (lg_edge_index, lg_bond_vec, lg_bond_dist, lg_pbc_offset, lg_src_bond_sign) = (
+                (lg_edge_index, lg_bond_vec, lg_bond_dist, _lg_pbc_offset, lg_src_bond_sign) = (
                     create_directed_line_graph_pyg(edge_index, pbc_offset, bond_vec, bond_dist, self.three_body_cutoff)
                 )
 

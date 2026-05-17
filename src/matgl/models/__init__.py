@@ -44,4 +44,4 @@ __all__ = [
 if BACKEND == "DGL":
     __all__ += ["CHGNet", "SO3Net"]
 else:
-    __all__ += ["CHGNet", "GRACE"]
+    __all__ += ["GRACE", "CHGNet"]
