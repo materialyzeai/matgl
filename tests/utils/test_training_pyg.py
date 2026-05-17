@@ -10,12 +10,11 @@ from functools import partial
 
 # This function is used for M3GNet property dataset
 import lightning as pl
+import matgl
 import numpy as np
 import pytest
 import torch.backends.mps
 from pymatgen.core import Lattice, Structure
-
-import matgl
 
 if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)

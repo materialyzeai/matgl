@@ -32,6 +32,8 @@ venv
 
 experimental/
 scripts/CHGNet-PyG-*/
+scripts/transfer_chgnet_dgl_to_pyg.py
+scripts/compare_relaxation_dgl_pyg.py
 wandb/
 dgl_keys.txt
 pyg_keys.txt

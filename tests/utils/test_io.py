@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
-
 from matgl.utils import io as matgl_io
 from matgl.utils.io import IOMixIn, get_available_pretrained_models, load_model
 

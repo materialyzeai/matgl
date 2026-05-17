@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import pytest
-
 import matgl
+import pytest
 
 if matgl.config.BACKEND != "DGL":
     pytest.skip("Skipping DGL tests", allow_module_level=True)
 import torch
-from torch import nn
-
 from matgl.graph._compute_dgl import (
     compute_theta_and_phi,
     create_line_graph,
@@ -19,6 +16,7 @@ from matgl.layers._core import MLP, GatedMLP
 from matgl.layers._embedding_dgl import EmbeddingBlock
 from matgl.layers._three_body import ThreeBodyInteractions
 from matgl.utils.cutoff import polynomial_cutoff
+from torch import nn
 
 
 def test_three_body_interactions(graph_MoS):

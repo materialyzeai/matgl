@@ -352,7 +352,6 @@ def create_directed_line_graph_pyg(
     edge_ids = valid.nonzero(as_tuple=False).squeeze(1)  # global ids of valid bonds
 
     if edge_ids.numel() == 0:
-        empty = torch.zeros(0, dtype=matgl.int_th, device=device)
         return (
             torch.zeros((2, 0), dtype=matgl.int_th, device=device),
             bond_vec.new_zeros((0, 3)),
@@ -378,35 +377,35 @@ def create_directed_line_graph_pyg(
     is_self_edge = v_src == v_dst
 
     # Vectorized Line Graph Edge Construction
-    
+
     # Calculate connections using dense matrices over the reduced (valid) edges
     v_src_j = v_src.unsqueeze(0)  # shape (1, V)
     v_dst_j = v_dst.unsqueeze(0)  # shape (1, V)
-    v_images_j = v_images.unsqueeze(0) # shape (1, V, 3)
+    v_images_j = v_images.unsqueeze(0)  # shape (1, V, 3)
 
     v_src_i = v_src.unsqueeze(1)  # shape (V, 1)
     v_dst_i = v_dst.unsqueeze(1)  # shape (V, 1)
-    v_images_i = v_images.unsqueeze(1) # shape (V, 1, 3)
+    v_images_i = v_images.unsqueeze(1)  # shape (V, 1, 3)
 
     # shared_src: src[i] == src[j]
-    shared_src = (v_src_i == v_src_j)
-    
+    shared_src = v_src_i == v_src_j
+
     # incoming_to_ca: dst[i] == src[j]
-    incoming_to_ca = (v_dst_i == v_src_j)
-    
+    incoming_to_ca = v_dst_i == v_src_j
+
     # Backtracking: incoming & src[i] == dst[j] & images[i] == -images[j]
     is_backtrack = incoming_to_ca & (v_src_i == v_dst_j) & torch.all(-v_images_i == v_images_j, dim=2)
-    
+
     # Base inclusion for non-self edges (matches DGL logic: incoming & (shared_src | ~backtracking))
     include_mask = incoming_to_ca & (shared_src | ~is_backtrack)
-    
-    # For self-edges (is_self_edge[j]), we ONLY include incoming_to_ca (we don't include shared_src, no backtrack checks)
+
+    # For self-edges (is_self_edge[j]), only include incoming_to_ca (no shared_src, no backtrack checks)
     self_edges_j = is_self_edge.unsqueeze(0)  # (1, V)
     include_mask = torch.where(self_edges_j, incoming_to_ca, include_mask)
 
     # Exclude i == j
     include_mask.fill_diagonal_(False)
-    
+
     # Get the indices of the connected line graph nodes
     lg_src, lg_dst = include_mask.nonzero(as_tuple=True)
     lg_edge_index = torch.stack([lg_src, lg_dst], dim=0)
@@ -418,7 +417,7 @@ def create_directed_line_graph_pyg(
 
     # Sign correction: non-self edges get sign = -1 (bond vector points away from central atom)
     lg_src_bond_sign = torch.ones((num_lg_nodes, 1), dtype=bond_vec.dtype, device=device)
-    
+
     # Find local ids of non-self edges
     not_self_edge = ~is_self_edge
     ns_local_ids = local_ids[not_self_edge]
@@ -455,9 +454,7 @@ def compute_theta_pyg(
     """
     vec1 = bond_vec[lg_src] * src_bond_sign[lg_src] if directed else bond_vec[lg_src]
     vec2 = bond_vec[lg_dst]
-    cos_theta = (vec1 * vec2).sum(dim=1) / (
-        torch.norm(vec1, dim=1) * torch.norm(vec2, dim=1)
-    ).clamp(min=eps)
+    cos_theta = (vec1 * vec2).sum(dim=1) / (torch.norm(vec1, dim=1) * torch.norm(vec2, dim=1)).clamp(min=eps)
     return cos_theta.clamp(-1 + eps, 1 - eps)
 
 

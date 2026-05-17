@@ -25,13 +25,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import matgl
 import numpy as np
+from matgl.ext.ase import PESCalculator
 from monty.serialization import dumpfn
 from pymatgen.core import Lattice, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
-
-import matgl
-from matgl.ext.ase import PESCalculator
 
 LABELLER_NAME = "TensorNet-PES-MatPES-r2SCAN-2025.2"
 

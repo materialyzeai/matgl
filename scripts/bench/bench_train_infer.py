@@ -31,12 +31,11 @@ from typing import TYPE_CHECKING, Any
 # Has to be set before importing torch / cuBLAS-using libs.
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
+import matgl
 import numpy as np
 import torch
 from pymatgen.core import Lattice, Structure
 from torch import nn
-
-import matgl
 
 assert matgl.config.BACKEND == "PYG", (
     "This benchmark requires the PYG backend (GRACE is PYG-only). Unset MATGL_BACKEND or set it to PYG."

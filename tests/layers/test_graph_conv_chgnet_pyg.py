@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+import matgl
 import pytest
 import torch
 from torch import nn
-
-import matgl
 
 if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)
@@ -24,7 +23,6 @@ from matgl.layers._graph_convolution_pyg import (
     _MLPNorm,
 )
 from matgl.utils.maths import scatter_add
-
 
 # ---------------------------------------------------------------------------
 # Helper: minimal asymmetric toy graph (3 atoms, directed edges)
@@ -119,9 +117,14 @@ class TestCHGNetGraphConv:
             node_dims=[2 * DIM + DIM, DIM, DIM],
         )
         new_atom, new_bond, new_state = conv(
-            edge_index, atom_feat, bond_feat, bond_expansion,
-            state_attr=None, batch=None,
-            shared_node_weights=None, shared_edge_weights=None,
+            edge_index,
+            atom_feat,
+            bond_feat,
+            bond_expansion,
+            state_attr=None,
+            batch=None,
+            shared_node_weights=None,
+            shared_edge_weights=None,
         )
         assert new_atom.shape == atom_feat.shape
         assert new_bond.shape == bond_feat.shape
@@ -135,8 +138,14 @@ class TestCHGNetGraphConv:
             edge_dims=[2 * DIM + DIM, DIM, DIM],
         )
         new_atom, new_bond, _ = conv(
-            edge_index, atom_feat, bond_feat, bond_expansion,
-            None, None, None, None,
+            edge_index,
+            atom_feat,
+            bond_feat,
+            bond_expansion,
+            None,
+            None,
+            None,
+            None,
         )
         assert new_atom.shape == atom_feat.shape
         assert new_bond.shape == bond_feat.shape
@@ -164,8 +173,14 @@ class TestCHGNetGraphConv:
             node_dims=[2 * DIM + DIM, DIM, DIM],
         )
         new_atom, new_bond, _ = conv(
-            edge_index, atom_feat, bond_feat, bond_expansion,
-            None, None, None, None,
+            edge_index,
+            atom_feat,
+            bond_feat,
+            bond_expansion,
+            None,
+            None,
+            None,
+            None,
         )
         assert torch.isfinite(new_atom).all()
         assert torch.isfinite(new_bond).all()
@@ -179,8 +194,14 @@ class TestCHGNetGraphConv:
         )
         shared = torch.randn(NUM_BONDS, DIM)
         new_atom, _, _ = conv(
-            edge_index, atom_feat, bond_feat, bond_expansion,
-            None, None, shared, None,
+            edge_index,
+            atom_feat,
+            bond_feat,
+            bond_expansion,
+            None,
+            None,
+            shared,
+            None,
         )
         assert new_atom.shape == atom_feat.shape
 
@@ -192,8 +213,14 @@ class TestCHGNetGraphConv:
         )
         batch = torch.zeros(NUM_ATOMS, dtype=torch.long)
         new_atom, new_bond, _ = conv(
-            edge_index, atom_feat, bond_feat, bond_expansion,
-            None, batch, None, None,
+            edge_index,
+            atom_feat,
+            bond_feat,
+            bond_expansion,
+            None,
+            batch,
+            None,
+            None,
         )
         assert new_atom.shape == atom_feat.shape
 
@@ -207,12 +234,21 @@ class TestCHGNetAtomGraphBlock:
     def test_forward_no_bond_update(self, toy_graph):
         edge_index, atom_feat, bond_feat, bond_expansion = toy_graph
         block = CHGNetAtomGraphBlock(
-            num_atom_feats=DIM, num_bond_feats=DIM, activation=nn.SiLU(),
-            atom_hidden_dims=[DIM], bond_hidden_dims=None,
+            num_atom_feats=DIM,
+            num_bond_feats=DIM,
+            activation=nn.SiLU(),
+            atom_hidden_dims=[DIM],
+            bond_hidden_dims=None,
         )
         new_atom, new_bond, _ = block(
-            edge_index, atom_feat, bond_feat, bond_expansion,
-            None, None, None, None,
+            edge_index,
+            atom_feat,
+            bond_feat,
+            bond_expansion,
+            None,
+            None,
+            None,
+            None,
         )
         assert new_atom.shape == atom_feat.shape
         assert new_bond.shape == bond_feat.shape
@@ -220,12 +256,21 @@ class TestCHGNetAtomGraphBlock:
     def test_forward_with_bond_update(self, toy_graph):
         edge_index, atom_feat, bond_feat, bond_expansion = toy_graph
         block = CHGNetAtomGraphBlock(
-            num_atom_feats=DIM, num_bond_feats=DIM, activation=nn.SiLU(),
-            atom_hidden_dims=[DIM], bond_hidden_dims=[DIM],
+            num_atom_feats=DIM,
+            num_bond_feats=DIM,
+            activation=nn.SiLU(),
+            atom_hidden_dims=[DIM],
+            bond_hidden_dims=[DIM],
         )
         new_atom, new_bond, _ = block(
-            edge_index, atom_feat, bond_feat, bond_expansion,
-            None, None, None, None,
+            edge_index,
+            atom_feat,
+            bond_feat,
+            bond_expansion,
+            None,
+            None,
+            None,
+            None,
         )
         assert new_atom.shape == atom_feat.shape
         assert new_bond.shape == bond_feat.shape
@@ -233,25 +278,43 @@ class TestCHGNetAtomGraphBlock:
     def test_forward_with_layer_norm(self, toy_graph):
         edge_index, atom_feat, bond_feat, bond_expansion = toy_graph
         block = CHGNetAtomGraphBlock(
-            num_atom_feats=DIM, num_bond_feats=DIM, activation=nn.SiLU(),
-            atom_hidden_dims=[DIM], normalization="layer",
+            num_atom_feats=DIM,
+            num_bond_feats=DIM,
+            activation=nn.SiLU(),
+            atom_hidden_dims=[DIM],
+            normalization="layer",
         )
         new_atom, new_bond, _ = block(
-            edge_index, atom_feat, bond_feat, bond_expansion,
-            None, None, None, None,
+            edge_index,
+            atom_feat,
+            bond_feat,
+            bond_expansion,
+            None,
+            None,
+            None,
+            None,
         )
         assert torch.isfinite(new_atom).all()
 
     def test_forward_with_dropout(self, toy_graph):
         edge_index, atom_feat, bond_feat, bond_expansion = toy_graph
         block = CHGNetAtomGraphBlock(
-            num_atom_feats=DIM, num_bond_feats=DIM, activation=nn.SiLU(),
-            atom_hidden_dims=[DIM], dropout=0.5,
+            num_atom_feats=DIM,
+            num_bond_feats=DIM,
+            activation=nn.SiLU(),
+            atom_hidden_dims=[DIM],
+            dropout=0.5,
         )
         block.train()
         new_atom, _, _ = block(
-            edge_index, atom_feat, bond_feat, bond_expansion,
-            None, None, None, None,
+            edge_index,
+            atom_feat,
+            bond_feat,
+            bond_expansion,
+            None,
+            None,
+            None,
+            None,
         )
         assert new_atom.shape == atom_feat.shape
 
@@ -298,11 +361,10 @@ class TestLineGraphConstruction:
             edge_index, pbc_offset, bond_vec, bond_dist, threebody_cutoff=3.0
         )
         if lg_ei.size(1) > 0:
-            cos_theta = compute_theta_pyg(
-                lg_bvec, lg_sign, lg_ei[0].long(), lg_ei[1].long(), directed=True
-            )
+            cos_theta = compute_theta_pyg(lg_bvec, lg_sign, lg_ei[0].long(), lg_ei[1].long(), directed=True)
             assert cos_theta.shape == (lg_ei.size(1),)
-            assert (cos_theta >= -1.0).all() and (cos_theta <= 1.0).all()
+            assert (cos_theta >= -1.0).all()
+            assert (cos_theta <= 1.0).all()
 
     def test_theta_values_in_range(self):
         """Cosine of angles must be in [-1, 1]."""
@@ -334,25 +396,21 @@ class TestCHGNetLineGraphConv:
     def test_forward_shape(self):
         lg_edge_index, bond_feat, angle_feat, atom_feat = self._make_line_graph_data()
         conv = CHGNetLineGraphConv.from_dims(
-            node_dims=[4 * DIM, DIM, DIM],   # bonds_i + angle + aux + bonds_j
+            node_dims=[4 * DIM, DIM, DIM],  # bonds_i + angle + aux + bonds_j
             activation=nn.SiLU(),
         )
-        new_bond, new_angle = conv(
-            lg_edge_index, bond_feat, angle_feat, atom_feat, None, None
-        )
+        new_bond, new_angle = conv(lg_edge_index, bond_feat, angle_feat, atom_feat, None, None)
         assert new_bond.shape == bond_feat.shape
         assert new_angle.shape == angle_feat.shape
 
     def test_forward_with_angle_update(self):
         lg_edge_index, bond_feat, angle_feat, atom_feat = self._make_line_graph_data()
         conv = CHGNetLineGraphConv.from_dims(
-            node_dims=[4 * DIM, DIM, DIM],   # bonds_i + angle + aux + bonds_j
+            node_dims=[4 * DIM, DIM, DIM],  # bonds_i + angle + aux + bonds_j
             edge_dims=[4 * DIM, DIM, DIM],
             activation=nn.SiLU(),
         )
-        new_bond, new_angle = conv(
-            lg_edge_index, bond_feat, angle_feat, atom_feat, None, None
-        )
+        new_bond, new_angle = conv(lg_edge_index, bond_feat, angle_feat, atom_feat, None, None)
         assert new_bond.shape == bond_feat.shape
         assert new_angle.shape == angle_feat.shape
 
@@ -392,8 +450,14 @@ class TestCHGNetBondGraphBlock:
             angle_hidden_dims=[DIM],
         )
         new_bond, new_angle = block(
-            lg_edge_index, bond_feat, angle_feat, atom_feat,
-            bond_index, center_atom_index, None, None,
+            lg_edge_index,
+            bond_feat,
+            angle_feat,
+            atom_feat,
+            bond_index,
+            center_atom_index,
+            None,
+            None,
         )
         assert new_bond.shape == bond_feat.shape
         assert new_angle.shape == angle_feat.shape
@@ -413,10 +477,16 @@ class TestCHGNetBondGraphBlock:
             num_angle_feats=DIM,
             activation=nn.SiLU(),
             bond_hidden_dims=[DIM],
-            angle_hidden_dims=None,   # no angle update
+            angle_hidden_dims=None,  # no angle update
         )
         new_bond, new_angle = block(
-            lg_edge_index, bond_feat, angle_feat, atom_feat,
-            bond_index, center_atom_index, None, None,
+            lg_edge_index,
+            bond_feat,
+            angle_feat,
+            atom_feat,
+            bond_index,
+            center_atom_index,
+            None,
+            None,
         )
         assert new_bond.shape == bond_feat.shape

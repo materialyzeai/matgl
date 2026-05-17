@@ -3,15 +3,14 @@ from __future__ import annotations
 import os.path
 from unittest.mock import MagicMock, patch
 
+import matgl
 import numpy as np
 import pytest
 import torch
 from ase.build import molecule
 from ase.calculators.calculator import Calculator
-from pymatgen.io.ase import AseAtomsAdaptor
-
-import matgl
 from matgl import load_model
+from pymatgen.io.ase import AseAtomsAdaptor
 
 if matgl.config.BACKEND != "DGL":
     pytest.skip("Skipping DGL tests", allow_module_level=True)
@@ -19,7 +18,7 @@ from matgl.ext import _ase_dgl as ase_mod
 from matgl.ext.ase import Atoms2Graph, MolecularDynamics, PESCalculator, Relaxer
 
 
-@pytest.mark.integration
+@pytest.mark.integration()
 def test_PESCalculator_and_M3GNetCalculator(MoS):
     adaptor = AseAtomsAdaptor()
 

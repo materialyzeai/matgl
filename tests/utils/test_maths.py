@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import matgl
 import numpy as np
 import pytest
 import torch
-
-import matgl
 from matgl.utils.maths import (
     SPHERICAL_BESSEL_ROOTS,
     binom,

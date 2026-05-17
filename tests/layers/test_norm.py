@@ -1,16 +1,14 @@
 from __future__ import annotations
 
+import matgl
 import pytest
 import torch
-
-import matgl
 
 if matgl.config.BACKEND != "DGL":
     pytest.skip("Skipping DGL tests", allow_module_level=True)
 import dgl
-from torch.testing import assert_close
-
 from matgl.layers import GraphNorm
+from torch.testing import assert_close
 
 
 def test_graph_norm(graph_MoS):

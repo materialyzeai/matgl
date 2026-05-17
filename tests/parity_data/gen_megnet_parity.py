@@ -15,12 +15,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import matgl
 import numpy as np
 import torch
-from pymatgen.core import Lattice, Structure
-
-import matgl
 from matgl.models import MEGNet
+from pymatgen.core import Lattice, Structure
 
 # Architecture / forward inputs MUST stay in lockstep with the consumer test.
 INIT_ARGS: dict = {

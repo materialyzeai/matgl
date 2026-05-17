@@ -5,10 +5,9 @@ from __future__ import annotations
 import importlib
 from types import SimpleNamespace
 
+import matgl
 import pytest
 import torch
-
-import matgl
 from matgl.electrostatics._fast_qeq_pyg import LinearQeq as LinearQeqPyG
 
 
@@ -68,7 +67,6 @@ def test_qeq_pyg_q_ref_overrides_total_charge():
 def test_qeq_dgl_pyg_parity():
     """DGL and PyG QEq solvers must produce identical charges on the same input."""
     import dgl
-
     from matgl.electrostatics._fast_qeq_dgl import LinearQeq as LinearQeqDGL
 
     torch.manual_seed(7)

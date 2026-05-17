@@ -15,12 +15,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import matgl
 import numpy as np
 import torch
-from pymatgen.core import Lattice, Structure
-
-import matgl
 from matgl.models import M3GNet
+from pymatgen.core import Lattice, Structure
 
 INIT_ARGS: dict = {
     "element_types": ("Mo", "S"),

@@ -9,11 +9,10 @@ from __future__ import annotations
 import importlib
 import os
 
+import matgl
 import numpy as np
 import pytest
 import torch
-
-import matgl
 
 BACKEND = matgl.config.BACKEND
 
@@ -116,7 +115,6 @@ def test_qet_dgl_pyg_parity(MoS):
     if BACKEND != "PYG":
         pytest.skip("Cross-backend parity test is driven from the PYG side.")
     import dgl  # noqa: F401  (proves DGL is importable in this env)
-
     from matgl.ext._pymatgen_dgl import Structure2Graph as Structure2GraphDGL
     from matgl.ext._pymatgen_pyg import Structure2Graph as Structure2GraphPyG
     from matgl.models._qet_dgl import QET as QETDGL
@@ -158,7 +156,6 @@ def test_qet_dgl_pyg_training_parity(MoS):
     if BACKEND != "PYG":
         pytest.skip("Cross-backend training-parity test is driven from the PYG side.")
     import dgl  # noqa: F401
-
     from matgl.ext._pymatgen_dgl import Structure2Graph as Structure2GraphDGL
     from matgl.ext._pymatgen_pyg import Structure2Graph as Structure2GraphPyG
     from matgl.models._qet_dgl import QET as QETDGL

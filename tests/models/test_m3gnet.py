@@ -3,12 +3,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import matgl
 import numpy as np
 import pytest
 import torch
 from pymatgen.core import Structure
-
-import matgl
 
 BACKEND = matgl.config.BACKEND
 

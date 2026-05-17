@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import matgl
 import pytest
 import torch
 from torch import nn
-
-import matgl
 
 if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)

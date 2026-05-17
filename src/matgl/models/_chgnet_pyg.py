@@ -33,6 +33,8 @@ from matgl.layers._graph_convolution_pyg import (
     CHGNetAtomGraphBlock,
     CHGNetBondGraphBlock,
     _GatedMLPNorm,
+)
+from matgl.layers._graph_convolution_pyg import (
     _MLPNorm as _EmbedMLP,
 )
 from matgl.utils.cutoff import polynomial_cutoff
@@ -104,43 +106,44 @@ class CHGNet(MatGLModel):
         task_type: Literal["regression", "classification"] = "regression",
         **kwargs,
     ) -> None:
-        """
+        """Initialize CHGNet PyG model.
+
         Args:
-            element_types: List of element types. Defaults to DEFAULT_ELEMENTS.
-            dim_atom_embedding: Atom embedding dimension. Default = 64
-            dim_bond_embedding: Bond embedding dimension. Default = 64
-            dim_angle_embedding: Angle embedding dimension. Default = 64
-            dim_state_embedding: State embedding dimension. Default = None
-            dim_state_feats: Number of state features. Default = None
-            non_linear_bond_embedding: Non-linear bond embedding. Default = False
-            non_linear_angle_embedding: Non-linear angle embedding. Default = False
-            cutoff: Atom graph cutoff radius. Default = 6.0
-            threebody_cutoff: Three-body cutoff radius. Default = 3.0
-            cutoff_exponent: Polynomial cutoff exponent. Default = 5
-            max_n: Radial basis functions count. Default = 9
-            max_f: Fourier expansion terms. Default = 4
-            learn_basis: Learnable basis frequencies. Default = True
-            num_blocks: Number of graph convolution blocks. Default = 4
-            shared_bond_weights: Shared bond distance weights. Default = "both"
-            layer_bond_weights: Per-layer bond weights. Default = None
-            atom_conv_hidden_dims: Atom conv hidden dims. Default = (64,)
-            bond_update_hidden_dims: Bond update hidden dims. Default = None
-            bond_conv_hidden_dims: Bond conv hidden dims. Default = (64,)
-            angle_update_hidden_dims: Angle update hidden dims. Default = ()
-            conv_dropout: Convolution dropout. Default = 0.0
-            final_mlp_type: Readout MLP type ("gated" or "mlp"). Default = "mlp"
-            final_hidden_dims: Readout MLP hidden dims. Default = (64, 64)
-            final_dropout: Readout dropout. Default = 0.0
-            pooling_operation: Graph pooling ("sum" or "mean"). Default = "sum"
-            readout_field: Feature field to read out from. Default = "atom_feat"
-            activation_type: Activation function name. Default = "swish"
-            normalization: Normalization type. Only "layer" supported. Default = None
-            normalize_hidden: Normalize hidden layers. Default = False
-            is_intensive: Intensive target. Default = False
-            num_targets: Number of targets. Default = 1
-            num_site_targets: Number of site-wise targets. Default = 1
-            task_type: "regression" or "classification". Default = "regression"
-            **kwargs: Additional keyword arguments.
+        element_types: List of element types. Defaults to DEFAULT_ELEMENTS.
+        dim_atom_embedding: Atom embedding dimension. Default = 64
+        dim_bond_embedding: Bond embedding dimension. Default = 64
+        dim_angle_embedding: Angle embedding dimension. Default = 64
+        dim_state_embedding: State embedding dimension. Default = None
+        dim_state_feats: Number of state features. Default = None
+        non_linear_bond_embedding: Non-linear bond embedding. Default = False
+        non_linear_angle_embedding: Non-linear angle embedding. Default = False
+        cutoff: Atom graph cutoff radius. Default = 6.0
+        threebody_cutoff: Three-body cutoff radius. Default = 3.0
+        cutoff_exponent: Polynomial cutoff exponent. Default = 5
+        max_n: Radial basis functions count. Default = 9
+        max_f: Fourier expansion terms. Default = 4
+        learn_basis: Learnable basis frequencies. Default = True
+        num_blocks: Number of graph convolution blocks. Default = 4
+        shared_bond_weights: Shared bond distance weights. Default = "both"
+        layer_bond_weights: Per-layer bond weights. Default = None
+        atom_conv_hidden_dims: Atom conv hidden dims. Default = (64,)
+        bond_update_hidden_dims: Bond update hidden dims. Default = None
+        bond_conv_hidden_dims: Bond conv hidden dims. Default = (64,)
+        angle_update_hidden_dims: Angle update hidden dims. Default = ()
+        conv_dropout: Convolution dropout. Default = 0.0
+        final_mlp_type: Readout MLP type ("gated" or "mlp"). Default = "mlp"
+        final_hidden_dims: Readout MLP hidden dims. Default = (64, 64)
+        final_dropout: Readout dropout. Default = 0.0
+        pooling_operation: Graph pooling ("sum" or "mean"). Default = "sum"
+        readout_field: Feature field to read out from. Default = "atom_feat"
+        activation_type: Activation function name. Default = "swish"
+        normalization: Normalization type. Only "layer" supported. Default = None
+        normalize_hidden: Normalize hidden layers. Default = False
+        is_intensive: Intensive target. Default = False
+        num_targets: Number of targets. Default = 1
+        num_site_targets: Number of site-wise targets. Default = 1
+        task_type: "regression" or "classification". Default = "regression"
+        **kwargs: Additional keyword arguments.
         """
         super().__init__()
         self.save_args(locals(), kwargs)
@@ -170,7 +173,8 @@ class CHGNet(MatGLModel):
         self.bond_expansion = RadialBesselFunction(max_n=max_n, cutoff=cutoff, learnable=learn_basis)
         self.threebody_bond_expansion = (
             RadialBesselFunction(max_n=max_n, cutoff=threebody_cutoff, learnable=learn_basis)
-            if self.use_bond_graph else None
+            if self.use_bond_graph
+            else None
         )
         self.angle_expansion = FourierExpansion(max_f=max_f, learnable=learn_basis) if self.use_bond_graph else None
 
@@ -180,67 +184,78 @@ class CHGNet(MatGLModel):
         self.atom_embedding = nn.Embedding(len(element_types), dim_atom_embedding)
 
         self.bond_embedding = _EmbedMLP(
-            [max_n, dim_bond_embedding], activation=activation,
-            activate_last=non_linear_bond_embedding, bias_last=False,
+            [max_n, dim_bond_embedding],
+            activation=activation,
+            activate_last=non_linear_bond_embedding,
+            bias_last=False,
         )
         self.angle_embedding = (
             _EmbedMLP(
-                [2 * max_f + 1, dim_angle_embedding], activation=activation,
-                activate_last=non_linear_angle_embedding, bias_last=False,
+                [2 * max_f + 1, dim_angle_embedding],
+                activation=activation,
+                activate_last=non_linear_angle_embedding,
+                bias_last=False,
             )
-            if self.use_bond_graph else None
+            if self.use_bond_graph
+            else None
         )
 
         # --- shared bond distance weights ---
         self.atom_bond_weights = (
-            nn.Linear(max_n, dim_atom_embedding, bias=False)
-            if shared_bond_weights in ["bond", "both"] else None
+            nn.Linear(max_n, dim_atom_embedding, bias=False) if shared_bond_weights in ["bond", "both"] else None
         )
         self.bond_bond_weights = (
-            nn.Linear(max_n, dim_bond_embedding, bias=False)
-            if shared_bond_weights in ["bond", "both"] else None
+            nn.Linear(max_n, dim_bond_embedding, bias=False) if shared_bond_weights in ["bond", "both"] else None
         )
         self.threebody_bond_weights = (
             nn.Linear(max_n, dim_bond_embedding, bias=False)
-            if shared_bond_weights in ["three_body_bond", "both"] and self.use_bond_graph else None
+            if shared_bond_weights in ["three_body_bond", "both"] and self.use_bond_graph
+            else None
         )
 
         # --- atom graph blocks ---
-        self.atom_graph_layers = nn.ModuleList([
-            CHGNetAtomGraphBlock(
-                num_atom_feats=dim_atom_embedding,
-                num_bond_feats=dim_bond_embedding,
-                atom_hidden_dims=list(atom_conv_hidden_dims),
-                bond_hidden_dims=list(bond_update_hidden_dims) if bond_update_hidden_dims is not None else None,
-                num_state_feats=dim_state_embedding,
-                activation=activation,
-                normalization=normalization,
-                normalize_hidden=normalize_hidden,
-                dropout=conv_dropout,
-                rbf_order=max_n if layer_bond_weights in ["bond", "both"] else 0,
-            )
-            for _ in range(num_blocks)
-        ])
-
-        # --- bond graph (line graph) blocks ---
-        self.bond_graph_layers = (
-            nn.ModuleList([
-                CHGNetBondGraphBlock(
+        self.atom_graph_layers = nn.ModuleList(
+            [
+                CHGNetAtomGraphBlock(
                     num_atom_feats=dim_atom_embedding,
                     num_bond_feats=dim_bond_embedding,
-                    num_angle_feats=dim_angle_embedding,
-                    bond_hidden_dims=list(bond_conv_hidden_dims),
-                    angle_hidden_dims=list(angle_update_hidden_dims) if angle_update_hidden_dims is not None else None,
+                    atom_hidden_dims=list(atom_conv_hidden_dims),
+                    bond_hidden_dims=list(bond_update_hidden_dims) if bond_update_hidden_dims is not None else None,
+                    num_state_feats=dim_state_embedding,
                     activation=activation,
                     normalization=normalization,
                     normalize_hidden=normalize_hidden,
-                    bond_dropout=conv_dropout,
-                    angle_dropout=conv_dropout,
-                    rbf_order=max_n if layer_bond_weights in ["three_body_bond", "both"] else 0,
+                    dropout=conv_dropout,
+                    rbf_order=max_n if layer_bond_weights in ["bond", "both"] else 0,
                 )
-                for _ in range(num_blocks - 1)
-            ])
-            if self.use_bond_graph else None
+                for _ in range(num_blocks)
+            ]
+        )
+
+        # --- bond graph (line graph) blocks ---
+        self.bond_graph_layers = (
+            nn.ModuleList(
+                [
+                    CHGNetBondGraphBlock(
+                        num_atom_feats=dim_atom_embedding,
+                        num_bond_feats=dim_bond_embedding,
+                        num_angle_feats=dim_angle_embedding,
+                        bond_hidden_dims=list(bond_conv_hidden_dims),
+                        angle_hidden_dims=list(angle_update_hidden_dims)
+                        if angle_update_hidden_dims is not None
+                        else None,
+                        activation=activation,
+                        normalization=normalization,
+                        normalize_hidden=normalize_hidden,
+                        bond_dropout=conv_dropout,
+                        angle_dropout=conv_dropout,
+                        rbf_order=max_n if layer_bond_weights in ["three_body_bond", "both"] else 0,
+                    )
+                    for _ in range(num_blocks - 1)
+                ]
+            )
+            if self.use_bond_graph
+            else None
         )
 
         # --- site-wise readout (e.g. magnetic moments) ---
@@ -332,8 +347,8 @@ class CHGNet(MatGLModel):
         if self.use_bond_graph:
             pbc_offset = getattr(g, "pbc_offset", torch.zeros(edge_index.size(1), 3, device=pos.device))
             with torch.no_grad():
-                lg_edge_index, lg_bond_vec, lg_bond_dist, lg_pbc_offset, lg_src_bond_sign = create_directed_line_graph_pyg(
-                    edge_index, pbc_offset, bond_vec, bond_dist, self.three_body_cutoff
+                (lg_edge_index, lg_bond_vec, lg_bond_dist, lg_pbc_offset, lg_src_bond_sign) = (
+                    create_directed_line_graph_pyg(edge_index, pbc_offset, bond_vec, bond_dist, self.three_body_cutoff)
                 )
 
             num_lg_nodes = lg_bond_dist.size(0)
@@ -352,7 +367,8 @@ class CHGNet(MatGLModel):
             # (src bond of each lg edge, using bond_index to get the atom-graph edge id)
             if lg_edge_index.size(1) > 0:
                 src_bond_ids = bond_index[lg_edge_index[0].long()]
-                center_atom_index = edge_index[1][src_bond_ids]  # dst in atom graph = neighbor = center atom for the angle
+                # dst in atom graph = neighbor = center atom for the angle
+                center_atom_index = edge_index[1][src_bond_ids]
             else:
                 center_atom_index = torch.zeros(0, dtype=torch.long, device=pos.device)
 
@@ -383,23 +399,38 @@ class CHGNet(MatGLModel):
         bond_bond_weights = self.bond_bond_weights(bond_expansion) if self.bond_bond_weights is not None else None
         threebody_bond_weights = (
             self.threebody_bond_weights(lg_bond_expansion)
-            if self.threebody_bond_weights is not None and lg_bond_expansion is not None else None
+            if self.threebody_bond_weights is not None and lg_bond_expansion is not None
+            else None
         )
 
         # --- message passing ---
         for i in range(self.n_blocks - 1):
             atom_features, bond_features, state_attr = self.atom_graph_layers[i](
-                edge_index, atom_features, bond_features, bond_expansion,
-                state_attr, batch, atom_bond_weights, bond_bond_weights,
+                edge_index,
+                atom_features,
+                bond_features,
+                bond_expansion,
+                state_attr,
+                batch,
+                atom_bond_weights,
+                bond_bond_weights,
             )
             if self.use_bond_graph:
                 bond_features, angle_features = self.bond_graph_layers[i](  # type: ignore[index]
-                    lg_edge_index, bond_features, angle_features, atom_features,
-                    bond_index, center_atom_index, lg_bond_expansion, threebody_bond_weights,
+                    lg_edge_index,
+                    bond_features,
+                    angle_features,
+                    atom_features,
+                    bond_index,
+                    center_atom_index,
+                    lg_bond_expansion,
+                    threebody_bond_weights,
                 )
             fea_dict[f"gc_{i + 1}"] = {
-                "atom_feat": atom_features, "bond_feat": bond_features,
-                "angle_feat": angle_features, "state_feat": state_attr,
+                "atom_feat": atom_features,
+                "bond_feat": bond_features,
+                "angle_feat": angle_features,
+                "state_feat": state_attr,
             }
 
         # --- site-wise readout before last atom block ---
@@ -408,16 +439,24 @@ class CHGNet(MatGLModel):
         if hasattr(g, "magmom"):
             g.magmom = magmom
         else:
-            setattr(g, "magmom", magmom)
+            g.magmom = magmom
 
         # --- last atom graph block ---
         atom_features, bond_features, state_attr = self.atom_graph_layers[-1](
-            edge_index, atom_features, bond_features, bond_expansion,
-            state_attr, batch, atom_bond_weights, bond_bond_weights,
+            edge_index,
+            atom_features,
+            bond_features,
+            bond_expansion,
+            state_attr,
+            batch,
+            atom_bond_weights,
+            bond_bond_weights,
         )
         fea_dict[f"gc_{self.n_blocks}"] = {
-            "atom_feat": atom_features, "bond_feat": bond_features,
-            "angle_feat": angle_features, "state_feat": state_attr,
+            "atom_feat": atom_features,
+            "bond_feat": bond_features,
+            "angle_feat": angle_features,
+            "state_feat": state_attr,
         }
 
         # --- graph-level readout ---
@@ -481,10 +520,9 @@ class CHGNet(MatGLModel):
         Returns:
             Predicted property tensor, or feature dict.
         """
-        allowed_output_layers = (
-            ["bond_expansion", "angle_expansion", "embedding", "magmom", "final"]
-            + [f"gc_{i + 1}" for i in range(self.n_blocks)]
-        )
+        allowed_output_layers = ["bond_expansion", "angle_expansion", "embedding", "magmom", "final"] + [
+            f"gc_{i + 1}" for i in range(self.n_blocks)
+        ]
 
         if not return_features:
             output_layers = ["final"]
@@ -495,6 +533,7 @@ class CHGNet(MatGLModel):
 
         if graph_converter is None:
             from matgl.ext._pymatgen_pyg import Structure2Graph
+
             graph_converter = Structure2Graph(element_types=self.element_types, cutoff=self.cutoff)  # type: ignore[arg-type]
 
         g, lat, state_feats_default = graph_converter.get_graph(structure)

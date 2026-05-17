@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import torch
-from torch.testing import assert_close
-
 from matgl.layers._basis import SphericalBesselFunction
 from matgl.utils.cutoff import cosine_cutoff, polynomial_cutoff
+from torch.testing import assert_close
 
 
 def test_cosine():

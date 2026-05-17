@@ -2,17 +2,14 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-import pytest
-
 import matgl
+import pytest
 
 if matgl.config.BACKEND != "DGL":
     pytest.skip("Skipping DGL tests", allow_module_level=True)
 import dgl
-import torch
-from torch import nn
-
 import matgl
+import torch
 from matgl.graph._compute_dgl import compute_theta, create_line_graph
 from matgl.layers import (
     BondExpansion,
@@ -34,6 +31,7 @@ from matgl.layers._graph_convolution_dgl import (
     TensorNetInteraction,
 )
 from matgl.utils.cutoff import polynomial_cutoff
+from torch import nn
 
 
 class Graph(NamedTuple):
@@ -52,8 +50,7 @@ def build_graph(N, E, NDIM=5, EDIM=3, GDIM=10):
 def get_graphs(num_graphs, NDIM=5, EDIM=3, GDIM=10):
     Ns = torch.randint(10, 30, (num_graphs,)).tolist()
     Es = torch.randint(35, 100, (num_graphs,)).tolist()
-    graphs = [build_graph(*gspec, NDIM, EDIM, GDIM) for gspec in zip(Ns, Es, strict=False)]
-    return graphs
+    return [build_graph(*gspec, NDIM, EDIM, GDIM) for gspec in zip(Ns, Es, strict=False)]
 
 
 def batch(state_attrs_lists):
@@ -76,8 +73,7 @@ def test_megnet_layer():
     # one pass
     edge_feat = batched_graph.edata.pop("edge_feat")
     node_feat = batched_graph.ndata.pop("node_feat")
-    out = layer(batched_graph, edge_feat, node_feat, attrs)
-    return out
+    return layer(batched_graph, edge_feat, node_feat, attrs)
 
 
 def test_megnet_block():

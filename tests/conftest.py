@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import pathlib
 
+import matgl
 import pytest
 import torch
+from matgl.ext.pymatgen import Molecule2Graph, Structure2Graph, get_element_list
 from pymatgen.core import Lattice, Molecule, Structure
 from pymatgen.util.testing import PymatgenTest
-
-import matgl
-from matgl.ext.pymatgen import Molecule2Graph, Structure2Graph, get_element_list
 
 if matgl.config.BACKEND == "DGL":
     from matgl.graph._compute_dgl import (

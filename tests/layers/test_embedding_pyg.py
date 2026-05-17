@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import pytest
-from torch import nn
-
 import matgl
+import pytest
 from matgl.layers import BondExpansion
+from torch import nn
 
 if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)

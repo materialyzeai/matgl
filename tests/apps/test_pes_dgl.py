@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import matgl
 import numpy as np
 import pytest
 import torch
 from pymatgen.core import Lattice, Structure
-
-import matgl
 
 if matgl.config.BACKEND != "DGL":
     pytest.skip("Skipping DGL tests", allow_module_level=True)
@@ -14,24 +13,24 @@ from matgl.ext._pymatgen_dgl import Structure2Graph, get_element_list
 from matgl.models import CHGNet, M3GNet, SO3Net, TensorNet
 
 
-@pytest.fixture
+@pytest.fixture()
 def model():
     return M3GNet(element_types=["Mo", "S"], is_intensive=False, use_smooth=True)
 
 
-@pytest.fixture
+@pytest.fixture()
 def model_so3net():
     return SO3Net(element_types=["Mo", "S"], is_intensive=False, lmax=2)
 
 
-@pytest.fixture
+@pytest.fixture()
 def model_tensornet():
     return TensorNet(
         elment_types=["Mo", "S"], is_intensive=False, units=64, use_smooth=True, max_n=5, rbf_type="SphericalBessel"
     )
 
 
-@pytest.fixture
+@pytest.fixture()
 def model_chgnet():
     return CHGNet(element_types=["Mo", "S"], is_intensive=False)
 

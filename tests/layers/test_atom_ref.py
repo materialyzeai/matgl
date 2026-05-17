@@ -1,21 +1,18 @@
 from __future__ import annotations
 
+import matgl
 import numpy as np
 import pytest
 import torch
-
-import matgl
 
 BACKEND = matgl.config.BACKEND
 
 if BACKEND == "DGL":
     import dgl
-
     from matgl.layers._atom_ref_dgl import AtomRef
 elif BACKEND == "PYG":
-    from torch_geometric.data import Batch
-
     from matgl.layers._atom_ref_pyg import AtomRef
+    from torch_geometric.data import Batch
 else:
     pytest.skip(f"Unsupported backend: {BACKEND}", allow_module_level=True)
 

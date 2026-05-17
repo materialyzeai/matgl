@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import os
 
+import matgl
 import numpy as np
 import pytest
 import torch
-
-import matgl
 
 if matgl.config.BACKEND != "DGL":
     pytest.skip("Skipping DGL tests", allow_module_level=True)

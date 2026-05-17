@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from functools import partial
 
+import matgl
 import numpy as np
 import pytest
 import torch
 import torch.testing as tt
 from pymatgen.core import Lattice, Structure
-
-import matgl
 
 if matgl.config.BACKEND != "DGL":
     pytest.skip("Skipping DGL tests", allow_module_level=True)

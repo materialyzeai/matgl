@@ -11,9 +11,8 @@ from __future__ import annotations
 
 import pytest
 import torch
-from torch import nn
-
 from matgl.layers._readout_torch import ReduceReadOut, WeightedAtomReadOut, WeightedReadOut
+from torch import nn
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -19,6 +19,8 @@ re-exported here.
 
 from __future__ import annotations
 
+import itertools
+
 import torch
 from torch import Tensor, nn
 from torch.nn import Dropout, Identity, Module
@@ -602,6 +604,8 @@ class M3GNetBlock(Module):
             if state_feat is not None:
                 state_feat = self.dropout(state_feat)
         return edge_feat, node_feat, state_feat
+
+
 # ---------------------------------------------------------------------------
 # CHGNet PyG convolution layers
 # ---------------------------------------------------------------------------
@@ -632,7 +636,7 @@ class _MLPNorm(nn.Module):
         self.activate_last = activate_last
         self.normalize_hidden = normalize_hidden
 
-        for i, (in_d, out_d) in enumerate(zip(dims[:-1], dims[1:], strict=False)):
+        for i, (in_d, out_d) in enumerate(itertools.pairwise(dims)):
             is_last = i == self._depth - 1
             self.layers.append(nn.Linear(in_d, out_d, bias=True if not is_last else bias_last))
             if self.norms is not None:
@@ -672,12 +676,20 @@ class _GatedMLPNorm(nn.Module):
         super().__init__()
         all_dims = [in_feats, *dims]
         self.value = _MLPNorm(
-            all_dims, activation, activate_last=activate_last, bias_last=bias_last,
-            normalize_hidden=normalize_hidden, normalization=normalization,
+            all_dims,
+            activation,
+            activate_last=activate_last,
+            bias_last=bias_last,
+            normalize_hidden=normalize_hidden,
+            normalization=normalization,
         )
         self.gate = _MLPNorm(
-            all_dims, activation, activate_last=False, bias_last=bias_last,
-            normalize_hidden=normalize_hidden, normalization=normalization,
+            all_dims,
+            activation,
+            activate_last=False,
+            bias_last=bias_last,
+            normalize_hidden=normalize_hidden,
+            normalization=normalization,
         )
         self.sigmoid = nn.Sigmoid()
 
@@ -722,7 +734,7 @@ class CHGNetGraphConv(nn.Module):
         rbf_order: int = 0,
     ) -> CHGNetGraphConv:
         """Build a ``CHGNetGraphConv`` from layer dimension lists."""
-        gmlp_kw = dict(activation=activation, normalization=normalization, normalize_hidden=normalize_hidden)
+        gmlp_kw = {"activation": activation, "normalization": normalization, "normalize_hidden": normalize_hidden}
 
         node_update_func = _GatedMLPNorm(node_dims[0], node_dims[1:], **gmlp_kw)
         node_out_func = nn.Linear(node_dims[-1], node_dims[-1], bias=False)
@@ -730,13 +742,15 @@ class CHGNetGraphConv(nn.Module):
 
         edge_update_func = _GatedMLPNorm(edge_dims[0], edge_dims[1:], **gmlp_kw) if edge_dims is not None else None
         edge_weight_func = (
-            nn.Linear(rbf_order, edge_dims[-1], bias=False)
-            if rbf_order > 0 and edge_dims is not None else None
+            nn.Linear(rbf_order, edge_dims[-1], bias=False) if rbf_order > 0 and edge_dims is not None else None
         )
         from matgl.layers._core import MLP
+
         state_update_func = MLP(state_dims, activation, activate_last=True) if state_dims is not None else None
 
-        return cls(node_update_func, node_out_func, edge_update_func, node_weight_func, edge_weight_func, state_update_func)
+        return cls(
+            node_update_func, node_out_func, edge_update_func, node_weight_func, edge_weight_func, state_update_func
+        )
 
     # ------------------------------------------------------------------
     # Edge update (per-edge, no aggregation direction issue)
@@ -779,8 +793,8 @@ class CHGNetGraphConv(nn.Module):
         shared_weights: torch.Tensor | None,
         num_nodes: int,
     ) -> torch.Tensor:
-        atom_i = node_features[src]   # central atom
-        atom_j = node_features[dst]   # neighbor
+        atom_i = node_features[src]  # central atom
+        atom_j = node_features[dst]  # neighbor
         if self.include_state and state_feat_per_edge is not None:
             inputs = torch.cat([atom_i, edge_features, atom_j, state_feat_per_edge], dim=-1)
         else:
@@ -835,13 +849,17 @@ class CHGNetGraphConv(nn.Module):
 
         # Edge update (optional)
         if self.edge_update_func is not None:
-            edge_update = self.edge_update_(src, dst, node_features, edge_features, bond_expansion, state_per_edge, shared_edge_weights)
+            edge_update = self.edge_update_(
+                src, dst, node_features, edge_features, bond_expansion, state_per_edge, shared_edge_weights
+            )
             new_edge_features = edge_features + edge_update
         else:
             new_edge_features = edge_features
 
         # Node update — scatter onto src (central atoms)
-        node_update = self.node_update_(src, dst, node_features, new_edge_features, bond_expansion, state_per_edge, shared_node_weights, num_nodes)
+        node_update = self.node_update_(
+            src, dst, node_features, new_edge_features, bond_expansion, state_per_edge, shared_node_weights, num_nodes
+        )
         new_node_features = node_features + node_update
 
         # State update (optional)
@@ -902,8 +920,14 @@ class CHGNetAtomGraphBlock(nn.Module):
         shared_edge_weights: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         atom_features, bond_features, state_attr = self.conv(
-            edge_index, atom_features, bond_features, bond_expansion,
-            state_attr, batch, shared_node_weights, shared_edge_weights,
+            edge_index,
+            atom_features,
+            bond_features,
+            bond_expansion,
+            state_attr,
+            batch,
+            shared_node_weights,
+            shared_edge_weights,
         )
         atom_features = self.dropout(atom_features)
         bond_features = self.dropout(bond_features)
@@ -948,7 +972,11 @@ class CHGNetLineGraphConv(nn.Module):
         normalize_hidden: bool = False,
         node_weight_input_dims: int = 0,
     ) -> CHGNetLineGraphConv:
-        gmlp_kw = dict(activation=activation or nn.SiLU(), normalization=normalization, normalize_hidden=normalize_hidden)
+        gmlp_kw = {
+            "activation": activation or nn.SiLU(),
+            "normalization": normalization,
+            "normalize_hidden": normalize_hidden,
+        }
         node_update_func = _GatedMLPNorm(node_dims[0], node_dims[1:], **gmlp_kw)
         node_out_func = nn.Linear(node_dims[-1], node_dims[-1], bias=False)
         node_weight_func = nn.Linear(node_weight_input_dims, node_dims[-1]) if node_weight_input_dims > 0 else None
@@ -1007,8 +1035,13 @@ class CHGNetLineGraphConv(nn.Module):
         num_lg_nodes = node_features.size(0)
 
         node_update = self.node_update_(
-            lg_edge_index, node_features, edge_features, aux_edge_features,
-            bond_expansion, shared_node_weights, num_lg_nodes,
+            lg_edge_index,
+            node_features,
+            edge_features,
+            aux_edge_features,
+            bond_expansion,
+            shared_node_weights,
+            num_lg_nodes,
         )
         new_node_features = node_features + node_update
 
@@ -1070,8 +1103,12 @@ class CHGNetBondGraphBlock(nn.Module):
         aux_edge_features = atom_features[center_atom_index]
 
         new_node_features, new_angle_features = self.conv(
-            lg_edge_index, node_features, angle_features, aux_edge_features,
-            bond_expansion, shared_node_weights,
+            lg_edge_index,
+            node_features,
+            angle_features,
+            aux_edge_features,
+            bond_expansion,
+            shared_node_weights,
         )
 
         new_node_features = self.bond_dropout(new_node_features)
