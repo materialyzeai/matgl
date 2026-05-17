@@ -31,3 +31,7 @@ venv
 .conda
 
 experimental/
+scripts/CHGNet-PyG-*/
+wandb/
+dgl_keys.txt
+pyg_keys.txt
