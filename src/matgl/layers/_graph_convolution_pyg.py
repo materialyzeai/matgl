@@ -170,7 +170,12 @@ class TensorNetInteraction(nn.Module):
 
 
 class _MLPNorm(nn.Module):
-    """MLP with optional LayerNorm — graph-backend-agnostic."""
+    """MLP with optional LayerNorm — mirrors DGL MLPNorm key/index structure exactly.
+
+    norm index layout (matches DGL norm_layers):
+      hidden layers: norms[0..n_hidden-1] only if normalize_hidden=True
+      last layer:    norms[-1] always (when normalization is set)
+    """
 
     def __init__(
         self,
@@ -182,6 +187,7 @@ class _MLPNorm(nn.Module):
         normalization: str | None = None,
     ) -> None:
         super().__init__()
+        self._depth = len(dims) - 1
         self.layers = nn.ModuleList()
         self.norms: nn.ModuleList | None = nn.ModuleList() if normalization == "layer" else None
         self.activation = activation
@@ -189,22 +195,26 @@ class _MLPNorm(nn.Module):
         self.normalize_hidden = normalize_hidden
 
         for i, (in_d, out_d) in enumerate(zip(dims[:-1], dims[1:], strict=False)):
-            is_last = i == len(dims) - 2
+            is_last = i == self._depth - 1
             self.layers.append(nn.Linear(in_d, out_d, bias=True if not is_last else bias_last))
             if self.norms is not None:
-                if normalize_hidden or is_last:
-                    self.norms.append(nn.LayerNorm(out_d))
+                if not is_last:
+                    if normalize_hidden:
+                        self.norms.append(nn.LayerNorm(out_d))
                 else:
-                    self.norms.append(nn.Identity())
+                    self.norms.append(nn.LayerNorm(out_d))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        n = len(self.layers)
-        for i, layer in enumerate(self.layers):
-            x = layer(x)
-            if self.norms is not None:
+        for i in range(self._depth - 1):
+            x = self.layers[i](x)
+            if self.norms is not None and self.normalize_hidden:
                 x = self.norms[i](x)
-            if i < n - 1 or self.activate_last:
-                x = self.activation(x)
+            x = self.activation(x)
+        x = self.layers[-1](x)
+        if self.norms is not None:
+            x = self.norms[-1](x)
+        if self.activate_last:
+            x = self.activation(x)
         return x
 
 
@@ -216,6 +226,7 @@ class _GatedMLPNorm(nn.Module):
         in_feats: int,
         dims: list[int],
         activation: nn.Module,
+        activate_last: bool = True,
         normalize_hidden: bool = False,
         normalization: str | None = None,
         bias_last: bool = True,
@@ -223,7 +234,7 @@ class _GatedMLPNorm(nn.Module):
         super().__init__()
         all_dims = [in_feats, *dims]
         self.value = _MLPNorm(
-            all_dims, activation, activate_last=True, bias_last=bias_last,
+            all_dims, activation, activate_last=activate_last, bias_last=bias_last,
             normalize_hidden=normalize_hidden, normalization=normalization,
         )
         self.gate = _MLPNorm(
@@ -239,8 +250,8 @@ class _GatedMLPNorm(nn.Module):
 class CHGNetGraphConv(nn.Module):
     """CHGNet atom-graph convolution layer (PyG backend).
 
-    Fixes the DGL bug: atom messages are scattered onto the **source** (central)
-    atom, not the destination (neighbor) atom.
+    Mirrors the DGL implementation: edges are directed center→neighbor, so messages
+    are accumulated at the destination (neighbor) node, matching DGL ``fn.sum`` semantics.
     """
 
     def __init__(
@@ -316,7 +327,8 @@ class CHGNetGraphConv(nn.Module):
         return edge_update
 
     # ------------------------------------------------------------------
-    # Node update — scatter onto SRC (central atom) — THE BUG FIX
+    # Node update — scatter onto DST (neighbor), matching DGL fn.sum semantics.
+    # Edges go center(src)→neighbor(dst); fn.sum accumulates at dst.
     # ------------------------------------------------------------------
     def node_update_(
         self,
@@ -340,8 +352,8 @@ class CHGNetGraphConv(nn.Module):
             messages = messages * self.node_weight_func(bond_expansion.float())
         if shared_weights is not None:
             messages = messages * shared_weights
-        # Scatter onto SRC (central atom) — fixes the DGL aggregation bug
-        feat_update = scatter_add(messages, src, dim=0, dim_size=num_nodes)
+        # Scatter onto DST (neighbor) — matches DGL fn.sum aggregation direction
+        feat_update = scatter_add(messages, dst, dim=0, dim_size=num_nodes)
         return self.node_out_func(feat_update)
 
     def state_update_(

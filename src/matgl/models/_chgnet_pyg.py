@@ -6,9 +6,11 @@ prediction of site-wise magnetic moments.
 
 Reference paper: https://doi.org/10.1038/s42256-023-00716-3
 
-This PyG implementation fixes the message-passing aggregation bug present in the DGL
-version: atom messages are correctly aggregated onto the source (central) atom rather
-than the destination (neighbor) atom.
+This PyG implementation mirrors the DGL version exactly, including the ``torch.no_grad()``
+scope used during line-graph construction (which detaches three-body bond vectors and
+distances from the position gradient graph). This makes forces identical to the DGL
+model. Weights are directly transferable with only a ``.conv_layer.`` → ``.conv.``
+key rename.
 """
 
 from __future__ import annotations
@@ -27,10 +29,10 @@ from matgl.graph._compute_pyg import (
 )
 from matgl.layers._activations import ActivationFunction
 from matgl.layers._basis import FourierExpansion, RadialBesselFunction
-from matgl.layers._core import MLP
 from matgl.layers._graph_convolution_pyg import (
     CHGNetAtomGraphBlock,
     CHGNetBondGraphBlock,
+    _GatedMLPNorm,
     _MLPNorm as _EmbedMLP,
 )
 from matgl.utils.cutoff import polynomial_cutoff
@@ -54,10 +56,12 @@ DEFAULT_ELEMENTS = (*list(DEFAULT_ELEMENTS[:83]), "Po", "At", "Rn", "Fr", "Ra", 
 class CHGNet(MatGLModel):
     """CHGNet model — PyG backend.
 
-    Architecturally identical to the DGL ``CHGNet`` model except:
-    - Uses PyTorch Geometric ``Data`` objects instead of DGL graphs.
-    - Fixes the atom-graph message aggregation: messages scatter onto the **source**
-      (central) atom, not the destination (neighbor) atom.
+    Architecturally identical to the DGL ``CHGNet`` model. Uses PyTorch Geometric
+    ``Data`` objects instead of DGL graphs. All message-passing semantics match DGL
+    exactly (center→neighbor edge direction, destination-node aggregation, and the
+    ``torch.no_grad()`` scope around line-graph construction that detaches three-body
+    bond data from the position gradient). Weights are directly transferable via a
+    ``.conv_layer.`` → ``.conv.`` key rename.
     """
 
     __version__ = 1
@@ -245,15 +249,17 @@ class CHGNet(MatGLModel):
         )
 
         # --- final readout MLP ---
+        # _EmbedMLP (_MLPNorm) stores only Linear layers at consecutive indices in
+        # self.layers — matching DGL MLPNorm's key structure for direct weight transfer.
         input_dim = dim_atom_embedding if readout_field == "atom_feat" else dim_bond_embedding
+        _act = activation if activation is not None else nn.SiLU()
         if final_mlp_type == "mlp":
-            self.final_layer = MLP(
-                dims=[input_dim, *final_hidden_dims, num_targets], activation=activation, activate_last=False
+            self.final_layer = _EmbedMLP(
+                dims=[input_dim, *final_hidden_dims, num_targets], activation=_act, activate_last=False
             )
         elif final_mlp_type == "gated":
-            from matgl.layers._core import GatedMLP
-            self.final_layer = GatedMLP(  # type: ignore[assignment]
-                in_feats=input_dim, dims=[*final_hidden_dims, num_targets], activate_last=False
+            self.final_layer = _GatedMLPNorm(  # type: ignore[assignment]
+                in_feats=input_dim, dims=[*final_hidden_dims, num_targets], activation=_act, activate_last=False
             )
         else:
             raise ValueError(f"Invalid final_mlp_type: {final_mlp_type}")
@@ -325,9 +331,10 @@ class CHGNet(MatGLModel):
         # --- directed line graph (bond graph) ---
         if self.use_bond_graph:
             pbc_offset = getattr(g, "pbc_offset", torch.zeros(edge_index.size(1), 3, device=pos.device))
-            lg_edge_index, lg_bond_vec, lg_bond_dist, lg_pbc_offset, lg_src_bond_sign = create_directed_line_graph_pyg(
-                edge_index, pbc_offset, bond_vec, bond_dist, self.three_body_cutoff
-            )
+            with torch.no_grad():
+                lg_edge_index, lg_bond_vec, lg_bond_dist, lg_pbc_offset, lg_src_bond_sign = create_directed_line_graph_pyg(
+                    edge_index, pbc_offset, bond_vec, bond_dist, self.three_body_cutoff
+                )
 
             num_lg_nodes = lg_bond_dist.size(0)
 
@@ -354,10 +361,12 @@ class CHGNet(MatGLModel):
             lg_dst_idx = lg_edge_index[1].long()
             if lg_edge_index.size(1) > 0:
                 cos_theta = compute_theta_pyg(lg_bond_vec, lg_src_bond_sign, lg_src_idx, lg_dst_idx, directed=True)
+                cos_theta = torch.clamp(cos_theta, -1.0 + 1e-7, 1.0 - 1e-7)
+                theta = torch.acos(cos_theta)
             else:
-                cos_theta = torch.zeros(0, device=pos.device)
+                theta = torch.zeros(0, device=pos.device)
 
-            angle_expansion = self.angle_expansion(cos_theta)  # type: ignore[misc]
+            angle_expansion = self.angle_expansion(theta)  # type: ignore[misc]
             angle_features = self.angle_embedding(angle_expansion)  # type: ignore[misc]
 
             fea_dict["angle_expansion"] = angle_expansion
