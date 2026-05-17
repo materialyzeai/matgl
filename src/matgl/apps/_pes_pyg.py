@@ -180,7 +180,7 @@ class Potential(nn.Module, IOMixIn):
             sts = grads[1]
             scale = 1.0 / volume * 160.21766208
             sts = [i * j for i, j in zip(sts, scale, strict=False)] if sts.dim() == 3 else [sts * scale]  # type:ignore[assignment]
-            stresses = torch.stack(sts) if isinstance(sts, list) else sts  # type:ignore[call-overload]
+            stresses = torch.cat(sts) if isinstance(sts, list) else sts  # type:ignore[call-overload]
 
         if self.debug_mode and grads is not None:
             return total_energies, grads[0], grads[1]

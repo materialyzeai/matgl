@@ -232,14 +232,17 @@ class PESCalculator(Calculator):
         system_changes = system_changes or all_changes
         super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
         graph, lattice, state_attr_default = self.graph_converter.get_graph(atoms)
+        device = next(self.potential.parameters()).device
+        graph = graph.to(device)
+        lattice = lattice.to(device)
         if self.total_charge is None:
             total_charge = torch.tensor(
                 atoms.get_initial_charges(),
                 dtype=matgl.float_th,
-                device=graph.device,
+                device=device,
             ).sum()
         else:
-            total_charge = self.total_charge.to(graph.device)
+            total_charge = self.total_charge.to(device)
         # type: ignore
         if self.state_attr is not None:
             calc_result = self.potential(g=graph, lat=lattice, state_attr=self.state_attr)

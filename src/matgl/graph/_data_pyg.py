@@ -125,9 +125,9 @@ def collate_fn_pes(
                     [st[4], st[3], st[2]]
                 ], dtype=matgl.float_th)
             s_list.append(st)
-        s = torch.stack(s_list)
+        s = torch.cat(s_list)
     else:
-        s = torch.zeros((e.size(0), 3, 3), dtype=matgl.float_th)
+        s = torch.zeros((e.size(0) * 3, 3), dtype=matgl.float_th)
     if include_magmom:
         m = torch.cat([d["magmoms"].reshape(-1, 1) for d in labels], dim=0)
     else:
