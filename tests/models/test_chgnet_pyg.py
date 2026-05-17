@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -471,3 +472,143 @@ class TestCHGNetTraining:
                 if "bond_graph_layers" in name and "edge_update_func" in name:
                     continue
                 assert param.grad is not None, f"No gradient for param {name}"
+
+
+# ---------------------------------------------------------------------------
+# MatPES parity: PyG model predictions pinned against DGL reference values.
+# Run the DGL counterpart (test_chgnet.py::test_matpes_model_parity_dgl) with
+# MATGL_BACKEND=DGL; if both suites pass, DGL ↔ PyG parity is guaranteed.
+# ---------------------------------------------------------------------------
+
+# Reference structures: unperturbed + small explicit displacements (fully deterministic).
+_mos = Structure(Lattice.cubic(4.0), ["Mo", "S"], [[0.0, 0.0, 0.0], [0.5, 0.5, 0.5]])
+_fe = Structure(Lattice.cubic(2.87), ["Fe", "Fe"], [[0, 0, 0], [0.5, 0.5, 0.5]])
+_mos_p = Structure(Lattice.cubic(4.0), ["Mo", "S"], [[0.025, -0.015, 0.010], [0.525, 0.490, 0.515]])
+_fe_p = Structure(Lattice.cubic(2.87), ["Fe", "Fe"], [[-0.010, 0.020, -0.025], [0.510, 0.515, 0.480]])
+_PARITY_STRUCTURES = {"mos": _mos, "fe": _fe, "mos_perturbed": _mos_p, "fe_perturbed": _fe_p}
+
+# Pinned reference values computed from the DGL MatPES models (seed=42 perturbations).
+# Tolerance for comparison: atol=1e-5 (covers FP32 precision and DGL↔PyG scatter differences).
+_MATPES_EXPECTED = {
+    ("r2SCAN", "mos"): {
+        "energy_per_atom": -15.1326951981,
+        "forces": [[-1.4901161193847656e-08, -4.470348358154297e-08, -4.470348358154297e-08],
+                   [-1.4901161193847656e-08, 1.4901161193847656e-08, -1.4901161193847656e-08]],
+        "stress": [[17.91497039794922, -3.7303581734704494e-07, 7.460716489049446e-08],
+                   [7.460716489049446e-08, 17.91497039794922, 7.460716489049446e-08],
+                   [7.460716489049446e-08, -7.460716489049446e-08, 17.91497039794922]],
+        "magmom": [[3.052868127822876], [0.20977726578712463]],
+    },
+    ("r2SCAN", "fe"): {
+        "energy_per_atom": -14.4023408890,
+        "forces": [[-7.450580596923828e-09, -7.450580596923828e-09, 1.4901161193847656e-08],
+                   [7.450580596923828e-09, 7.450580596923828e-09, -3.725290298461914e-08]],
+        "stress": [[1.230300784111023, -6.521526643155084e-07, 3.623070483627089e-07],
+                   [-9.41998280268308e-07, 1.2303022146224976, -7.246141109362725e-08],
+                   [-2.173842261754544e-07, -7.246141109362725e-08, 1.2303019762039185]],
+        "magmom": [[2.7359468936920166], [2.7359461784362793]],
+    },
+    ("r2SCAN", "mos_perturbed"): {
+        "energy_per_atom": -15.1329126358,
+        "forces": [[1.3113021850585938e-06, -0.020524345338344574, -0.02052599936723709],
+                   [-1.259148120880127e-06, 0.020524300634860992, 0.02052602730691433]],
+        "stress": [[17.920207977294922, -6.285653853410622e-06, 1.4641656207459164e-06],
+                   [-7.054107300064061e-06, 17.916536331176758, 0.033099982887506485],
+                   [1.2888383480458288e-06, 0.03310035541653633, 17.916536331176758]],
+        "magmom": [[3.0529751777648926], [0.2098957896232605]],
+    },
+    ("r2SCAN", "fe_perturbed"): {
+        "energy_per_atom": -14.3956117630,
+        "forces": [[0.3492530584335327, -0.0908508151769638, 0.09085030853748322],
+                   [-0.3492531180381775, 0.0908508449792862, -0.09085029363632202]],
+        "stress": [[1.0872764587402344, 0.06569133698940277, -0.06568901985883713],
+                   [0.06569119542837143, 0.8566457629203796, -0.006552322767674923],
+                   [-0.06568975001573563, -0.00655217794701457, 0.8566471934318542]],
+        "magmom": [[2.7332448959350586], [2.7332446575164795]],
+    },
+    ("PBE", "mos"): {
+        "energy_per_atom": -5.3955235481,
+        "forces": [[-3.3527612686157227e-08, -3.725290298461914e-09, -3.725290298461914e-09],
+                   [-5.960464477539063e-08, -0.0, -1.4901161193847656e-08]],
+        "stress": [[17.832918167114258, 0.0, 7.460716489049446e-08],
+                   [2.9842865956197784e-07, 17.832918167114258, 7.460716489049446e-08],
+                   [2.9842865956197784e-07, 0.0, 17.832918167114258]],
+        "magmom": [[3.985849142074585], [0.19956068694591522]],
+    },
+    ("PBE", "fe"): {
+        "energy_per_atom": -8.2440567017,
+        "forces": [[1.4901161193847656e-08, -7.078051567077637e-08, -1.4901161193847656e-08],
+                   [7.450580596923828e-09, 8.195638656616211e-08, 3.725290298461914e-08]],
+        "stress": [[6.13809061050415, 7.970755291353271e-07, 8.695369047018175e-07],
+                   [1.159382577498036e-06, 6.138092994689941, -5.072298563391087e-07],
+                   [1.0144597126782173e-06, -5.072298563391087e-07, 6.138092994689941]],
+        "magmom": [[2.379379987716675], [2.379380226135254]],
+    },
+    ("PBE", "mos_perturbed"): {
+        "energy_per_atom": -5.3957433701,
+        "forces": [[6.146728992462158e-07, -0.022980906069278717, -0.02298126369714737],
+                   [-6.854534149169922e-07, 0.022980883717536926, 0.022981271147727966]],
+        "stress": [[17.782638549804688, -3.049567794732866e-06, -1.7066388409148203e-06],
+                   [-3.1098131785256555e-06, 17.778823852539062, -0.04753144085407257],
+                   [-1.3015222748435917e-06, -0.04753126576542854, 17.778823852539062]],
+        "magmom": [[3.9845972061157227], [0.19968606531620026]],
+    },
+    ("PBE", "fe_perturbed"): {
+        "energy_per_atom": -8.2331771851,
+        "forces": [[0.3305317461490631, -0.0892416462302208, 0.0892401784658432],
+                   [-0.3305317759513855, 0.0892416313290596, -0.08924020826816559]],
+        "stress": [[5.753841400146484, 0.08783750236034393, -0.0878354012966156],
+                   [0.08783656358718872, 5.7640204429626465, 0.03972276672720909],
+                   [-0.08783569186925888, 0.0397229827940464, 5.764013290405273]],
+        "magmom": [[2.3732571601867676], [2.373257637023926]],
+    },
+}
+
+_PYG_MODEL_ROOT = Path.home()
+
+
+@pytest.fixture(scope="module", params=["r2SCAN", "PBE"])
+def matpes_pyg_potential(request):
+    functional = request.param
+    pyg_path = _PYG_MODEL_ROOT / f"CHGNet-PyG-MatPES-{functional}-2025.2.10"
+    if not pyg_path.exists():
+        pytest.skip(f"PyG {functional} model not found at {pyg_path}; run transfer_chgnet_dgl_to_pyg.py first")
+    try:
+        pot = matgl.load_model(str(pyg_path))
+    except RuntimeError as e:
+        pytest.skip(f"PyG {functional} model at {pyg_path} failed to load (may need regeneration): {e}")
+    pot.eval()
+    return functional, pot
+
+
+@pytest.mark.parametrize("struct_name", ["mos", "fe", "mos_perturbed", "fe_perturbed"])
+def test_matpes_model_parity_pyg(matpes_pyg_potential, struct_name):
+    """PyG MatPES CHGNet predictions match DGL reference values to within 1e-5."""
+    functional, pot = matpes_pyg_potential
+    struct = _PARITY_STRUCTURES[struct_name]
+    natoms = len(struct)
+
+    conv = Structure2Graph(element_types=pot.model.element_types, cutoff=pot.model.cutoff)
+    g, lat, _ = conv.get_graph(struct)
+    g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
+    g.pos = g.frac_coords @ lat[0]
+
+    out = pot(g=g, lat=lat)
+    energy, forces, stresses, magmom = out[0], out[1], out[2], out[4]
+
+    exp = _MATPES_EXPECTED[(functional, struct_name)]
+    atol = 1e-5
+
+    assert abs(energy.item() / natoms - exp["energy_per_atom"]) < atol, (
+        f"[{functional}/{struct_name}] energy/atom {energy.item()/natoms:.10f} "
+        f"!= {exp['energy_per_atom']:.10f}"
+    )
+    assert torch.allclose(
+        forces.detach(), torch.tensor(exp["forces"], dtype=matgl.float_th), atol=atol
+    ), f"[{functional}/{struct_name}] force mismatch (max diff {(forces.detach() - torch.tensor(exp['forces'], dtype=matgl.float_th)).abs().max():.2e})"
+    assert torch.allclose(
+        stresses.detach(), torch.tensor(exp["stress"], dtype=matgl.float_th), atol=atol
+    ), f"[{functional}/{struct_name}] stress mismatch (max diff {(stresses.detach() - torch.tensor(exp['stress'], dtype=matgl.float_th)).abs().max():.2e})"
+    assert torch.allclose(
+        magmom.detach(), torch.tensor(exp["magmom"], dtype=matgl.float_th), atol=atol
+    ), f"[{functional}/{struct_name}] magmom mismatch (max diff {(magmom.detach() - torch.tensor(exp['magmom'], dtype=matgl.float_th)).abs().max():.2e})"
