@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import inspect
 import json
 import logging
@@ -15,13 +16,29 @@ from typing import cast
 import torch
 from huggingface_hub import HfApi, create_repo, hf_hub_download
 
-import matgl
 from matgl.config import MATGL_CACHE
 
-logger = logging.getLogger(__file__)
+logger = logging.getLogger(__name__)
 
 # Files that comprise a serialized matgl model on disk and on Hugging Face Hub.
 _MODEL_FILES = ("model.pt", "state.pt", "model.json")
+
+# Private backend-split modules under these prefixes always reload through their
+# public package, so the active ``MATGL_BACKEND`` picks the right implementation.
+_PUBLIC_PACKAGE_PREFIXES: tuple[str, ...] = ("matgl.models.", "matgl.apps._pes")
+
+
+def _resolve_module(modname: str) -> str:
+    """Map a private ``matgl.models._*`` / ``matgl.apps._pes_*`` ``@module`` string to its public package.
+
+    Resolves to ``matgl.models`` or ``matgl.apps.pes`` as appropriate.
+    """
+    if modname.startswith("matgl.models._"):
+        return "matgl.models"
+    if modname.startswith("matgl.apps._pes"):
+        return "matgl.apps.pes"
+    return modname
+
 
 # Loose validation pattern for a Hugging Face repo_id ("owner/name" or "owner/name/subfolder"-like).
 _HF_REPO_ID_RE = re.compile(r"^[A-Za-z0-9][\w\-.]*/[\w\-.]+$")
@@ -51,13 +68,14 @@ class IOMixIn:
     """
 
     def save_args(self, locals: dict, kwargs: dict | None = None) -> None:
-        """
-        This method saves the arguments passed to the class initializer. It collects the arguments
-        from the `__init__` method of the class, excluding `self` and `__class__`. If an additional
-        `kwargs` dictionary is provided, it is merged into the collected arguments. If any of the
-        collected arguments are instances of a subclass of `IOMixIn`, those arguments are serialized
-        into a dictionary representation that includes class metadata and initialization arguments.
-        Finally, the arguments are stored as an instance variable `_init_args`.
+        """Save the arguments passed to the class initializer.
+
+        Collects the arguments from the `__init__` method of the class, excluding `self` and
+        `__class__`. If an additional `kwargs` dictionary is provided, it is merged into the
+        collected arguments. If any of the collected arguments are instances of a subclass of
+        `IOMixIn`, those arguments are serialized into a dictionary representation that includes
+        class metadata and initialization arguments. Finally, the arguments are stored as an
+        instance variable `_init_args`.
 
         Args:
             locals (dict): A dictionary containing the local variables passed to the class
@@ -85,8 +103,7 @@ class IOMixIn:
         self._init_args = d
 
     def save(self, path: str | Path = ".", metadata: dict | None = None, makedirs: bool = True):
-        """
-        Saves the state and configuration of the model to the specified path.
+        """Saves the state and configuration of the model to the specified path.
 
         This method saves the model's initialization arguments, model weights,
         and additional metadata into the specified directory. It also creates
@@ -162,19 +179,8 @@ class IOMixIn:
         # Deserialize any args that are IOMixIn subclasses.
         for k, v in d.items():
             if isinstance(v, dict) and "@class" in v and "@module" in v:
-                modname = v["@module"]
+                modname = _resolve_module(v["@module"])
                 classname = v["@class"]
-                cls_lower = classname.lower()
-
-                is_pyg_module = modname.endswith("_pyg")
-                if (
-                    "m3gnet" in cls_lower or "megnet" in cls_lower or "chgnet" in cls_lower or "qet" in cls_lower
-                ) and matgl.config.BACKEND == "PYG" and not is_pyg_module:
-                    warnings.warn(
-                        f"Model {classname} is a DGL model, but the backend is PYG. Setting the backend to DGL.",
-                        stacklevel=2,
-                    )
-                    matgl.set_backend("DGL")
                 mod = __import__(modname, globals(), locals(), [classname], 0)
                 cls_ = getattr(mod, classname)
                 _check_ver(cls_, v)  # Check version of any subclasses too.
@@ -182,7 +188,6 @@ class IOMixIn:
         d = {k: v for k, v in d.items() if not k.startswith("@")}
         model = cls(**d)
         model.load_state_dict(state, strict=False)  # type: ignore
-
         return model
 
     def push_to_hub(
@@ -324,9 +329,8 @@ def load_model(path: str | Path, **kwargs):
         fpaths = _get_file_paths(path, str_path=str_path, **kwargs)
         with open(fpaths["model.json"]) as f:
             d = json.load(f)
-            modname = d["@module"]
+            modname = _resolve_module(d["@module"])
             classname = d["@class"]
-
             mod = __import__(modname, globals(), locals(), [classname], 0)
             cls_ = getattr(mod, classname)
             return cls_.load(fpaths, **kwargs)
@@ -337,9 +341,8 @@ def load_model(path: str | Path, **kwargs):
             " please 'clear your cache by running `python -c 'import matgl; matgl.clear_cache()'`"
         ) from ex
     except BaseException as ex:
-        import traceback
-
-        traceback.print_exc()
+        # The chained ``from ex`` already carries the original traceback to the
+        # caller; no need for a redundant ``traceback.print_exc()`` to stderr.
         raise RuntimeError(
             "Unknown error occurred while loading model. Please review the traceback for more information."
         ) from ex
@@ -385,9 +388,31 @@ def _get_file_paths(path: Path, str_path: str | None = None, **kwargs):
         try:
             return _download_from_hf_hub(hf_repo_id, **kwargs)
         except Exception as err:
-            raise ValueError(f"No valid model found locally or at Hugging Face repo '{hf_repo_id}'.") from err
+            raise ValueError(_format_unknown_model_message(str_path, hf_repo_id=hf_repo_id)) from err
 
-    raise ValueError(f"No valid model found locally or at Hugging Face Hub for identifier '{str_path}'.")
+    raise ValueError(_format_unknown_model_message(str_path))
+
+
+def _format_unknown_model_message(identifier: str, *, hf_repo_id: str | None = None) -> str:
+    """Build a helpful 'model not found' message with nearest-match suggestion.
+
+    When the Hub is reachable, queries ``get_available_pretrained_models`` to build
+    a "Did you mean: ..." hint via ``difflib.get_close_matches``. When the Hub call
+    fails the candidate list is empty and the hint is simply omitted — there is no
+    static fallback because, with the Hub down, the user could not download the
+    model anyway.
+    """
+    candidates = get_available_pretrained_models()
+    suggestions = difflib.get_close_matches(identifier, candidates, n=3, cutoff=0.5)
+    parts = [
+        f"No valid model found locally or at Hugging Face repo '{hf_repo_id}'."
+        if hf_repo_id
+        else f"No valid model found locally or at Hugging Face Hub for identifier '{identifier}'.",
+    ]
+    if suggestions:
+        parts.append(f"Did you mean: {', '.join(suggestions)}?")
+    parts.append("Run `matgl.get_available_pretrained_models()` to list all available models.")
+    return " ".join(parts)
 
 
 def _download_from_hf_hub(
@@ -503,7 +528,9 @@ def get_available_pretrained_models() -> list[str]:
 
     Queries the official ``materialyze`` Hugging Face org and returns the bare model
     names (i.e. without the ``"materialyze/"`` prefix) so they can be passed directly
-    to ``load_model``.
+    to ``load_model``. Returns an empty list when the Hub is unreachable — there is
+    no point shipping a static fallback because, without Hub access, the user could
+    not download any of those models either.
 
     Returns:
         Sorted list of available model names.
