@@ -37,3 +37,5 @@ scripts/compare_relaxation_dgl_pyg.py
 wandb/
 dgl_keys.txt
 pyg_keys.txt
+examples/lightning_logs/
+examples/md.log
