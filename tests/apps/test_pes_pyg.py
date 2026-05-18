@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-import matgl
 import numpy as np
 import pytest
 import torch
 
+import matgl
+
 if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)
+from pymatgen.core import Lattice, Structure
+from torch_geometric.data import Batch
+
 import matgl
 from matgl.apps._pes_pyg import Potential
 from matgl.ext._pymatgen_pyg import Structure2Graph, get_element_list
 from matgl.models._tensornet_pyg import TensorNet
-from pymatgen.core import Lattice, Structure
-from torch_geometric.data import Batch
 
 
 @pytest.fixture
@@ -154,9 +156,9 @@ class TestPotential:
         ff = Potential(model=model_tensornet)
         ff(graph, lat, state)
         fields_after = set(graph.keys())
-        assert (
-            fields_before == fields_after
-        ), f"Potential.forward mutated input graph; added: {fields_after - fields_before}"
+        assert fields_before == fields_after, (
+            f"Potential.forward mutated input graph; added: {fields_after - fields_before}"
+        )
 
     def test_potential_with_stress_fd(self, graph_MoS, model_tensornet):
         p2g = Structure2Graph(element_types=("O", "Zr"), cutoff=5.0)

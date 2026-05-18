@@ -5,12 +5,13 @@ from argparse import Namespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import matgl
 import numpy as np
 import pytest
 import torch
-from matgl import cli
 from pymatgen.core import Lattice, Structure
+
+import matgl
+from matgl import cli
 
 
 # ---------------------------------------------------------------------------

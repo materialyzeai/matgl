@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 import torch.nn
+
 from matgl.data.transformer import Normalizer
 from matgl.models._wrappers import TransformedTargetModel
 

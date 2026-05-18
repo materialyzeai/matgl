@@ -6,10 +6,11 @@ import shutil
 # This function is used for M3GNet property dataset
 from functools import partial
 
-import matgl
 import numpy as np
 import pytest
 from pymatgen.core import Molecule
+
+import matgl
 
 if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)

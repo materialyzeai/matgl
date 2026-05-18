@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-import matgl
 import pytest
+
+import matgl
 
 if matgl.config.BACKEND != "DGL":
     pytest.skip("Skipping DGL tests", allow_module_level=True)
 import dgl
-import matgl
 import torch
+from torch import nn
+
+import matgl
 from matgl.graph._compute_dgl import compute_theta, create_line_graph
 from matgl.layers import (
     BondExpansion,
@@ -31,7 +34,6 @@ from matgl.layers._graph_convolution_dgl import (
     TensorNetInteraction,
 )
 from matgl.utils.cutoff import polynomial_cutoff
-from torch import nn
 
 
 class Graph(NamedTuple):

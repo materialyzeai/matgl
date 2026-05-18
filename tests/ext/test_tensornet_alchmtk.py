@@ -30,24 +30,26 @@
 
 from __future__ import annotations
 
-import matgl
 import pytest
 import torch
+
+import matgl
 
 if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)
 
 pytest.importorskip("nvalchemi", reason="nvalchemi-toolkit required for alchmtk tests")
 
-import numpy as np  # noqa: E402
-from matgl.apps._pes_pyg import Potential  # noqa: E402
-from matgl.ext.alchmtk import TensorNetWrapper  # noqa: E402
-from matgl.graph._compute_pyg import compute_pair_vector_and_distance  # noqa: E402
-from matgl.models._tensornet_pyg import TensorNet  # noqa: E402
-from nvalchemi.data import AtomicData, Batch  # noqa: E402
-from nvalchemi.dynamics.base import DynamicsStage  # noqa: E402
-from nvalchemi.hooks import HookContext, NeighborListHook  # noqa: E402
-from pymatgen.core import Element  # noqa: E402
+import numpy as np
+from nvalchemi.data import AtomicData, Batch
+from nvalchemi.dynamics.base import DynamicsStage
+from nvalchemi.hooks import HookContext, NeighborListHook
+from pymatgen.core import Element
+
+from matgl.apps._pes_pyg import Potential
+from matgl.ext.alchmtk import TensorNetWrapper
+from matgl.graph._compute_pyg import compute_pair_vector_and_distance
+from matgl.models._tensornet_pyg import TensorNet
 
 # 1 eV/A^3 = 160.21766208 GPa
 EV_A3_TO_GPA = 160.21766208

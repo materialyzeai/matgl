@@ -4,8 +4,9 @@ import importlib.util
 import os.path
 from unittest.mock import patch
 
-import matgl
 import pytest
+
+import matgl
 from matgl.config import MATGL_CACHE, clear_cache, ensure_backend
 
 

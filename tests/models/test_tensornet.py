@@ -3,10 +3,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import matgl
 import numpy as np
 import pytest
 import torch
+
+import matgl
 
 BACKEND = matgl.config.BACKEND
 
@@ -329,6 +330,6 @@ def test_warp_pyg_parity_pretrained(structure_fixture, request):
         out_warp = model_warp(g=g)
         out_pyg = model_pyg(g=g)
 
-    assert torch.allclose(
-        out_warp, out_pyg, atol=1e-5, rtol=1e-5
-    ), f"{structure_fixture}: warp={out_warp.detach().cpu()} vs pyg={out_pyg.detach().cpu()}"
+    assert torch.allclose(out_warp, out_pyg, atol=1e-5, rtol=1e-5), (
+        f"{structure_fixture}: warp={out_warp.detach().cpu()} vs pyg={out_pyg.detach().cpu()}"
+    )

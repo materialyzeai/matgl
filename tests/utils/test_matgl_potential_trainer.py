@@ -13,9 +13,10 @@ import gzip
 import json
 import pathlib
 
-import matgl
 import numpy as np
 import pytest
+
+import matgl
 
 if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)

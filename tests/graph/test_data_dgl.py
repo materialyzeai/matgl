@@ -6,16 +6,18 @@ import shutil
 # This function is used for M3GNet property dataset
 from functools import partial
 
-import matgl
 import numpy as np
 import pytest
+
+import matgl
 
 if matgl.config.BACKEND != "DGL":
     pytest.skip("Skipping DGL tests", allow_module_level=True)
 from dgl.data.utils import split_dataset
+from pymatgen.core import Molecule
+
 from matgl.ext.pymatgen import Molecule2Graph, Structure2Graph, get_element_list
 from matgl.graph.data import MGLDataLoader, MGLDataset, collate_fn_graph, collate_fn_pes
-from pymatgen.core import Molecule
 
 module_dir = os.path.dirname(os.path.abspath(__file__))
 

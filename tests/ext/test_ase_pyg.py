@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import os.path
 
-import matgl
 import numpy as np
 import pytest
+
+import matgl
 
 if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)
 
 from ase.build import molecule
-from matgl.ext.ase import Atoms2Graph, M3GNetCalculator, MolecularDynamics, PESCalculator, Relaxer
 from pymatgen.io.ase import AseAtomsAdaptor
+
+from matgl.ext.ase import Atoms2Graph, M3GNetCalculator, MolecularDynamics, PESCalculator, Relaxer
 
 
 def test_PESCalculator_and_M3GNetCalculator(MoS, caplog):

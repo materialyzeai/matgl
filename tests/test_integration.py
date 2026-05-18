@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 
-import matgl
 import pytest
+
+import matgl
 
 
 @pytest.mark.skipif(os.getenv("CI") == "true" or matgl.config.BACKEND != "DGL", reason="Unreliable in CI environments.")

@@ -8,20 +8,22 @@ import shutil
 from functools import partial
 
 import lightning as pl
-import matgl
 import numpy as np
 import pytest
+
+import matgl
 
 if matgl.config.BACKEND != "DGL":
     pytest.skip("Skipping DGL tests", allow_module_level=True)
 import torch.backends.mps
 from dgl.data.utils import split_dataset
+from pymatgen.core import Lattice, Structure
+
 from matgl.ext._pymatgen_dgl import Structure2Graph, get_element_list
 from matgl.graph._data_dgl import MGLDataLoader, MGLDataset, collate_fn_graph, collate_fn_pes
 from matgl.models import CHGNet, M3GNet, MEGNet, SO3Net, TensorNet
 from matgl.models._qet_dgl import QET
 from matgl.utils.training import ModelLightningModule, PotentialLightningModule, xavier_init
-from pymatgen.core import Lattice, Structure
 
 module_dir = os.path.dirname(os.path.abspath(__file__))
 

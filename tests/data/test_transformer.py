@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+
 from matgl.data.transformer import LogTransformer, Normalizer
 
 

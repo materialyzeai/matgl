@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import matgl
 import pytest
 import torch
+
+import matgl
 
 if matgl.config.BACKEND != "PYG":
     pytest.skip("GRACE is PYG-only", allow_module_level=True)

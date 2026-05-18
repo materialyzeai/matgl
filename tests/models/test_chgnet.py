@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 
-import matgl
 import numpy as np
 import pytest
 import torch
 from pymatgen.core import Lattice, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
+
+import matgl
 
 if matgl.config.BACKEND != "DGL":
     pytest.skip("Skipping DGL tests", allow_module_level=True)
@@ -316,19 +317,18 @@ def test_matpes_model_parity_dgl(matpes_dgl_potential, struct_name):
     exp = _MATPES_EXPECTED[(functional, struct_name)]
     atol = 1e-5
 
-    assert (
-        abs(energy.item() / natoms - exp["energy_per_atom"]) < atol
-    ), f"[{functional}/{struct_name}] energy/atom {energy.item()/natoms:.10f} != {exp['energy_per_atom']:.10f}"
+    assert abs(energy.item() / natoms - exp["energy_per_atom"]) < atol, (
+        f"[{functional}/{struct_name}] energy/atom {energy.item() / natoms:.10f} != {exp['energy_per_atom']:.10f}"
+    )
     exp_forces = torch.tensor(exp["forces"], dtype=matgl.float_th)
-    assert torch.allclose(
-        forces.detach(), exp_forces, atol=atol
-    ), f"[{functional}/{struct_name}] force mismatch (max diff {(forces.detach() - exp_forces).abs().max():.2e})"
+    assert torch.allclose(forces.detach(), exp_forces, atol=atol), (
+        f"[{functional}/{struct_name}] force mismatch (max diff {(forces.detach() - exp_forces).abs().max():.2e})"
+    )
     exp_stress = torch.tensor(exp["stress"], dtype=matgl.float_th)
     assert torch.allclose(stresses.detach(), exp_stress, atol=atol), (
-        f"[{functional}/{struct_name}] stress mismatch "
-        f"(max diff {(stresses.detach() - exp_stress).abs().max():.2e})"
+        f"[{functional}/{struct_name}] stress mismatch (max diff {(stresses.detach() - exp_stress).abs().max():.2e})"
     )
     exp_magmom = torch.tensor(exp["magmom"], dtype=matgl.float_th)
-    assert torch.allclose(
-        magmom.detach(), exp_magmom, atol=atol
-    ), f"[{functional}/{struct_name}] magmom mismatch (max diff {(magmom.detach() - exp_magmom).abs().max():.2e})"
+    assert torch.allclose(magmom.detach(), exp_magmom, atol=atol), (
+        f"[{functional}/{struct_name}] magmom mismatch (max diff {(magmom.detach() - exp_magmom).abs().max():.2e})"
+    )

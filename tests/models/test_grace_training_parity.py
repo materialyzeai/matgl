@@ -40,10 +40,11 @@ from __future__ import annotations
 
 import os
 
-import matgl
 import numpy as np
 import pytest
 import torch
+
+import matgl
 
 if matgl.config.BACKEND != "PYG":
     pytest.skip("GRACE is PYG-only", allow_module_level=True)
@@ -59,10 +60,11 @@ tp_presets = pytest.importorskip("tensorpotential.potentials.presets")
 tp_tpmodel = pytest.importorskip("tensorpotential.tpmodel")
 
 
+from pymatgen.io.ase import AseAtomsAdaptor  # noqa: E402
+
 from matgl.apps.pes import Potential  # noqa: E402
 from matgl.ext.pymatgen import Structure2Graph  # noqa: E402
 from matgl.models import GRACE  # noqa: E402
-from pymatgen.io.ase import AseAtomsAdaptor  # noqa: E402
 
 # Shared training hyperparameters. Kept tiny so the test runs in seconds
 # even on CPU-only CI: 6 Chebyshev radials, n_rad_max=6, lmax=2,

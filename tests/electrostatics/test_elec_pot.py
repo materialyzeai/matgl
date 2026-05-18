@@ -6,9 +6,10 @@ import importlib
 import math
 from types import SimpleNamespace
 
-import matgl
 import pytest
 import torch
+
+import matgl
 from matgl.config import COULOMB_CONSTANT
 from matgl.electrostatics._elec_pot_pyg import ElectrostaticPotential as ElectrostaticPotentialPyG
 from matgl.utils.cutoff import polynomial_cutoff
@@ -79,6 +80,7 @@ def test_elec_pot_pyg_gradient_flow():
 def test_elec_pot_dgl_pyg_parity():
     """Identical inputs must give identical per-atom potentials in DGL and PyG."""
     import dgl
+
     from matgl.electrostatics._elec_pot_dgl import ElectrostaticPotential as ElectrostaticPotentialDGL
 
     cutoff = 5.0
