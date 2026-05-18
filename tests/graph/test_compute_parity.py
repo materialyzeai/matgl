@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import dgl
+import numpy as np
 import pytest
 import torch
-from matgl.ext.pymatgen import Structure2Graph, get_element_list
-from matgl.graph._compute_dgl import _create_directed_line_graph
-from matgl.graph._compute_pyg import create_directed_line_graph_pyg
 from pymatgen.core import Lattice, Structure
 
+from matgl.ext._pymatgen_pyg import Structure2Graph, get_element_list
+from matgl.graph._compute_dgl import _create_directed_line_graph
+from matgl.graph._compute_pyg import create_directed_line_graph_pyg
 
-@pytest.fixture()
+
+@pytest.fixture
 def base_structure() -> Structure:
     """Returns a basic silicon lattice."""
     lattice = Lattice.cubic(5.43)
@@ -42,7 +44,7 @@ def test_line_graph_parity(base_structure, seed):
 
     # Generate common inputs
     converter = Structure2Graph(element_types=get_element_list([struct]), cutoff=5.0)
-    g, lat, state = converter.get_graph(struct)
+    g, _lat, _state = converter.get_graph(struct)
 
     # PyG data extraction
     edge_index = g.edge_index
@@ -58,7 +60,7 @@ def test_line_graph_parity(base_structure, seed):
     three_body_cutoff = 100.0  # allow all bonds
 
     # Generate PyG Line Graph
-    lg_edge_index, lg_bond_vec, lg_bond_dist, lg_pbc_offset, lg_src_bond_sign = create_directed_line_graph_pyg(
+    lg_edge_index, _lg_bond_vec, _lg_bond_dist, _lg_pbc_offset, _lg_src_bond_sign = create_directed_line_graph_pyg(
         edge_index, pbc_offset, bond_vec, bond_dist, threebody_cutoff=three_body_cutoff
     )
 
@@ -94,8 +96,6 @@ def test_line_graph_parity(base_structure, seed):
         arr = edges.cpu().numpy()
         idx = np.lexsort((arr[:, 1], arr[:, 0]))
         return arr[idx]
-
-    import numpy as np
 
     pyg_sorted = sort_edges(lg_edge_index[0], lg_edge_index[1])
     dgl_sorted = sort_edges(lg_src_dgl, lg_dst_dgl)
