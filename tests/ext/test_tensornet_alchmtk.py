@@ -58,7 +58,7 @@ EV_A3_TO_GPA = 160.21766208
 # ------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def model_tensornet():
     """Same convention as test_pes_pyg — small TensorNet for MoS."""
     return TensorNet(
@@ -72,7 +72,7 @@ def model_tensornet():
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def model_tensornet_ch4():
     """Small TensorNet for CH4 molecule tests."""
     return TensorNet(
@@ -85,7 +85,7 @@ def model_tensornet_ch4():
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def potential_ch4(model_tensornet_ch4):
     return Potential(
         model=model_tensornet_ch4,
@@ -96,7 +96,7 @@ def potential_ch4(model_tensornet_ch4):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def potential(model_tensornet):
     return Potential(
         model=model_tensornet,
@@ -107,7 +107,7 @@ def potential(model_tensornet):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def potential_with_refs(model_tensornet):
     refs = torch.tensor([-1.5, -2.3], dtype=torch.float32)  # Mo, S
     return Potential(

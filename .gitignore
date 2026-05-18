@@ -30,12 +30,8 @@ venv
 .venv_dgl
 .conda
 
-experimental/
-scripts/CHGNet-PyG-*/
-scripts/transfer_chgnet_dgl_to_pyg.py
-scripts/compare_relaxation_dgl_pyg.py
+scratch/
 wandb/
-dgl_keys.txt
-pyg_keys.txt
-examples/lightning_logs/
+lightning_logs/
 examples/md.log
+.claude/

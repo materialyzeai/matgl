@@ -15,7 +15,7 @@ from pymatgen.core import Lattice, Structure
 from torch_geometric.data import Batch
 
 
-@pytest.fixture()
+@pytest.fixture
 def model_tensornet():
     return TensorNet(
         elment_types=["Mo", "S"], is_intensive=False, units=64, use_smooth=True, max_n=5, rbf_type="SphericalBessel"

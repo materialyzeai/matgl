@@ -23,12 +23,12 @@ from matgl.layers import (
 from matgl.layers._core import MLP, GatedMLP
 
 
-@pytest.fixture()
+@pytest.fixture
 def x():
     return torch.randn(4, 10, requires_grad=True)
 
 
-@pytest.fixture()
+@pytest.fixture
 def graph():
     structure = Structure(Lattice.cubic(4.05), ["Al"] * 4, [(0, 0, 0), (0.5, 0.5, 0), (0.5, 0, 0.5), (0, 0.5, 0.5)])
     converter = Structure2Graph(element_types=get_element_list([structure]), cutoff=6.0)

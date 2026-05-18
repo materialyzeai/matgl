@@ -18,7 +18,7 @@ else:
     pytest.skip(f"Unsupported backend: {BACKEND}", allow_module_level=True)
 
 
-@pytest.fixture()
+@pytest.fixture
 def example_data():
     if BACKEND == "DGL":
         element_types = "H"

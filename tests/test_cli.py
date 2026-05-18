@@ -50,19 +50,19 @@ def test_entrypoint(Mo):
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def tiny_structure():
     return Structure(Lattice.cubic(3.5), ["Mo", "Mo"], [[0, 0, 0], [0.5, 0.5, 0.5]])
 
 
-@pytest.fixture()
+@pytest.fixture
 def tiny_cif(tmp_path, tiny_structure):
     path = tmp_path / "Mo.cif"
     tiny_structure.to(filename=str(path))
     return path
 
 
-@pytest.fixture()
+@pytest.fixture
 def fake_potential():
     pot = MagicMock(name="Potential")
     pot.predict_structure.return_value = torch.tensor([-1.234])

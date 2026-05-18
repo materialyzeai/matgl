@@ -35,7 +35,7 @@ DIM = 16
 RBF_DIM = 9
 
 
-@pytest.fixture()
+@pytest.fixture
 def toy_graph():
     """Returns (edge_index, atom_feat, bond_feat, bond_expansion) for a toy graph."""
     torch.manual_seed(0)
