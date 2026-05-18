@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import matgl
 import numpy as np
 import pytest
 import torch
 from pymatgen.core import Lattice, Structure
 from torch_geometric.data import Batch
+
+import matgl
 
 if matgl.config.BACKEND != "PYG":
     pytest.skip("Skipping PYG tests", allow_module_level=True)
@@ -263,12 +262,12 @@ class TestSaveLoad:
 
 
 class TestCHGNetPotential:
-    @pytest.fixture()
+    @pytest.fixture
     def potential(self, default_model):
         return Potential(model=default_model, calc_hessian=True)
 
     def test_efsh_shapes(self, mos_graph, potential):
-        structure, g, lat, state = mos_graph
+        structure, g, _lat, state = mos_graph
         lat_t = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
         e, f, s, h = potential(g, lat_t, state)
         assert torch.numel(e) == 1
@@ -277,7 +276,7 @@ class TestCHGNetPotential:
         assert h.shape == (structure.num_sites * 3, structure.num_sites * 3)
 
     def test_efs_shapes(self, mos_graph, default_model):
-        structure, g, lat, state = mos_graph
+        structure, g, _lat, state = mos_graph
         lat_t = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
         ff = Potential(model=default_model)
         e, f, s, h = ff(g, lat_t, state)
@@ -287,18 +286,18 @@ class TestCHGNetPotential:
         assert h.shape[0] == 1  # not computed
 
     def test_forces_only(self, mos_graph, default_model):
-        structure, g, lat, state = mos_graph
+        structure, g, _lat, state = mos_graph
         lat_t = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
         ff = Potential(model=default_model, calc_stresses=False)
-        e, f, s, h = ff(g, lat_t, state)
+        e, f, _s, _h = ff(g, lat_t, state)
         assert torch.numel(e) == 1
         assert f.shape == (structure.num_sites, 3)
 
     def test_energy_only(self, mos_graph, default_model):
-        structure, g, lat, state = mos_graph
+        structure, g, _lat, state = mos_graph
         lat_t = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
         ff = Potential(model=default_model, calc_forces=False, calc_stresses=False)
-        e, f, s, h = ff(g, lat_t, state)
+        e, _f, _s, _h = ff(g, lat_t, state)
         assert torch.numel(e) == 1
 
     def test_forces_finite_difference(self, default_model):
@@ -314,9 +313,9 @@ class TestCHGNetPotential:
             g, lat, state = p2g.get_graph(struct)
             return g, lat, state
 
-        g_m, lat_m, state = make_graph(struct_m)
-        g_0, lat_0, _ = make_graph(struct_0)
-        g_p, lat_p, _ = make_graph(struct_p)
+        g_m, _lat_m, state = make_graph(struct_m)
+        g_0, _lat_0, _ = make_graph(struct_0)
+        g_p, _lat_p, _ = make_graph(struct_p)
 
         lat_m_t = torch.tensor(struct_m.lattice.matrix, dtype=matgl.float_th)
         lat_0_t = torch.tensor(struct_0.lattice.matrix, dtype=matgl.float_th)
@@ -347,7 +346,7 @@ class TestCHGNetPotential:
             ]
         )
         ff = Potential(model=default_model)
-        e, f, s, h = ff(batched, lat, None)
+        e, f, s, _h = ff(batched, lat, None)
         assert e.shape == (2,)
         assert f.shape == (batched.num_nodes, 3)
         assert s.shape == (6, 3)  # 2 structures x 3 rows
@@ -364,16 +363,16 @@ class TestCHGNetPotential:
         _, g.bond_dist = compute_pair_vector_and_distance(g.pos, g.edge_index, g.pbc_offshift)
         lat_t = torch.tensor(mos_structure.lattice.matrix, dtype=matgl.float_th)
         ff = Potential(model=default_model, calc_repuls=True)
-        e, f, s, h = ff(g, lat_t, state)
+        e, _f, _s, _h = ff(g, lat_t, state)
         assert torch.isfinite(e)
 
     def test_with_element_refs(self, mos_graph, default_model):
-        structure, g, lat, state = mos_graph
+        structure, g, _lat, state = mos_graph
         lat_t = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
         # Dummy per-element energy references (same length as element_types)
         refs = torch.zeros(len(default_model.element_types))
         ff = Potential(model=default_model, element_refs=refs.numpy())
-        e, f, s, h = ff(g, lat_t, state)
+        e, _f, _s, _h = ff(g, lat_t, state)
         assert torch.isfinite(e)
 
 
@@ -401,7 +400,7 @@ class TestCHGNetTraining:
             num_blocks=2,
             bond_update_hidden_dims=(16,),
         )
-        g, lat, _ = self._fresh_graph(mos_structure, model)
+        g, _lat, _ = self._fresh_graph(mos_structure, model)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
         optimizer.zero_grad()
@@ -449,11 +448,11 @@ class TestCHGNetTraining:
         )
         ff = Potential(model=model)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-        g, lat, state = self._fresh_graph(mos_structure, model)
+        g, _lat, state = self._fresh_graph(mos_structure, model)
         lat_t = torch.tensor(mos_structure.lattice.matrix, dtype=matgl.float_th)
 
         optimizer.zero_grad()
-        e, f, s, h = ff(g, lat_t, state)
+        e, f, _s, _h = ff(g, lat_t, state)
         loss = e.sum() + f.pow(2).sum()
         loss.backward()
         optimizer.step()
@@ -591,19 +590,17 @@ _MATPES_EXPECTED = {
     },
 }
 
-_PYG_MODEL_ROOT = Path.home()
+_PYG_MODEL_NAME = "CHGNet-PyG-MatPES-{functional}-2025.2.10"
 
 
 @pytest.fixture(scope="module", params=["r2SCAN", "PBE"])
 def matpes_pyg_potential(request):
     functional = request.param
-    pyg_path = _PYG_MODEL_ROOT / f"CHGNet-PyG-MatPES-{functional}-2025.2.10"
-    if not pyg_path.exists():
-        pytest.skip(f"PyG {functional} model not found at {pyg_path}; run transfer_chgnet_dgl_to_pyg.py first")
+    model_name = _PYG_MODEL_NAME.format(functional=functional)
     try:
-        pot = matgl.load_model(str(pyg_path))
-    except RuntimeError as e:
-        pytest.skip(f"PyG {functional} model at {pyg_path} failed to load (may need regeneration): {e}")
+        pot = matgl.load_model(model_name)
+    except Exception as e:
+        pytest.skip(f"PyG {functional} model '{model_name}' could not be loaded: {e}")
     pot.eval()
     return functional, pot
 
