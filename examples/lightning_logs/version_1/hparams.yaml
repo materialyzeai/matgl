@@ -1,0 +1,52 @@
+allow_missing_labels: false
+charge_weight: 0.0
+data_mean: 0.0
+data_std: 1.0
+decay_alpha: 0.01
+decay_steps: 1000
+element_refs: !!python/object/apply:numpy._core.multiarray._reconstruct
+  args:
+  - !!python/name:numpy.ndarray ''
+  - !!python/tuple
+    - 0
+  - !!binary |
+    Yg==
+  state: !!python/tuple
+  - 1
+  - !!python/tuple
+    - 89
+  - !!python/object/apply:numpy.dtype
+    args:
+    - f4
+    - false
+    - true
+    state: !!python/tuple
+    - 3
+    - <
+    - null
+    - null
+    - null
+    - -1
+    - -1
+    - 0
+  - false
+  - !!binary |
+    Q7hvwCrvIMACroTADNtzwBHO2cDm9hHBCIPKwMzOAMFl4M3Aj8D0v7U0hcCA5YLAnWjxwG2aFsGe
+    ch7BK8cPwfdq3cDTUZvA2XvVwGx4LME5q0XBuJ5twTtzbsFbRXDB44R1wb0oX8F4BEzBI68vwRHZ
+    IcFVJg/BL/g/wQ59XcFhFWfBlAhwwQ5uXsH6JmLAz7NpwTa5jcGJ0LPByfO9wV1oyMFUTc7BepTA
+    wQRow8HZUL3Bk6ezwVC/oMH0WaPBJ2a2wfYlxsF4M83BJXnMwS1CxsEqgC/BsObQwazN8sHD5APC
+    T7kBwj6QC8KRZhPCH2UMwnziH8JN7CbCljsywvsAJ8LBQCfCykojwvt4IMLU0xvCcRgUwkHGH8Li
+    5zXCT6dCwjFyScJlKkvC0mpNwlLrRsIljkvC8Z9Hwr0AQMLhb1LCO7JfwuTjZ8KFBYjCQkSTwtXi
+    mMK5I6LCi7GlwgUirMI=
+energy_weight: 1.0
+force_weight: 1.0
+include_line_graph: false
+loss: huber_loss
+loss_params: null
+lr: 0.0001
+magmom_target: absolute
+magmom_weight: 0.0
+optimizer: null
+scheduler: null
+stress_weight: 0.1
+sync_dist: false
