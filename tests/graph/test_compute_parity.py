@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import dgl
 import numpy as np
 import pytest
 import torch
 from pymatgen.core import Lattice, Structure
 
-from matgl.ext._pymatgen_pyg import Structure2Graph, get_element_list
-from matgl.graph._compute_dgl import _create_directed_line_graph
-from matgl.graph._compute_pyg import create_directed_line_graph_pyg
+dgl = pytest.importorskip("dgl", reason="DGL not installed; skipping PyG/DGL parity tests")
+
+from matgl.ext._pymatgen_pyg import Structure2Graph, get_element_list  # noqa: E402
+from matgl.graph._compute_dgl import _create_directed_line_graph  # noqa: E402
+from matgl.graph._compute_pyg import create_directed_line_graph_pyg  # noqa: E402
 
 
 @pytest.fixture
