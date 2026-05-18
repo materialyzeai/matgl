@@ -472,7 +472,7 @@ class CHGNet(MatGLModel):
             structure_properties = self._pool(per_edge, edge_batch, num_graphs)
         else:  # angle_feat
             per_angle = self.final_dropout(self.final_layer(angle_features))
-            lg_src_batch = batch[edge_index[0][bond_index[lg_src_idx]]] if batch is not None else None
+            lg_src_batch = batch[edge_index[0][bond_index[lg_src_idx]]] if batch is not None else None  # type: ignore[index]
             structure_properties = self._pool(per_angle, lg_src_batch, num_graphs)
 
         structure_properties = torch.squeeze(structure_properties)
@@ -500,7 +500,7 @@ class CHGNet(MatGLModel):
     # ------------------------------------------------------------------
     # Convenience method
     # ------------------------------------------------------------------
-    def predict_structure(
+    def predict_structure(  # type: ignore[override]
         self,
         structure,
         state_feats: torch.Tensor | None = None,

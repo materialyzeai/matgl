@@ -134,7 +134,7 @@ class Potential(nn.Module, IOMixIn):
             # "This backward function was compiled with non-empty donated buffers".
             import torch._functorch.config as _ftconfig
 
-            _ftconfig.donated_buffer = False
+            _ftconfig.donated_buffer = False  # type: ignore[attr-defined]
             self.model = torch.compile(model, mode=compile_mode, dynamic=True)
         else:
             self.model = model

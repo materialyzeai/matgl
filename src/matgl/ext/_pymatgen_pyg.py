@@ -91,7 +91,7 @@ class Molecule2Graph(GraphConverter):
             src_id, dst_id = adj.row, adj.col
             images = np.zeros((len(src_id), 3))  # type: ignore[assignment]
             lattice_matrix = np.expand_dims(np.identity(3), axis=0)  # type: ignore[assignment]
-            positions = cart_coords
+            positions = cart_coords  # type: ignore[assignment]
 
         g, lat, _ = super().get_graph_from_processed_structure(
             mol,
@@ -152,7 +152,7 @@ class Structure2Graph(GraphConverter):
 
             numerical_tol = 1.0e-8
             pbc = np.array([1, 1, 1], dtype=np.int64)
-            lattice_matrix = structure.lattice.matrix
+            lattice_matrix = structure.lattice.matrix  # type: ignore[assignment]
             cart_coords = structure.cart_coords
             src_id, dst_id, images, bond_dist = find_points_in_spheres(
                 cart_coords,

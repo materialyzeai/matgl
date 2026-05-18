@@ -734,13 +734,19 @@ class CHGNetGraphConv(nn.Module):
         rbf_order: int = 0,
     ) -> CHGNetGraphConv:
         """Build a ``CHGNetGraphConv`` from layer dimension lists."""
-        gmlp_kw = {"activation": activation, "normalization": normalization, "normalize_hidden": normalize_hidden}
-
-        node_update_func = _GatedMLPNorm(node_dims[0], node_dims[1:], **gmlp_kw)
+        node_update_func = _GatedMLPNorm(
+            node_dims[0], node_dims[1:], activation, normalization=normalization, normalize_hidden=normalize_hidden
+        )
         node_out_func = nn.Linear(node_dims[-1], node_dims[-1], bias=False)
         node_weight_func = nn.Linear(rbf_order, node_dims[-1], bias=False) if rbf_order > 0 else None
 
-        edge_update_func = _GatedMLPNorm(edge_dims[0], edge_dims[1:], **gmlp_kw) if edge_dims is not None else None
+        edge_update_func = (
+            _GatedMLPNorm(
+                edge_dims[0], edge_dims[1:], activation, normalization=normalization, normalize_hidden=normalize_hidden
+            )
+            if edge_dims is not None
+            else None
+        )
         edge_weight_func = (
             nn.Linear(rbf_order, edge_dims[-1], bias=False) if rbf_order > 0 and edge_dims is not None else None
         )
@@ -771,6 +777,7 @@ class CHGNetGraphConv(nn.Module):
             inputs = torch.cat([atom_i, edge_features, atom_j, state_feat_per_edge], dim=-1)
         else:
             inputs = torch.cat([atom_i, edge_features, atom_j], dim=-1)
+        assert self.edge_update_func is not None
         edge_update = self.edge_update_func(inputs)
         if self.edge_weight_func is not None:
             edge_update = edge_update * self.edge_weight_func(bond_expansion.float())
@@ -822,6 +829,7 @@ class CHGNetGraphConv(nn.Module):
             counts = torch.bincount(batch.long(), minlength=num_graphs).float().clamp(min=1)
             node_avg = node_avg / counts.unsqueeze(1)
         inputs = torch.cat([state_attr, node_avg], dim=-1)
+        assert self.state_update_func is not None
         return self.state_update_func(inputs)
 
     def forward(
@@ -972,15 +980,19 @@ class CHGNetLineGraphConv(nn.Module):
         normalize_hidden: bool = False,
         node_weight_input_dims: int = 0,
     ) -> CHGNetLineGraphConv:
-        gmlp_kw = {
-            "activation": activation or nn.SiLU(),
-            "normalization": normalization,
-            "normalize_hidden": normalize_hidden,
-        }
-        node_update_func = _GatedMLPNorm(node_dims[0], node_dims[1:], **gmlp_kw)
+        act = activation or nn.SiLU()
+        node_update_func = _GatedMLPNorm(
+            node_dims[0], node_dims[1:], act, normalization=normalization, normalize_hidden=normalize_hidden
+        )
         node_out_func = nn.Linear(node_dims[-1], node_dims[-1], bias=False)
         node_weight_func = nn.Linear(node_weight_input_dims, node_dims[-1]) if node_weight_input_dims > 0 else None
-        edge_update_func = _GatedMLPNorm(edge_dims[0], edge_dims[1:], **gmlp_kw) if edge_dims is not None else None
+        edge_update_func = (
+            _GatedMLPNorm(
+                edge_dims[0], edge_dims[1:], act, normalization=normalization, normalize_hidden=normalize_hidden
+            )
+            if edge_dims is not None
+            else None
+        )
         return cls(node_update_func, node_out_func, edge_update_func, node_weight_func)
 
     def node_update_(
@@ -1021,6 +1033,7 @@ class CHGNetLineGraphConv(nn.Module):
         bonds_i = node_features[lg_src]
         bonds_j = node_features[lg_dst]
         inputs = torch.cat([bonds_i, edge_features, aux_edge_features, bonds_j], dim=-1)
+        assert self.edge_update_func is not None
         return self.edge_update_func(inputs)
 
     def forward(
