@@ -590,7 +590,7 @@ _MATPES_EXPECTED = {
     },
 }
 
-_PYG_MODEL_NAME = "CHGNet-PyG-MatPES-{functional}-2025.2.10"
+_PYG_MODEL_NAME = "BowenD-UCB/CHGNet-PyG-MatPES-{functional}-2025.2.10"
 
 
 @pytest.fixture(scope="module", params=["r2SCAN", "PBE"])
