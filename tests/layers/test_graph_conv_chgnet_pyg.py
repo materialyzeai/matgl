@@ -153,13 +153,12 @@ class TestCHGNetGraphConv:
 
     def test_message_scatters_onto_src_not_dst(self, toy_graph):
         """Key bug-fix test: messages must accumulate on SRC (central atom)."""
-        edge_index, atom_feat, bond_feat, bond_expansion = toy_graph
+        edge_index, _, _, _ = toy_graph
         src, dst = edge_index[0], edge_index[1]
         messages = torch.ones(NUM_BONDS, DIM)
 
-        # Correct: scatter onto src
+        # scatter onto src (center atoms) vs dst (neighbor atoms)
         correct = scatter_add(messages, src, dim=0, dim_size=NUM_ATOMS)
-        # Wrong: scatter onto dst (old DGL behavior)
         wrong = scatter_add(messages, dst, dim=0, dim_size=NUM_ATOMS)
 
         # Atom 0 sends 2 edges (0→1, 0→2) → should receive 2 messages as src
@@ -213,7 +212,7 @@ class TestCHGNetGraphConv:
             node_dims=[2 * DIM + DIM, DIM, DIM],
         )
         batch = torch.zeros(NUM_ATOMS, dtype=torch.long)
-        new_atom, new_bond, _ = conv(
+        new_atom, _, _ = conv(
             edge_index,
             atom_feat,
             bond_feat,
@@ -285,7 +284,7 @@ class TestCHGNetAtomGraphBlock:
             atom_hidden_dims=[DIM],
             normalization="layer",
         )
-        new_atom, new_bond, _ = block(
+        new_atom, _, _ = block(
             edge_index,
             atom_feat,
             bond_feat,
@@ -332,7 +331,7 @@ class TestLineGraphConstruction:
         bond_dist = torch.tensor([1.0, 2.0, 2.5])
         pbc_offset = torch.zeros(NUM_BONDS, 3)
 
-        lg_ei, lg_bvec, lg_bdist, lg_pbc, lg_sign = create_directed_line_graph_pyg(
+        lg_ei, lg_bvec, lg_bdist, _, lg_sign = create_directed_line_graph_pyg(
             edge_index, pbc_offset, bond_vec, bond_dist, threebody_cutoff=3.0
         )
         assert lg_ei.shape[0] == 2
@@ -346,7 +345,7 @@ class TestLineGraphConstruction:
         bond_dist = torch.tensor([5.0, 6.0, 7.0])
         pbc_offset = torch.zeros(NUM_BONDS, 3)
 
-        lg_ei, lg_bvec, lg_bdist, _, _ = create_directed_line_graph_pyg(
+        lg_ei, lg_bvec, _, _, _ = create_directed_line_graph_pyg(
             edge_index, pbc_offset, bond_vec, bond_dist, threebody_cutoff=1.0
         )
         assert lg_ei.shape[1] == 0
@@ -480,7 +479,7 @@ class TestCHGNetBondGraphBlock:
             bond_hidden_dims=[DIM],
             angle_hidden_dims=None,  # no angle update
         )
-        new_bond, new_angle = block(
+        new_bond, _ = block(
             lg_edge_index,
             bond_feat,
             angle_feat,

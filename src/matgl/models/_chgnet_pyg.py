@@ -109,41 +109,41 @@ class CHGNet(MatGLModel):
         """Initialize CHGNet PyG model.
 
         Args:
-        element_types: List of element types. Defaults to DEFAULT_ELEMENTS.
-        dim_atom_embedding: Atom embedding dimension. Default = 64
-        dim_bond_embedding: Bond embedding dimension. Default = 64
-        dim_angle_embedding: Angle embedding dimension. Default = 64
-        dim_state_embedding: State embedding dimension. Default = None
-        dim_state_feats: Number of state features. Default = None
-        non_linear_bond_embedding: Non-linear bond embedding. Default = False
-        non_linear_angle_embedding: Non-linear angle embedding. Default = False
-        cutoff: Atom graph cutoff radius. Default = 6.0
-        threebody_cutoff: Three-body cutoff radius. Default = 3.0
-        cutoff_exponent: Polynomial cutoff exponent. Default = 5
-        max_n: Radial basis functions count. Default = 9
-        max_f: Fourier expansion terms. Default = 4
-        learn_basis: Learnable basis frequencies. Default = True
-        num_blocks: Number of graph convolution blocks. Default = 4
-        shared_bond_weights: Shared bond distance weights. Default = "both"
-        layer_bond_weights: Per-layer bond weights. Default = None
-        atom_conv_hidden_dims: Atom conv hidden dims. Default = (64,)
-        bond_update_hidden_dims: Bond update hidden dims. Default = None
-        bond_conv_hidden_dims: Bond conv hidden dims. Default = (64,)
-        angle_update_hidden_dims: Angle update hidden dims. Default = ()
-        conv_dropout: Convolution dropout. Default = 0.0
-        final_mlp_type: Readout MLP type ("gated" or "mlp"). Default = "mlp"
-        final_hidden_dims: Readout MLP hidden dims. Default = (64, 64)
-        final_dropout: Readout dropout. Default = 0.0
-        pooling_operation: Graph pooling ("sum" or "mean"). Default = "sum"
-        readout_field: Feature field to read out from. Default = "atom_feat"
-        activation_type: Activation function name. Default = "swish"
-        normalization: Normalization type. Only "layer" supported. Default = None
-        normalize_hidden: Normalize hidden layers. Default = False
-        is_intensive: Intensive target. Default = False
-        num_targets: Number of targets. Default = 1
-        num_site_targets: Number of site-wise targets. Default = 1
-        task_type: "regression" or "classification". Default = "regression"
-        **kwargs: Additional keyword arguments.
+            element_types: List of element types. Defaults to DEFAULT_ELEMENTS.
+            dim_atom_embedding: Atom embedding dimension. Default = 64
+            dim_bond_embedding: Bond embedding dimension. Default = 64
+            dim_angle_embedding: Angle embedding dimension. Default = 64
+            dim_state_embedding: State embedding dimension. Default = None
+            dim_state_feats: Number of state features. Default = None
+            non_linear_bond_embedding: Non-linear bond embedding. Default = False
+            non_linear_angle_embedding: Non-linear angle embedding. Default = False
+            cutoff: Atom graph cutoff radius. Default = 6.0
+            threebody_cutoff: Three-body cutoff radius. Default = 3.0
+            cutoff_exponent: Polynomial cutoff exponent. Default = 5
+            max_n: Radial basis functions count. Default = 9
+            max_f: Fourier expansion terms. Default = 4
+            learn_basis: Learnable basis frequencies. Default = True
+            num_blocks: Number of graph convolution blocks. Default = 4
+            shared_bond_weights: Shared bond distance weights. Default = "both"
+            layer_bond_weights: Per-layer bond weights. Default = None
+            atom_conv_hidden_dims: Atom conv hidden dims. Default = (64,)
+            bond_update_hidden_dims: Bond update hidden dims. Default = None
+            bond_conv_hidden_dims: Bond conv hidden dims. Default = (64,)
+            angle_update_hidden_dims: Angle update hidden dims. Default = ()
+            conv_dropout: Convolution dropout. Default = 0.0
+            final_mlp_type: Readout MLP type ("gated" or "mlp"). Default = "mlp"
+            final_hidden_dims: Readout MLP hidden dims. Default = (64, 64)
+            final_dropout: Readout dropout. Default = 0.0
+            pooling_operation: Graph pooling ("sum" or "mean"). Default = "sum"
+            readout_field: Feature field to read out from. Default = "atom_feat"
+            activation_type: Activation function name. Default = "swish"
+            normalization: Normalization type. Only "layer" supported. Default = None
+            normalize_hidden: Normalize hidden layers. Default = False
+            is_intensive: Intensive target. Default = False
+            num_targets: Number of targets. Default = 1
+            num_site_targets: Number of site-wise targets. Default = 1
+            task_type: "regression" or "classification". Default = "regression"
+            **kwargs: Additional keyword arguments.
         """
         super().__init__()
         self.save_args(locals(), kwargs)
@@ -265,7 +265,7 @@ class CHGNet(MatGLModel):
 
         # --- final readout MLP ---
         # _EmbedMLP (_MLPNorm) stores only Linear layers at consecutive indices in
-        # self.layers — matching DGL MLPNorm's key structure for direct weight transfer.
+        # self.layers -- matching DGL MLPNorm's key structure for direct weight transfer.
         input_dim = dim_atom_embedding if readout_field == "atom_feat" else dim_bond_embedding
         _act = activation if activation is not None else nn.SiLU()
         if final_mlp_type == "mlp":

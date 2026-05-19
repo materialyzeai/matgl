@@ -786,8 +786,8 @@ class CHGNetGraphConv(nn.Module):
         return edge_update
 
     # ------------------------------------------------------------------
-    # Node update — scatter onto DST (neighbor), matching DGL fn.sum semantics.
-    # Edges go center(src)→neighbor(dst); fn.sum accumulates at dst.
+    # Node update -- scatter onto DST (neighbor), matching DGL fn.sum semantics.
+    # Edges go center(src)->neighbor(dst); fn.sum accumulates at dst.
     # ------------------------------------------------------------------
     def node_update_(
         self,
@@ -811,7 +811,7 @@ class CHGNetGraphConv(nn.Module):
             messages = messages * self.node_weight_func(bond_expansion.float())
         if shared_weights is not None:
             messages = messages * shared_weights
-        # Scatter onto DST (neighbor) — matches DGL fn.sum aggregation direction
+        # Scatter onto DST (neighbor) -- matches DGL fn.sum aggregation direction
         feat_update = scatter_add(messages, dst, dim=0, dim_size=num_nodes)
         return self.node_out_func(feat_update)
 
@@ -864,7 +864,7 @@ class CHGNetGraphConv(nn.Module):
         else:
             new_edge_features = edge_features
 
-        # Node update — scatter onto src (central atoms)
+        # Node update -- scatter onto dst (neighbor atoms)
         node_update = self.node_update_(
             src, dst, node_features, new_edge_features, bond_expansion, state_per_edge, shared_node_weights, num_nodes
         )
@@ -1018,7 +1018,7 @@ class CHGNetLineGraphConv(nn.Module):
         if shared_weights is not None:
             messages = messages * shared_weights[lg_src] * shared_weights[lg_dst]
 
-        # Accumulate onto dst (bond being updated) — correct for line graph
+        # Accumulate onto dst (bond being updated) -- correct for line graph
         feat_update = scatter_add(messages, lg_dst.long(), dim=0, dim_size=num_lg_nodes)
         return self.node_out_func(feat_update)
 

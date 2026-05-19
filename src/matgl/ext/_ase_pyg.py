@@ -246,9 +246,10 @@ class PESCalculator(Calculator):
             calc_result = self.potential(graph, lattice, self.state_attr)
         else:
             calc_result = self.potential(graph, lattice, state_attr_default)
+        energy_val = calc_result[0].detach().cpu().numpy().item()
         self.results.update(
-            energy=calc_result[0].detach().cpu().numpy().item(),
-            free_energy=calc_result[0].detach().cpu().numpy().item(),
+            energy=energy_val,
+            free_energy=energy_val,
             forces=calc_result[1].detach().cpu().numpy(),
         )
         if self.compute_stress:
@@ -302,13 +303,13 @@ class Relaxer:
         """Initialize Relaxer.
 
         Args:
-        potential (Potential): a M3GNet potential, a str path to a saved model or a short name for saved model
-        that comes with M3GNet distribution
-        state_attr (torch.Tensor): State attr.
-        optimizer (str or ase Optimizer): the optimization algorithm.
-        Defaults to "FIRE"
-        relax_cell (bool): whether to relax the lattice cell
-        **kwargs: Kwargs pass through to super().__init__().
+            potential (Potential): a M3GNet potential, a str path to a saved model or a short name for saved model
+                that comes with M3GNet distribution
+            state_attr (torch.Tensor): State attr.
+            optimizer (str or ase Optimizer): the optimization algorithm.
+                Defaults to "FIRE"
+            relax_cell (bool): whether to relax the lattice cell
+            **kwargs: Kwargs pass through to super().__init__().
         """
         # Detect user-provided stress_weight
         if "stress_weight" in kwargs:
