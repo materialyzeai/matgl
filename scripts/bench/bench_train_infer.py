@@ -37,15 +37,10 @@ from pymatgen.core import Lattice, Structure
 from torch import nn
 
 import matgl
-
-assert matgl.config.BACKEND == "PYG", (
-    "This benchmark requires the PYG backend (GRACE is PYG-only). Unset MATGL_BACKEND or set it to PYG."
-)
-
-from matgl.apps.pes import Potential  # noqa: E402
-from matgl.ext.pymatgen import Structure2Graph, get_element_list  # noqa: E402
-from matgl.graph.data import MGLDataset, collate_fn_pes  # noqa: E402
-from matgl.models import GRACE, M3GNet, TensorNet  # noqa: E402
+from matgl.apps.pes import Potential
+from matgl.ext.pymatgen import Structure2Graph, get_element_list
+from matgl.graph.data import MGLDataset, collate_fn_pes
+from matgl.models import GRACE, M3GNet, TensorNet
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -253,7 +248,6 @@ def run(args: argparse.Namespace) -> None:
     print("=" * 78)
     print("matgl train/infer benchmark")
     print(f"  device       : {args.device}")
-    print(f"  backend      : {matgl.config.BACKEND}")
     print(
         f"  structure    : LiFePO4 {args.supercell}x{args.supercell}x{args.supercell} ({len(structure)} atoms / cell)"
     )

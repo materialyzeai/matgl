@@ -23,13 +23,9 @@ logger = logging.getLogger(__name__)
 # Files that comprise a serialized matgl model on disk and on Hugging Face Hub.
 _MODEL_FILES = ("model.pt", "state.pt", "model.json")
 
-# Private backend-split modules under these prefixes always reload through their
-# public package, so the active ``MATGL_BACKEND`` picks the right implementation.
-_PUBLIC_PACKAGE_PREFIXES: tuple[str, ...] = ("matgl.models.", "matgl.apps._pes")
-
 
 def _resolve_module(modname: str) -> str:
-    """Map a private ``matgl.models._*`` / ``matgl.apps._pes_*`` ``@module`` string to its public package.
+    """Map a private ``matgl.models._*`` / ``matgl.apps._pes*`` ``@module`` string to its public package.
 
     Resolves to ``matgl.models`` or ``matgl.apps.pes`` as appropriate.
     """
@@ -336,8 +332,7 @@ def load_model(path: str | Path, **kwargs):
             return cls_.load(fpaths, **kwargs)
     except (ImportError, ValueError) as ex:
         raise ValueError(
-            "Bad serialized model or bad model name. There are several possible causes. If you are using a DGL model, "
-            "you need to set the backend to DGL using `matgl.set_backend('DGL')`. If you have an outdated cached model,"
+            "Bad serialized model or bad model name. If you have an outdated cached model,"
             " please 'clear your cache by running `python -c 'import matgl; matgl.clear_cache()'`"
         ) from ex
     except BaseException as ex:

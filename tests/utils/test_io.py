@@ -283,12 +283,12 @@ def test_resolve_module_aliases_private_modules_to_public_packages():
     from matgl.utils.io import _resolve_module
 
     assert _resolve_module("matgl.models._m3gnet_dgl") == "matgl.models"
-    assert _resolve_module("matgl.models._m3gnet_pyg") == "matgl.models"
+    assert _resolve_module("matgl.models._m3gnet") == "matgl.models"
     assert _resolve_module("matgl.models._megnet_dgl") == "matgl.models"
-    assert _resolve_module("matgl.models._tensornet_pyg") == "matgl.models"
+    assert _resolve_module("matgl.models._tensornet") == "matgl.models"
     assert _resolve_module("matgl.models._chgnet_dgl") == "matgl.models"
     assert _resolve_module("matgl.apps._pes_dgl") == "matgl.apps.pes"
-    assert _resolve_module("matgl.apps._pes_pyg") == "matgl.apps.pes"
+    assert _resolve_module("matgl.apps._pes") == "matgl.apps.pes"
     # Public modules pass through unchanged.
     assert _resolve_module("matgl.models") == "matgl.models"
     assert _resolve_module("matgl.apps.pes") == "matgl.apps.pes"

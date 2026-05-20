@@ -8,9 +8,7 @@ on the original graph. The combined radial-x-angular basis comes from
 two cosine cutoffs (one per bond in the triplet) and folded back into
 the bond messages by :func:`combine_sbf_shf`.
 
-This module is backend-agnostic: it operates on plain tensors and
-indices, with the line-graph construction handled by
-:mod:`matgl.graph._compute_pyg` / :mod:`matgl.graph._compute_dgl` upstream.
+Line-graph construction is handled by :mod:`matgl.graph._compute` upstream.
 """
 
 from __future__ import annotations
@@ -26,9 +24,9 @@ from matgl.utils.maths import _block_repeat, get_segment_indices_from_n, scatter
 class ThreeBodyInteractions(nn.Module):
     """Three-body bond update.
 
-    Backend-agnostic: ``forward`` takes only tensors. The DGL- or PyG-side
-    caller is responsible for unpacking the parent-graph edges and the
-    line-graph adjacency / per-bond triple counts before calling this layer.
+    ``forward`` takes only tensors. The caller is responsible for unpacking
+    the parent-graph edges and the line-graph adjacency / per-bond triple
+    counts before calling this layer.
     """
 
     def __init__(self, update_network_atom: nn.Module, update_network_bond: nn.Module, **kwargs):

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
 from argparse import Namespace
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -10,45 +8,7 @@ import pytest
 import torch
 from pymatgen.core import Lattice, Structure
 
-import matgl
 from matgl import cli
-
-
-# ---------------------------------------------------------------------------
-# Legacy integration smoke test (DGL only, real models). Kept for completeness
-# but skipped in CI / on PYG.
-# ---------------------------------------------------------------------------
-@pytest.mark.skipif(os.getenv("CI") == "true" or matgl.config.BACKEND != "DGL", reason="Unreliable in CI environments.")
-def test_entrypoint(Mo):
-    Mo.to(filename="Mo.cif")
-    exit_status = os.system("mgl relax -i Mo.cif -o Mo_relaxed.cif")
-    assert exit_status == 0
-    exit_status = os.system("mgl relax -i Mo.cif -s _hello")
-    assert exit_status == 0
-    assert os.path.exists("Mo_hello.cif")
-    exit_status = os.system("mgl relax -i Mo.cif")
-    assert exit_status == 0
-    exit_status = os.system("mgl predict -i Mo.cif -s 1 -m MEGNet-MP-2019.4.1-BandGap-mfi")
-    assert exit_status == 0
-    exit_status = os.system("mgl predict -i Mo.cif -m MEGNet-MP-2018.6.1-Eform")
-    assert exit_status == 0
-    exit_status = os.system("mgl md -i Mo.cif -e nve -t 300.0 -n 10 --stepsize=1.0")
-    assert exit_status == 0
-    exit_status = os.system("mgl clear --yes")
-    assert exit_status == 0
-    assert not (Path(os.path.expanduser("~")) / ".cache/matgl").exists()
-    os.remove("Mo.cif")
-    os.remove("Mo_relaxed.cif")
-    os.remove("Mo_hello.cif")
-    os.remove("Mo.traj")
-    os.remove("Mo.log")
-
-
-# ---------------------------------------------------------------------------
-# Backend-agnostic unit tests. These patch the heavy lifting (model loading,
-# Relaxer, MolecularDynamics, MPRester) so the CLI logic can be exercised on
-# either backend without network or pretrained-model dependencies.
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture

@@ -410,22 +410,14 @@ class SphericalBesselWithHarmonics(nn.Module):
         else:
             self.sbf = SphericalBesselFunction(self.max_l, self.max_n, self.cutoff, self.use_smooth)
 
-    def forward(self, triple_bond_lengths, cos_theta=None, phi=None):
+    def forward(self, triple_bond_lengths, cos_theta, phi):
         """Compute the spherical-bessel * spherical-harmonics basis.
 
         Args:
-            triple_bond_lengths: bond-length tensor for each triple
-                (or, for backward compatibility, a DGL line graph whose
-                ``edata`` carries the keys ``triple_bond_lengths``,
-                ``cos_theta``, and ``phi``).
+            triple_bond_lengths: bond-length tensor for each triple.
             cos_theta: cosine of the bond-bond angle for each triple.
             phi: azimuthal angle for each triple.
         """
-        if cos_theta is None:
-            line_graph = triple_bond_lengths
-            triple_bond_lengths = line_graph.edata["triple_bond_lengths"]
-            cos_theta = line_graph.edata["cos_theta"]
-            phi = line_graph.edata["phi"]
         sbf = self.sbf(triple_bond_lengths)
         shf = self.shf(cos_theta, phi)
         return combine_sbf_shf(sbf, shf, max_n=self.max_n, max_l=self.max_l, use_phi=self.use_phi)

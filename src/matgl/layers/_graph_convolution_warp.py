@@ -1,7 +1,7 @@
 """NVIDIA Warp-accelerated TensorNet interaction.
 
 Drop-in replacement for the PyTorch ``TensorNetInteraction`` in
-:mod:`matgl.layers._graph_convolution_pyg` that dispatches the message-
+:mod:`matgl.layers._graph_convolution` that dispatches the message-
 passing gather + tensor-product + scatter step to a custom Warp kernel
 (:mod:`matgl.kernels` / :mod:`matgl.ops`), avoiding the Python-side
 loops over edges that dominate the PyTorch version's runtime. Requires

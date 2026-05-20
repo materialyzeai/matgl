@@ -1,14 +1,11 @@
-"""Generate the M3GNet DGL<->PyG parity reference artifact.
+"""Generate the M3GNet parity reference artifact.
 
-Run this script manually under either backend to (re)generate
-``tests/parity_data/m3gnet_parity.pt``. Both DGL and PyG must produce the
-same numeric output for parity to hold; the consumer test in
-``test_m3gnet_parity.py`` loads this artifact and checks ``allclose``.
+Run this script manually to (re)generate ``tests/parity_data/m3gnet_parity.pt``.
+The consumer test in ``test_m3gnet.py`` loads this artifact and checks ``allclose``.
 
 Usage::
 
-    uv run python tests/parity_data/gen_m3gnet_parity.py             # PyG
-    MATGL_BACKEND=DGL .venv_dgl/bin/python tests/parity_data/gen_m3gnet_parity.py
+    uv run python tests/parity_data/gen_m3gnet_parity.py
 """
 
 from __future__ import annotations
@@ -19,7 +16,7 @@ import numpy as np
 import torch
 from pymatgen.core import Lattice, Structure
 
-import matgl
+from matgl.ext._pymatgen import Structure2Graph
 from matgl.models import M3GNet
 
 INIT_ARGS: dict = {
@@ -46,17 +43,7 @@ SEED = 42
 
 
 def build_graph(structure):
-    """Build a backend-aware graph + position tensors."""
-    if matgl.config.BACKEND == "DGL":
-        from matgl.ext._pymatgen_dgl import Structure2Graph
-
-        conv = Structure2Graph(element_types=INIT_ARGS["element_types"], cutoff=INIT_ARGS["cutoff"])
-        g, lat, _ = conv.get_graph(structure)
-        g.edata["pbc_offshift"] = torch.matmul(g.edata["pbc_offset"], lat[0])
-        g.ndata["pos"] = g.ndata["frac_coords"] @ lat[0]
-        return g
-    from matgl.ext._pymatgen_pyg import Structure2Graph
-
+    """Build a PyG graph + position tensors."""
     conv = Structure2Graph(element_types=INIT_ARGS["element_types"], cutoff=INIT_ARGS["cutoff"])
     g, lat, _ = conv.get_graph(structure)
     g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
@@ -80,11 +67,10 @@ def main():
         "structure_kw": STRUCTURE_KW,
         "state_attr": STATE_ATTR,
         "seed": SEED,
-        "generated_under_backend": matgl.config.BACKEND,
     }
     out_path = Path(__file__).parent / "m3gnet_parity.pt"
     torch.save(artifact, out_path)
-    print(f"Wrote {out_path}: backend={matgl.config.BACKEND}, output={output.item():.6f}")
+    print(f"Wrote {out_path}: output={output.item():.6f}")
 
 
 if __name__ == "__main__":

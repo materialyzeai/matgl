@@ -144,36 +144,6 @@ def repeat_with_n(ns, n):
     return torch.repeat_interleave(ns, n, dim=0)
 
 
-def broadcast_states_to_bonds(g, state_feat):
-    """Broadcast state attributes to bond attributes.
-
-    Maps shape ``[Ns, Nstate]`` to ``[Nb, Nstate]``.
-
-    Args:
-        g: DGL graph
-        state_feat: state_feature
-
-    Returns:
-        broadcasted state attributes
-    """
-    return state_feat.repeat((g.num_edges(), 1))
-
-
-def broadcast_states_to_atoms(g, state_feat):
-    """Broadcast state attributes to atom (node) attributes.
-
-    Maps shape ``[Ns, Nstate]`` to ``[Nn, Nstate]``.
-
-    Args:
-        g: DGL graph
-        state_feat: state_feature
-
-    Returns:
-        broadcasted state attributes
-    """
-    return state_feat.repeat((g.num_nodes(), 1))
-
-
 def scatter_sum(input_tensor: torch.Tensor, segment_ids: torch.Tensor, num_segments: int, dim: int) -> torch.Tensor:
     """Scatter sum operation along the specified dimension.
 

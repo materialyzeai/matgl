@@ -47,33 +47,10 @@ Major milestones are summarized below. Please refer to the [changelog] for detai
 - v0.1.0 (Feb 16 2023): Initial implementations of M3GNet and MEGNet architectures have been completed. Expect
   bugs!
 
-## Major update: v2.0.0 (Nov 12 2025)
+## Major update: v3.0.0 (May 2026)
 
-> **Deprecation notice.** The DGL backend is **deprecated** and will be **removed in v4.0.0**. New work should
-> target the default PyG backend. Models that currently have only a DGL implementation will either be ported to
-> PyG before v4.0.0 or dropped from matgl at that point — track the [changelog] for status.
-
-We are in the process of moving away from the Deep Graph Library (DGL) framework to Pytorch Geometric (PyG) or even a
-pure PyTorch framework. This is motivated by the fact that DGL is no longer actively maintained. For now, both PYG and DGL
-models are available.
-
-From v2.0.0, MatGL will default to a PyG backend, and DGL is no longer a required dependency. To use any remaining
-DGL-only models, you will need to install the DGL dependencies manually. This typically takes about 10 minutes,
-depending on the speed of downloading the required GPU packages:
-
-```bash
-pip install "numpy<2"
-pip install dgl==2.2.0
-pip install torch==2.3.0
-pip install "torchdata<=0.8.0"
-```
-
-and set the backend either via the environment variable `MATGL_BACKEND=DGL` or by using
-
-```python
-import matgl
-matgl.set_backend("DGL")
-```
+> **DGL support removed.** matgl now targets PyTorch Geometric (PyG) exclusively. All DGL implementations
+> have been deleted; the `MATGL_BACKEND` env var and `set_backend()` API have been removed.
 
 ## Current Architectures
 

@@ -9,40 +9,20 @@ import torch
 from pymatgen.core import Lattice, Structure
 
 import matgl
-
-BACKEND = matgl.config.BACKEND
-
-if BACKEND == "DGL":
-    from matgl.graph._compute_dgl import compute_pair_vector_and_distance
-elif BACKEND == "PYG":
-    from matgl.graph._compute_pyg import compute_pair_vector_and_distance  # type: ignore[assignment]
-else:
-    pytest.skip(f"Unsupported backend: {BACKEND}", allow_module_level=True)
-
-from matgl.models import MEGNet  # noqa: E402
+from matgl.ext._pymatgen import Structure2Graph
+from matgl.graph._compute import compute_pair_vector_and_distance
+from matgl.models import MEGNet
 
 PARITY_ARTIFACT = Path(__file__).resolve().parents[1] / "parity_data" / "megnet_parity.pt"
 
 
-def _device_of(graph):
-    if BACKEND == "DGL":
-        return graph.device
-    return graph.pos.device
-
-
 def _prep_graph(graph, structure):
-    """Attach pos / pbc_offshift / bond_dist for the active backend."""
-    lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th, device=_device_of(graph))
-    if BACKEND == "DGL":
-        graph.edata["pbc_offshift"] = torch.matmul(graph.edata["pbc_offset"], lat[0])
-        graph.ndata["pos"] = graph.ndata["frac_coords"] @ lat[0]
-        _, bond_dist = compute_pair_vector_and_distance(graph)
-        graph.edata["bond_dist"] = bond_dist
-    else:
-        graph.pbc_offshift = torch.matmul(graph.pbc_offset, lat[0])
-        graph.pos = graph.frac_coords @ lat[0]
-        _, bond_dist = compute_pair_vector_and_distance(graph.pos, graph.edge_index, graph.pbc_offshift)
-        graph.bond_dist = bond_dist
+    """Attach pos / pbc_offshift / bond_dist to ``graph``."""
+    lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th, device=graph.pos.device)
+    graph.pbc_offshift = torch.matmul(graph.pbc_offset, lat[0])
+    graph.pos = graph.frac_coords @ lat[0]
+    _, bond_dist = compute_pair_vector_and_distance(graph.pos, graph.edge_index, graph.pbc_offshift)
+    graph.bond_dist = bond_dist
     return graph
 
 
@@ -96,11 +76,6 @@ def test_save_load(tmp_path):
         os.chdir(cwd)
 
 
-# ---------------------------------------------------------------------------
-# DGL <-> PyG parity (artifact-driven; runs on whichever backend is active)
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(scope="module")
 def parity_artifact():
     """Load the MEGNet parity artifact."""
@@ -110,17 +85,7 @@ def parity_artifact():
 
 
 def _build_parity_graph(structure, init_args):
-    """Build a backend-aware graph + position tensors mirroring the artifact generator."""
-    if BACKEND == "DGL":
-        from matgl.ext._pymatgen_dgl import Structure2Graph
-
-        conv = Structure2Graph(element_types=init_args["element_types"], cutoff=init_args["cutoff"])
-        g, lat, _ = conv.get_graph(structure)
-        g.edata["pbc_offshift"] = torch.matmul(g.edata["pbc_offset"], lat[0])
-        g.ndata["pos"] = g.ndata["frac_coords"] @ lat[0]
-        return g
-    from matgl.ext._pymatgen_pyg import Structure2Graph
-
+    """Build a graph + position tensors mirroring the artifact generator."""
     conv = Structure2Graph(element_types=init_args["element_types"], cutoff=init_args["cutoff"])
     g, lat, _ = conv.get_graph(structure)
     g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
@@ -128,8 +93,8 @@ def _build_parity_graph(structure, init_args):
     return g
 
 
-def test_megnet_dgl_pyg_parity(parity_artifact):
-    """The state-dict trained on one backend must reproduce its golden output on the other."""
+def test_megnet_parity(parity_artifact):
+    """A state-dict from the parity artifact must reproduce its golden output."""
     init_args = parity_artifact["init_args"]
     state_dict = parity_artifact["state_dict"]
     expected = parity_artifact["expected_output"]
@@ -150,7 +115,5 @@ def test_megnet_dgl_pyg_parity(parity_artifact):
         output = model(g=g, state_attr=state)
 
     assert torch.allclose(output, expected, atol=1e-5, rtol=1e-5), (
-        f"MEGNet parity broken on backend={BACKEND}: "
-        f"got {output.item()}, expected {expected.item()} "
-        f"(artifact generated under {parity_artifact['generated_under_backend']})"
+        f"MEGNet parity broken: got {output.item()}, expected {expected.item()}"
     )

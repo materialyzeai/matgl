@@ -19,7 +19,7 @@ the sum.
 The PyG-native implementation rides on matgl's existing equivariant
 primitives (:class:`matgl.layers._so3.RealSphericalHarmonics`,
 :class:`matgl.layers._so3.SO3TensorProduct`) and graph utilities
-(:func:`matgl.graph._compute_pyg.compute_pair_vector_and_distance`,
+(:func:`matgl.graph._compute.compute_pair_vector_and_distance`,
 :func:`matgl.utils.maths.scatter_add`). The GRACE-specific bits — Chebyshev
 radial basis, learnable ``R_{nl}`` expansion, single-particle aggregation
 (scalar and equivariant variants), multi-order product chain — live in
@@ -43,7 +43,7 @@ import torch
 from torch import nn
 
 from matgl.config import DEFAULT_ELEMENTS
-from matgl.graph._compute_pyg import compute_pair_vector_and_distance
+from matgl.graph._compute import compute_pair_vector_and_distance
 from matgl.layers import MLP, ActivationFunction
 from matgl.layers._grace import (
     ChebyshevRadialBasis,
@@ -59,7 +59,7 @@ from matgl.utils.maths import scatter_add
 from ._core import MatGLModel
 
 if TYPE_CHECKING:
-    from matgl.graph._converters_pyg import GraphConverter
+    from matgl.graph._converters import GraphConverter
 
 
 class GRACE(MatGLModel):
@@ -345,7 +345,7 @@ class GRACE(MatGLModel):
         """
         del state_feats
         if graph_converter is None:
-            from matgl.ext._pymatgen_pyg import Structure2Graph
+            from matgl.ext._pymatgen import Structure2Graph
 
             graph_converter = Structure2Graph(element_types=self.element_types, cutoff=self.cutoff)  # type: ignore[arg-type]
         graph, lattice, _ = graph_converter.get_graph(structure)

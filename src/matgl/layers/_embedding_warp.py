@@ -1,7 +1,7 @@
 """NVIDIA Warp-accelerated TensorNet embedding.
 
 Drop-in replacement for the PyTorch ``TensorEmbedding`` in
-:mod:`matgl.layers._embedding_pyg` that dispatches the most expensive
+:mod:`matgl.layers._embedding` that dispatches the most expensive
 gather + outer-product step to a custom Warp kernel
 (:mod:`matgl.kernels` / :mod:`matgl.ops`). Only the embedding kernel is
 replaced; the upstream and downstream PyTorch ops remain the same so

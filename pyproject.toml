@@ -137,9 +137,8 @@ lint.ignore = [
     # they are constructed once and live for the program's lifetime, so the
     # method-level cache cannot leak in practice.
     "B019",
-    # Lazy imports are used throughout to (a) avoid forcing optional deps
-    # (DGL, scipy, full ``pymatgen``, ``nvalchemiops``) at import time and
-    # (b) prevent backend cross-contamination between PYG and DGL paths.
+    # Lazy imports are used throughout to avoid forcing optional deps
+    # (scipy, full ``pymatgen``, ``nvalchemiops``) at import time.
     "PLC0415",
     # Pylint refactor rules — ML model ``__init__``/``forward`` methods inherently
     # have many hyperparameters/branches/statements; magic values like

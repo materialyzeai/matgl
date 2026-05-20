@@ -8,11 +8,6 @@ import pytest
 import torch
 
 import matgl
-
-if matgl.config.BACKEND != "PYG":
-    pytest.skip("GRACE is PYG-only", allow_module_level=True)
-
-
 from matgl.apps.pes import Potential
 from matgl.models import GRACE
 

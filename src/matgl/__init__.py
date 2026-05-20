@@ -8,13 +8,8 @@ from importlib.metadata import PackageNotFoundError, version
 import numpy as np
 import torch
 
-import matgl
-
-from .config import clear_cache, ensure_backend
+from .config import clear_cache
 from .utils.io import get_available_pretrained_models, load_model
-
-if typing.TYPE_CHECKING:
-    from typing import Literal
 
 try:
     __version__: str = version("matgl")
@@ -41,7 +36,6 @@ __all__ = [
     "MGLPotentialTrainer",
     "__version__",
     "clear_cache",
-    "ensure_backend",
     "float_np",
     "float_th",
     "get_available_pretrained_models",
@@ -49,7 +43,6 @@ __all__ = [
     "int_np",
     "int_th",
     "load_model",
-    "set_backend",
     "set_default_dtype",
 ]
 
@@ -74,27 +67,7 @@ def set_default_dtype(type_: str = "float", size: int = 32) -> None:
         )
 
 
-def set_backend(backend: Literal["DGL", "PYG"] = "PYG") -> None:
-    """Set the computational backend for the application.
-
-    Selects the backend used for graph computations, either "DGL" (Deep Graph Library)
-    or "PYG" (PyTorch Geometric). The selected backend determines how graph-based
-    computations are implemented in the application.
-
-    Args:
-        backend: A string specifying the desired computational backend. Must be either
-            "DGL" or "PYG".
-
-    Raises:
-        ValueError: If the input backend is neither "DGL" nor "PYG".
-    """
-    if backend not in ("DGL", "PYG"):
-        raise ValueError("Invalid backend")
-    ensure_backend(backend)
-    matgl.config.BACKEND = backend
-
-
-def get_best_device() -> Literal["cpu", "cuda", "mps"]:
+def get_best_device() -> typing.Literal["cpu", "cuda", "mps"]:
     """Get the best device for the current system."""
     if torch.cuda.is_available():
         return "cuda"

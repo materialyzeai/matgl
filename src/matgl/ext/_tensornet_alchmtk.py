@@ -28,7 +28,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 """nvalchemi-toolkit wrapper for TensorNet (PyG backend).
 
-Wraps :class:`~matgl.models._tensornet_pyg.TensorNet` as a
+Wraps :class:`~matgl.models._tensornet.TensorNet` as a
 :class:`~nvalchemi.models.base.BaseModelMixin`-compatible model for use in
 nvalchemi dynamics pipelines (molecular dynamics and geometry optimization).
 
@@ -74,7 +74,7 @@ import torch
 from pymatgen.core.periodic_table import Element
 from torch import nn
 
-from matgl.models._tensornet_pyg import TensorNet
+from matgl.models._tensornet import TensorNet
 
 try:
     from nvalchemi.data import AtomicData, Batch
@@ -100,7 +100,7 @@ if TYPE_CHECKING:
 
     from nvalchemi._typing import ModelOutputs
 
-    from matgl.apps._pes_pyg import Potential
+    from matgl.apps._pes import Potential
 
 __all__ = ["TensorNetWrapper"]
 
@@ -150,7 +150,7 @@ class TensorNetWrapper(nn.Module, BaseModelMixin):  # type: ignore[misc]
         # ZBL nuclear repulsion (fixed analytical potential)
         self.repuls: NuclearRepulsion | None = None  # type: ignore[name-defined]
         if calc_repuls:
-            from matgl.layers._zbl_pyg import NuclearRepulsion
+            from matgl.layers._zbl import NuclearRepulsion
 
             self.repuls = NuclearRepulsion(float(model.cutoff))
 
@@ -204,7 +204,7 @@ class TensorNetWrapper(nn.Module, BaseModelMixin):  # type: ignore[misc]
 
     @classmethod
     def from_potential(cls, potential: Potential) -> TensorNetWrapper:
-        """Construct from a matgl :class:`~matgl.apps._pes_pyg.Potential`.
+        """Construct from a matgl :class:`~matgl.apps._pes.Potential`.
 
         Parameters
         ----------
@@ -389,7 +389,7 @@ class TensorNetWrapper(nn.Module, BaseModelMixin):  # type: ignore[misc]
 
         # ZBL repulsion
         if self.repuls is not None:
-            from matgl.graph._compute_pyg import compute_pair_vector_and_distance
+            from matgl.graph._compute import compute_pair_vector_and_distance
 
             _, bond_dist = compute_pair_vector_and_distance(
                 inputs["pos"],

@@ -8,8 +8,6 @@ from typing import TYPE_CHECKING, Any
 import lightning as pl
 import torch
 
-import matgl
-
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -21,18 +19,14 @@ def add_sample_indices(dataset: Any, start: int = 0) -> None:
     shuffled training dataloader: column ``i`` of the saved energy / force arrays is always
     the prediction for the configuration whose index is ``i``.
 
-    For PYG, the index is stored as ``data.sample_idx`` (a ``(1,)`` long tensor) on each
-    underlying ``torch_geometric.data.Data`` graph. ``Batch.from_data_list`` then collates it
+    The index is stored as ``data.sample_idx`` (a ``(1,)`` long tensor) on each underlying
+    ``torch_geometric.data.Data`` graph. ``Batch.from_data_list`` then collates it
     automatically into a ``(B,)`` tensor on the batched ``Batch``.
 
-    For DGL, the index is replicated per-atom into ``g.ndata["sample_idx"]``. ``dgl.batch``
-    concatenates ``ndata`` so the per-graph index can be recovered downstream from the batch
-    boundaries given by ``g.batch_num_nodes()``.
-
-    Works with both raw ``MGLDataset`` instances and ``torch.utils.data.Subset`` /
-    ``dgl.data.utils.Subset`` returned by :func:`matgl.graph.split_dataset`. Mutation is
-    in-place: indices are written onto the shared underlying graph objects, so call this
-    after splitting and only on the subset(s) you want logged.
+    Works with both raw ``MGLDataset`` instances and ``torch.utils.data.Subset`` returned
+    by :func:`matgl.graph.split_dataset`. Mutation is in-place: indices are written onto
+    the shared underlying graph objects, so call this after splitting and only on the
+    subset(s) you want logged.
 
     Args:
         dataset: An iterable that yields ``(graph, ...)`` tuples — typically an MGLDataset
@@ -42,10 +36,7 @@ def add_sample_indices(dataset: Any, start: int = 0) -> None:
     for k, item in enumerate(dataset):
         graph = item[0]
         idx = start + k
-        if matgl.config.BACKEND == "PYG":
-            graph.sample_idx = torch.tensor([idx], dtype=torch.long)
-        else:
-            graph.ndata["sample_idx"] = torch.full((graph.num_nodes(),), idx, dtype=torch.long)
+        graph.sample_idx = torch.tensor([idx], dtype=torch.long)
 
 
 class PredictionLogger(pl.Callback):

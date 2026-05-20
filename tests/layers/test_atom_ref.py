@@ -1,27 +1,14 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import torch
+from torch_geometric.data import Batch
 
-import matgl
-
-BACKEND = matgl.config.BACKEND
-
-if BACKEND == "DGL":
-    import dgl
-
-    from matgl.layers._atom_ref_dgl import AtomRef
-elif BACKEND == "PYG":
-    from torch_geometric.data import Batch
-
-    from matgl.layers._atom_ref_pyg import AtomRef
-else:
-    pytest.skip(f"Unsupported backend: {BACKEND}", allow_module_level=True)
+from matgl.layers._atom_ref import AtomRef
 
 
 def _batch(graphs):
-    return dgl.batch(graphs) if BACKEND == "DGL" else Batch.from_data_list(graphs)
+    return Batch.from_data_list(graphs)
 
 
 def test_atom_ref(graph_MoSH):

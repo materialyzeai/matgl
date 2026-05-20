@@ -1,35 +1,17 @@
-"""United tests for ZBL repulsion."""
+"""Unit tests for ZBL repulsion."""
 
 from __future__ import annotations
 
 import pytest
 import torch
+from torch_geometric.data import Data
 
 import matgl
-
-BACKEND = matgl.config.BACKEND
-
-if BACKEND == "DGL":
-    import dgl
-
-    from matgl.layers import NuclearRepulsion
-elif BACKEND == "PYG":
-    from torch_geometric.data import Data
-
-    from matgl.layers._zbl_pyg import NuclearRepulsion
-else:
-    pytest.skip(f"Unsupported backend: {BACKEND}", allow_module_level=True)
+from matgl.layers._zbl import NuclearRepulsion
 
 
 @pytest.fixture
 def example_data():
-    if BACKEND == "DGL":
-        element_types = "H"
-        g = dgl.graph(([0, 1], [1, 0]))
-        g.ndata["node_type"] = torch.tensor([0, 0], dtype=matgl.int_th)
-        g.edata["bond_dist"] = torch.tensor([1.0, 1.0], dtype=matgl.float_th)
-        return element_types, g
-
     element_types = ("H",)
     data = Data()
     data.edge_index = torch.tensor([[0, 1], [1, 0]], dtype=torch.long)

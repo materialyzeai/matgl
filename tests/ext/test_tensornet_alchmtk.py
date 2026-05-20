@@ -33,11 +33,6 @@ from __future__ import annotations
 import pytest
 import torch
 
-import matgl
-
-if matgl.config.BACKEND != "PYG":
-    pytest.skip("Skipping PYG tests", allow_module_level=True)
-
 pytest.importorskip("nvalchemi", reason="nvalchemi-toolkit required for alchmtk tests")
 
 import numpy as np
@@ -46,10 +41,11 @@ from nvalchemi.dynamics.base import DynamicsStage
 from nvalchemi.hooks import HookContext, NeighborListHook
 from pymatgen.core import Element
 
-from matgl.apps._pes_pyg import Potential
+import matgl
+from matgl.apps._pes import Potential
 from matgl.ext.alchmtk import TensorNetWrapper
-from matgl.graph._compute_pyg import compute_pair_vector_and_distance
-from matgl.models._tensornet_pyg import TensorNet
+from matgl.graph._compute import compute_pair_vector_and_distance
+from matgl.models._tensornet import TensorNet
 
 # 1 eV/A^3 = 160.21766208 GPa
 EV_A3_TO_GPA = 160.21766208
@@ -242,9 +238,9 @@ class TestConstruction:
 
 
 class TestNeighborListConsistency:
-    def test_same_edges(self, graph_MoS_pyg):
+    def test_same_edges(self, graph_MoS):
         """AtomicData uses the exact same edges as the matgl graph."""
-        structure, graph, _ = graph_MoS_pyg
+        structure, graph, _ = graph_MoS
         element_types = ("Mo", "S")
         lat = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
 
@@ -254,9 +250,9 @@ class TestNeighborListConsistency:
         # Batch stores [E, 2]; matgl stores [2, E]. Transpose to compare.
         assert torch.equal(batch.neighbor_list.T.long(), graph.edge_index.long())
 
-    def test_same_shifts(self, graph_MoS_pyg):
+    def test_same_shifts(self, graph_MoS):
         """neighbor_list_shifts match pbc_offset from matgl graph."""
-        structure, graph, _ = graph_MoS_pyg
+        structure, graph, _ = graph_MoS
         element_types = ("Mo", "S")
         lat = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
 
@@ -272,8 +268,8 @@ class TestNeighborListConsistency:
 
 
 class TestNumericalCorrectnessPeriodic:
-    def test_energy_matches(self, potential, graph_MoS_pyg):
-        structure, graph, state = graph_MoS_pyg
+    def test_energy_matches(self, potential, graph_MoS):
+        structure, graph, state = graph_MoS
         lat = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
 
         e_matgl, _, _, _ = potential(graph, lat, state)
@@ -285,8 +281,8 @@ class TestNumericalCorrectnessPeriodic:
 
         assert torch.allclose(outputs["energy"].squeeze(), e_matgl.squeeze(), atol=1e-5)
 
-    def test_forces_match(self, potential, graph_MoS_pyg):
-        structure, graph, state = graph_MoS_pyg
+    def test_forces_match(self, potential, graph_MoS):
+        structure, graph, state = graph_MoS
         lat = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
 
         _, f_matgl, _, _ = potential(graph, lat, state)
@@ -298,8 +294,8 @@ class TestNumericalCorrectnessPeriodic:
 
         assert torch.allclose(outputs["forces"], f_matgl, atol=1e-5)
 
-    def test_stresses_match(self, potential, graph_MoS_pyg):
-        structure, graph, state = graph_MoS_pyg
+    def test_stresses_match(self, potential, graph_MoS):
+        structure, graph, state = graph_MoS
         lat = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
 
         _, _, s_matgl, _ = potential(graph, lat, state)
@@ -322,9 +318,9 @@ class TestNumericalCorrectnessPeriodic:
 
 
 class TestNumericalCorrectnessMolecule:
-    def test_molecule_energy_matches(self, potential_ch4, graph_CH4_pyg):
+    def test_molecule_energy_matches(self, potential_ch4, graph_CH4):
         """Non-periodic CH4: energy and forces match matgl Potential."""
-        _, graph, state = graph_CH4_pyg
+        _, graph, state = graph_CH4
         element_types = ("C", "H")
 
         # matgl path — identity lattice for molecules
@@ -359,9 +355,9 @@ class TestNumericalCorrectnessMolecule:
 
 
 class TestElementRefs:
-    def test_energy_offset(self, potential, potential_with_refs, graph_MoS_pyg):
+    def test_energy_offset(self, potential, potential_with_refs, graph_MoS):
         """element_refs shifts energy by the expected per-element sum."""
-        structure, graph, _ = graph_MoS_pyg
+        structure, graph, _ = graph_MoS
         lat = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
 
         wrapper_no = TensorNetWrapper.from_potential(potential)
@@ -380,9 +376,9 @@ class TestElementRefs:
         expected_offset = -1.5 + -2.3
         assert pytest.approx((e_yes - e_no).item(), abs=1e-5) == expected_offset
 
-    def test_forces_unchanged(self, potential, potential_with_refs, graph_MoS_pyg):
+    def test_forces_unchanged(self, potential, potential_with_refs, graph_MoS):
         """element_refs are position-independent, so forces are identical."""
-        structure, graph, _ = graph_MoS_pyg
+        structure, graph, _ = graph_MoS
         lat = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
 
         wrapper_no = TensorNetWrapper.from_potential(potential)
@@ -406,9 +402,9 @@ class TestElementRefs:
 
 
 class TestZBL:
-    def test_zbl_adds_repulsive_energy(self, model_tensornet, graph_MoS_pyg):
+    def test_zbl_adds_repulsive_energy(self, model_tensornet, graph_MoS):
         """ZBL adds a positive repulsive energy contribution."""
-        structure, graph, _ = graph_MoS_pyg
+        structure, graph, _ = graph_MoS
         lat = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
 
         wrapper_no_zbl = TensorNetWrapper(model=model_tensornet)
@@ -426,9 +422,9 @@ class TestZBL:
         # ZBL is purely repulsive — adds positive energy
         assert (e_yes - e_no).item() > 0
 
-    def test_zbl_matches_matgl(self, model_tensornet, graph_MoS_pyg):
+    def test_zbl_matches_matgl(self, model_tensornet, graph_MoS):
         """ZBL energy matches matgl Potential with calc_repuls=True."""
-        structure, graph, state = graph_MoS_pyg
+        structure, graph, state = graph_MoS
         lat = torch.tensor(structure.lattice.matrix, dtype=matgl.float_th)
 
         pot = Potential(
@@ -456,7 +452,7 @@ class TestEndToEnd:
     def test_neighborlist_distances_match(self, potential, MoS):
         """NeighborListHook and matgl's Structure2Graph produce the same
         pairwise distances (order may differ)."""
-        from matgl.ext._pymatgen_pyg import Structure2Graph
+        from matgl.ext._pymatgen import Structure2Graph
 
         cutoff = float(potential.model.cutoff)
         element_types = ("Mo", "S")
@@ -509,7 +505,7 @@ class TestEndToEnd:
     def test_energy_forces_end_to_end(self, potential, MoS):
         """Full pipeline: AtomicData.from_structure -> NeighborListHook -> wrapper
         vs matgl's Potential. Energies and forces should match."""
-        from matgl.ext._pymatgen_pyg import Structure2Graph
+        from matgl.ext._pymatgen import Structure2Graph
 
         cutoff = float(potential.model.cutoff)
         element_types = ("Mo", "S")

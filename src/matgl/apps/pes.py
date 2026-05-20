@@ -6,18 +6,6 @@ scalar per-graph energy, :class:`Potential` derives forces and stress via
 PyTorch autograd (and optionally the Hessian, partial charges, and magnetic
 moments if the wrapped model produces them).
 
-Two backend-specific implementations live behind the same public name:
-
-* :mod:`matgl.apps._pes_pyg` -- default. Operates on
-  ``torch_geometric.data.Data`` / ``Batch`` graphs.
-* :mod:`matgl.apps._pes_dgl` -- selected when ``MATGL_BACKEND=DGL``. Operates
-  on ``dgl.DGLGraph``.
-
-The active backend is chosen at import time by :data:`matgl.config.BACKEND`,
-so ``from matgl.apps.pes import Potential`` always resolves to the
-implementation matching the current backend. Set ``MATGL_BACKEND`` **before**
-any ``import matgl`` to switch.
-
 Units and conventions (matching the README and the rest of matgl):
 
 * energies in eV (per structure, not per atom),
@@ -32,11 +20,6 @@ tuple shape, which depends on which ``calc_*`` flags are enabled.
 
 from __future__ import annotations
 
-from matgl.config import BACKEND
+from ._pes import Potential
 
-# ruff: noqa
-
-if BACKEND == "DGL":
-    from ._pes_dgl import Potential
-else:
-    from ._pes_pyg import Potential  # type: ignore[assignment]
+__all__ = ["Potential"]

@@ -8,38 +8,22 @@ import pytest
 import torch
 
 import matgl
-
-BACKEND = matgl.config.BACKEND
-
-_warp_available: bool = False
-if BACKEND == "DGL":
-    from matgl.models._tensornet_dgl import TensorNet  # type: ignore[assignment]
-elif BACKEND == "PYG":
-    from matgl.models._tensornet_pyg import TensorNet, _warp_available  # type: ignore[assignment,no-redef]
-else:
-    pytest.skip(f"Unsupported backend: {BACKEND}", allow_module_level=True)
+from matgl.models._tensornet import TensorNet, _warp_available
 
 
 def _set_pos_and_pbc(graph, lat):
-    """Attach `pos` and `pbc_offshift` to `graph` for the active backend."""
-    if BACKEND == "DGL":
-        graph.edata["pbc_offshift"] = torch.matmul(graph.edata["pbc_offset"], lat[0])
-        graph.ndata["pos"] = graph.ndata["frac_coords"] @ lat[0]
-    else:
-        graph.pbc_offshift = torch.matmul(graph.pbc_offset, lat[0])
-        graph.pos = graph.frac_coords @ lat[0]
+    """Attach `pos` and `pbc_offshift` to `graph`."""
+    graph.pbc_offshift = torch.matmul(graph.pbc_offset, lat[0])
+    graph.pos = graph.frac_coords @ lat[0]
 
 
 def _device_of(graph):
-    if BACKEND == "DGL":
-        return graph.device
     return graph.pos.device
 
 
 def _make_tensornet(**kwargs):
-    """Construct TensorNet with `use_warp=False` on PYG so non-warp paths are exercised."""
-    if BACKEND == "PYG":
-        kwargs.setdefault("use_warp", False)
+    """Construct TensorNet with `use_warp=False` so non-warp paths are exercised."""
+    kwargs.setdefault("use_warp", False)
     return TensorNet(**kwargs)
 
 
@@ -56,8 +40,7 @@ def test_model(graph_MoS):
     activations = ["swish", "tanh", "sigmoid", "softplus2", "softexp"]
     for act in activations:
         model = _make_tensornet(is_intensive=False, activation_type=act)
-        if BACKEND == "PYG":
-            model.to(_device_of(graph))
+        model.to(_device_of(graph))
         output = model(g=graph)
         _check_scalar_output(output)
 
@@ -68,8 +51,7 @@ def test_model(graph_MoS):
     os.remove("state.pt")
 
     model = _make_tensornet(is_intensive=False, equivariance_invariance_group="SO(3)")
-    if BACKEND == "PYG":
-        model.to(_device_of(graph))
+    model.to(_device_of(graph))
     output = model(g=graph)
     _check_scalar_output(output)
 
@@ -87,8 +69,7 @@ def test_model_intensive(graph_MoS):
     lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th, device=_device_of(graph))
     _set_pos_and_pbc(graph, lat)
     model = _make_tensornet(element_types=["Mo", "S"], is_intensive=True)
-    if BACKEND == "PYG":
-        model.to(_device_of(graph))
+    model.to(_device_of(graph))
     output = model(g=graph)
     _check_scalar_output(output)
 
@@ -99,8 +80,7 @@ def test_model_intensive_with_weighted_atom(graph_MoS):
     lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th, device=_device_of(graph))
     _set_pos_and_pbc(graph, lat)
     model = _make_tensornet(element_types=["Mo", "S"], is_intensive=True, readout_type="weighted_atom")
-    if BACKEND == "PYG":
-        model.to(_device_of(graph))
+    model.to(_device_of(graph))
     output = model(g=graph)
     _check_scalar_output(output)
 
@@ -111,8 +91,7 @@ def test_model_intensive_with_ReduceReadOut(graph_MoS):
     lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th, device=_device_of(graph))
     _set_pos_and_pbc(graph, lat)
     model = _make_tensornet(is_intensive=True, readout_type="reduce_atom")
-    if BACKEND == "PYG":
-        model.to(_device_of(graph))
+    model.to(_device_of(graph))
     output = model(g=graph)
     _check_scalar_output(output)
 
@@ -123,25 +102,10 @@ def test_model_intensive_with_classification(graph_MoS):
     lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th, device=_device_of(graph))
     _set_pos_and_pbc(graph, lat)
     model = _make_tensornet(element_types=["Mo", "S"], is_intensive=True, task_type="classification")
-    if BACKEND == "PYG":
-        model.to(_device_of(graph))
+    model.to(_device_of(graph))
     output = model(g=graph)
     _check_scalar_output(output)
-    if BACKEND == "PYG":
-        assert 0.0 <= output.item() <= 1.0
-
-
-def test_model_intensive_set2set_classification(graph_MoS):
-    if BACKEND != "DGL":
-        pytest.skip("set2set readout in TensorNet is currently only validated for the DGL backend.")
-    structure, graph, _ = graph_MoS
-    lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th)
-    _set_pos_and_pbc(graph, lat)
-    model = _make_tensornet(
-        element_types=["Mo", "S"], is_intensive=True, task_type="classification", readout_type="set2set"
-    )
-    output = model(g=graph)
-    _check_scalar_output(output)
+    assert 0.0 <= output.item() <= 1.0
 
 
 def test_return_features(graph_MoS):
@@ -150,8 +114,7 @@ def test_return_features(graph_MoS):
     _set_pos_and_pbc(graph, lat)
 
     model = _make_tensornet(element_types=["Mo", "S"], is_intensive=True)
-    if BACKEND == "PYG":
-        model.to(_device_of(graph))
+    model.to(_device_of(graph))
 
     out = model.predict_structure(structure, return_features=False)
     assert isinstance(out, torch.Tensor)
@@ -172,13 +135,13 @@ def test_return_features(graph_MoS):
 
 
 # ---------------------------------------------------------------------------
-# Warp-only regression and parity tests (PYG backend, nvalchemiops installed)
+# Warp-only regression and parity tests (nvalchemiops installed)
 # ---------------------------------------------------------------------------
 
 
 def _skip_if_no_warp():
-    if BACKEND != "PYG" or not _warp_available:
-        pytest.skip("Warp tests require the PYG backend with nvalchemiops installed.")
+    if not _warp_available:
+        pytest.skip("Warp tests require nvalchemiops to be installed.")
 
 
 def test_warp_model_regression(graph_MoS):
@@ -319,7 +282,7 @@ def test_warp_pyg_parity_pretrained(structure_fixture, request):
     structure = request.getfixturevalue(structure_fixture)
     model_warp, model_pyg = _build_pair_from_pretrained("materialyze/TensorNet-PES-MatPES-PBE-2025.2")
 
-    from matgl.ext._pymatgen_pyg import Structure2Graph
+    from matgl.ext._pymatgen import Structure2Graph
 
     converter = Structure2Graph(element_types=model_pyg.element_types, cutoff=model_pyg.cutoff)
     g, lat, _ = converter.get_graph(structure)

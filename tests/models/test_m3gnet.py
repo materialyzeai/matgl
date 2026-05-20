@@ -9,42 +9,21 @@ import torch
 from pymatgen.core import Structure
 
 import matgl
-
-BACKEND = matgl.config.BACKEND
-
-if BACKEND == "DGL":
-    from matgl.graph._compute_dgl import compute_pair_vector_and_distance
-elif BACKEND == "PYG":
-    from matgl.graph._compute_pyg import compute_pair_vector_and_distance  # type: ignore[assignment]
-else:
-    pytest.skip(f"Unsupported backend: {BACKEND}", allow_module_level=True)
-
-from matgl.models import M3GNet  # noqa: E402
+from matgl.ext._pymatgen import Structure2Graph
+from matgl.graph._compute import compute_pair_vector_and_distance
+from matgl.models import M3GNet
 
 PARITY_ARTIFACT = Path(__file__).resolve().parents[1] / "parity_data" / "m3gnet_parity.pt"
 
 
-def _device_of(graph):
-    if BACKEND == "DGL":
-        return graph.device
-    return graph.pos.device
-
-
 def _prep_graph(graph, structure):
-    """Attach pos / pbc_offshift / bond_{vec,dist} for the active backend."""
-    lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th, device=_device_of(graph))
-    if BACKEND == "DGL":
-        graph.edata["pbc_offshift"] = torch.matmul(graph.edata["pbc_offset"], lat[0])
-        graph.ndata["pos"] = graph.ndata["frac_coords"] @ lat[0]
-        bond_vec, bond_dist = compute_pair_vector_and_distance(graph)
-        graph.edata["bond_vec"] = bond_vec
-        graph.edata["bond_dist"] = bond_dist
-    else:
-        graph.pbc_offshift = torch.matmul(graph.pbc_offset, lat[0])
-        graph.pos = graph.frac_coords @ lat[0]
-        bond_vec, bond_dist = compute_pair_vector_and_distance(graph.pos, graph.edge_index, graph.pbc_offshift)
-        graph.bond_vec = bond_vec
-        graph.bond_dist = bond_dist
+    """Attach pos / pbc_offshift / bond_{vec,dist} to ``graph``."""
+    lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th, device=graph.pos.device)
+    graph.pbc_offshift = torch.matmul(graph.pbc_offset, lat[0])
+    graph.pos = graph.frac_coords @ lat[0]
+    bond_vec, bond_dist = compute_pair_vector_and_distance(graph.pos, graph.edge_index, graph.pbc_offshift)
+    graph.bond_vec = bond_vec
+    graph.bond_dist = bond_dist
     return graph
 
 
@@ -96,29 +75,23 @@ def test_model_intensive_with_classification(graph_MoS):
 def test_model_intensive_set2set_classification(graph_MoS):
     structure, graph, _ = graph_MoS
     graph = _prep_graph(graph, structure)
-    kwargs = {
-        "element_types": ["Mo", "S"],
-        "is_intensive": True,
-        "task_type": "classification",
-        "readout_type": "set2set",
-    }
-    if BACKEND == "PYG":
-        kwargs["niters_set2set"] = 2
-        kwargs["nlayers_set2set"] = 1
-    model = M3GNet(**kwargs)
+    model = M3GNet(
+        element_types=["Mo", "S"],
+        is_intensive=True,
+        task_type="classification",
+        readout_type="set2set",
+        niters_set2set=2,
+        nlayers_set2set=1,
+    )
     output = model(g=graph)
     assert torch.numel(output) == 1
 
 
 def test_predict_structure(graph_MoS):
     structure, _, _ = graph_MoS
-    if BACKEND == "DGL":
-        models = [M3GNet(is_intensive=False), M3GNet(element_types=["Mo", "S"], is_intensive=True)]
-    else:
-        models = [M3GNet(element_types=["Mo", "S"], is_intensive=False)]
-    for model in models:
-        output_final = model.predict_structure(structure)
-        assert torch.numel(output_final) == 1
+    model = M3GNet(element_types=["Mo", "S"], is_intensive=False)
+    output_final = model.predict_structure(structure)
+    assert torch.numel(output_final) == 1
 
 
 def test_save_load(tmp_path):
@@ -132,35 +105,6 @@ def test_save_load(tmp_path):
         os.chdir(cwd)
 
 
-def test_featurize_structure(graph_MoS):
-    if BACKEND != "DGL":
-        pytest.skip("predict_structure(return_features=True) feature shape contract is only validated for DGL.")
-    structure, _, _ = graph_MoS
-    model_intensive = M3GNet(element_types=["Mo", "S"], is_intensive=True)
-    model_extensive = M3GNet(is_intensive=False)
-    for model in [model_extensive, model_intensive]:
-        with pytest.raises(ValueError, match="Invalid output_layers"):
-            model.predict_structure(structure, output_layers=["whatever"], return_features=True)
-        features = model.predict_structure(structure, return_features=True)
-        assert torch.numel(features["bond_expansion"]) == 252
-        assert torch.numel(features["three_body_basis"]) == 3276
-        for output_layer in ["embedding", "gc_1", "gc_2", "gc_3"]:
-            assert torch.numel(features[output_layer]["node_feat"]) == 128
-            assert torch.numel(features[output_layer]["edge_feat"]) == 1792
-            assert features[output_layer]["state_feat"] is None
-        if model.is_intensive:
-            assert torch.numel(features["readout"]) == 64
-        else:
-            assert torch.numel(features["readout"]) == 2
-        assert torch.numel(features["final"]) == 1
-        assert list(model.predict_structure(structure, output_layers=["gc_1"], return_features=True).keys()) == ["gc_1"]
-
-
-# ---------------------------------------------------------------------------
-# DGL <-> PyG parity (artifact-driven; runs on whichever backend is active)
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(scope="module")
 def parity_artifact():
     """Load the M3GNet parity artifact."""
@@ -170,17 +114,7 @@ def parity_artifact():
 
 
 def _build_parity_graph(structure, init_args):
-    """Build a backend-aware graph + position tensors mirroring the artifact generator."""
-    if BACKEND == "DGL":
-        from matgl.ext._pymatgen_dgl import Structure2Graph
-
-        conv = Structure2Graph(element_types=init_args["element_types"], cutoff=init_args["cutoff"])
-        g, lat, _ = conv.get_graph(structure)
-        g.edata["pbc_offshift"] = torch.matmul(g.edata["pbc_offset"], lat[0])
-        g.ndata["pos"] = g.ndata["frac_coords"] @ lat[0]
-        return g
-    from matgl.ext._pymatgen_pyg import Structure2Graph
-
+    """Build a graph + position tensors mirroring the artifact generator."""
     conv = Structure2Graph(element_types=init_args["element_types"], cutoff=init_args["cutoff"])
     g, lat, _ = conv.get_graph(structure)
     g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
@@ -188,8 +122,8 @@ def _build_parity_graph(structure, init_args):
     return g
 
 
-def test_m3gnet_dgl_pyg_parity(parity_artifact):
-    """The state-dict trained on one backend must reproduce its golden output on the other."""
+def test_m3gnet_parity(parity_artifact):
+    """A state-dict from the parity artifact must reproduce its golden output."""
     init_args = parity_artifact["init_args"]
     state_dict = parity_artifact["state_dict"]
     expected = parity_artifact["expected_output"]
@@ -208,7 +142,5 @@ def test_m3gnet_dgl_pyg_parity(parity_artifact):
         output = model(g=g)
 
     assert torch.allclose(output, expected, atol=1e-5, rtol=1e-5), (
-        f"M3GNet parity broken on backend={BACKEND}: "
-        f"got {output.item()}, expected {expected.item()} "
-        f"(artifact generated under {parity_artifact['generated_under_backend']})"
+        f"M3GNet parity broken: got {output.item()}, expected {expected.item()}"
     )

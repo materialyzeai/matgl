@@ -16,11 +16,6 @@ import pathlib
 import numpy as np
 import pytest
 
-import matgl
-
-if matgl.config.BACKEND != "PYG":
-    pytest.skip("Skipping PYG tests", allow_module_level=True)
-
 from matgl.models import TensorNet
 from matgl.utils import training as training_mod
 from matgl.utils.training import MGLDatasetLoader, MGLPotentialTrainer

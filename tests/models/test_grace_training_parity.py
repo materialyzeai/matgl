@@ -44,12 +44,6 @@ import numpy as np
 import pytest
 import torch
 
-import matgl
-
-if matgl.config.BACKEND != "PYG":
-    pytest.skip("GRACE is PYG-only", allow_module_level=True)
-
-
 # Heavy parity dependencies — keep optional.
 tf = pytest.importorskip("tensorflow")
 tf.config.experimental.enable_tensor_float_32_execution(False)
@@ -62,6 +56,7 @@ tp_tpmodel = pytest.importorskip("tensorpotential.tpmodel")
 
 from pymatgen.io.ase import AseAtomsAdaptor  # noqa: E402
 
+import matgl  # noqa: E402
 from matgl.apps.pes import Potential  # noqa: E402
 from matgl.ext.pymatgen import Structure2Graph  # noqa: E402
 from matgl.models import GRACE  # noqa: E402

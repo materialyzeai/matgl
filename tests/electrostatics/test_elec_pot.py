@@ -1,26 +1,16 @@
-"""Tests for the electrostatic-potential aggregator, including DGL <-> PyG parity."""
+"""Tests for the electrostatic-potential aggregator."""
 
 from __future__ import annotations
 
-import importlib
 import math
 from types import SimpleNamespace
 
-import pytest
 import torch
 
 import matgl
 from matgl.config import COULOMB_CONSTANT
-from matgl.electrostatics._elec_pot_pyg import ElectrostaticPotential as ElectrostaticPotentialPyG
+from matgl.electrostatics._elec_pot import ElectrostaticPotential as ElectrostaticPotentialPyG
 from matgl.utils.cutoff import polynomial_cutoff
-
-
-def _has_dgl() -> bool:
-    try:
-        importlib.import_module("dgl")
-    except Exception:  # DGL has many import-time failure modes (missing libs, version skew)
-        return False
-    return True
 
 
 def _make_pyg_graph(pos: torch.Tensor, edge_index: torch.Tensor) -> SimpleNamespace:
@@ -74,43 +64,3 @@ def test_elec_pot_pyg_gradient_flow():
     assert torch.isfinite(pos.grad).all()
     # Symmetric bond: grads on the two atoms must be exact opposites.
     assert torch.allclose(pos.grad[0], -pos.grad[1], atol=1e-10)
-
-
-@pytest.mark.skipif(not _has_dgl(), reason="DGL not importable in this environment")
-def test_elec_pot_dgl_pyg_parity():
-    """Identical inputs must give identical per-atom potentials in DGL and PyG."""
-    import dgl
-
-    from matgl.electrostatics._elec_pot_dgl import ElectrostaticPotential as ElectrostaticPotentialDGL
-
-    cutoff = 5.0
-    torch.manual_seed(0)
-    n = 6
-    pos = torch.randn(n, 3, dtype=matgl.float_th)
-    # Build a fully connected (no self-loops) symmetric edge list.
-    src, dst = [], []
-    for i in range(n):
-        for j in range(n):
-            if i == j:
-                continue
-            src.append(i)
-            dst.append(j)
-    src_t = torch.tensor(src, dtype=torch.long)
-    dst_t = torch.tensor(dst, dtype=torch.long)
-    bond_dist = torch.linalg.norm(pos[src_t] - pos[dst_t], dim=1)
-
-    charge = torch.randn(n, dtype=matgl.float_th)
-    sigma = torch.rand(n, dtype=matgl.float_th) + 0.3
-
-    # DGL side
-    g_dgl = dgl.graph((src_t, dst_t), num_nodes=n)
-    g_dgl.ndata["charge"] = charge
-    g_dgl.ndata["sigma"] = sigma
-    g_dgl.edata["bond_dist"] = bond_dist
-    out_dgl = ElectrostaticPotentialDGL(element_types=("X",), cutoff=cutoff)(g_dgl).ndata["elec_pot"]
-
-    # PyG side
-    g_pyg = _make_pyg_graph(pos, torch.stack([src_t, dst_t], dim=0))
-    out_pyg = ElectrostaticPotentialPyG(element_types=("X",), cutoff=cutoff)(g_pyg, charge=charge, sigma=sigma)
-
-    assert torch.allclose(out_dgl, out_pyg, atol=1e-6)

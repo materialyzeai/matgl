@@ -44,11 +44,10 @@ Major milestones are summarized below. Please refer to the [changelog] for detai
 
 ## Major update: v3.0.0 (May 2026)
 
-> **Deprecation notice.** The DGL backend is **deprecated** and will be **removed in v4.0.0**. New work should
-> target the default PyG backend. Models that currently have only a DGL implementation will either be ported to
-> PyG before v4.0.0 or dropped from matgl at that point — track [changes.md](changes.md) for status.
+> **DGL support removed.** The DGL backend has been removed. matgl now targets PyTorch Geometric (PyG) exclusively.
+> Models that previously had only DGL implementations have either been ported to PyG or removed.
 
-A bug in the message-passing convention of `TensorNet`, `M3GNet`, and `QET` (both PyG and DGL) has been corrected:
+A bug in the message-passing convention of `TensorNet`, `M3GNet`, and `QET` has been corrected:
 edge messages are now aggregated onto the source (center) node so each atom correctly collects information from
 its neighbors. Pre-trained weights generated under the old convention are no longer numerically valid. New weights
 — including `TensorNet-PES-MatPES-PBE-2025.2` and the PyG `M3GNet` / `QET` potentials — have been retrained

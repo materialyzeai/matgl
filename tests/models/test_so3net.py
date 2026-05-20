@@ -9,17 +9,11 @@ import torch
 import matgl
 from matgl.models import SO3Net
 
-BACKEND = matgl.config.BACKEND
-
 
 def _set_pos_and_pbc(graph, lat):
-    """Attach ``pos`` and ``pbc_offshift`` to ``graph`` for the active backend."""
-    if BACKEND == "DGL":
-        graph.edata["pbc_offshift"] = torch.matmul(graph.edata["pbc_offset"], lat[0])
-        graph.ndata["pos"] = graph.ndata["frac_coords"] @ lat[0]
-    else:
-        graph.pbc_offshift = torch.matmul(graph.pbc_offset, lat[0])
-        graph.pos = graph.frac_coords @ lat[0]
+    """Attach ``pos`` and ``pbc_offshift`` to ``graph``."""
+    graph.pbc_offshift = torch.matmul(graph.pbc_offset, lat[0])
+    graph.pos = graph.frac_coords @ lat[0]
 
 
 def test_model(graph_MoS):

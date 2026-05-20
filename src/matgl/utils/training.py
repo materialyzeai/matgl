@@ -1,11 +1,4 @@
-"""Utils for training MatGL models.
-
-This module hosts the Lightning training scaffolding used by both DGL and PyG
-backends. The graph-attribute access pattern differs between the two frameworks
-(``g.edata`` / ``batch_num_nodes()`` for DGL vs ``g.pos`` / ``g.batch`` for PyG),
-so a small handful of methods branch on ``matgl.config.BACKEND``. Everything else
-(loss, optimizer, scheduler, logging, the public class layout) is shared.
-"""
+"""Utils for training MatGL models."""
 
 from __future__ import annotations
 
@@ -22,12 +15,8 @@ from monty.serialization import loadfn
 from pymatgen.core import Structure
 from torch import nn
 
-from matgl.config import BACKEND, MATGL_CACHE
-
-if BACKEND == "DGL":
-    from matgl.apps._pes_dgl import Potential
-else:
-    from matgl.apps._pes_pyg import Potential  # type: ignore[assignment]
+from matgl.apps._pes import Potential
+from matgl.config import MATGL_CACHE
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -249,7 +238,7 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         to the wrapped model.
 
         Args:
-            g: Backend graph (DGL ``DGLGraph`` or PyG ``Data``/``Batch``).
+            g: PyG ``Data``/``Batch`` graph.
             lat: Lattice tensor. ``(3, 3)`` for a single graph or ``(B, 3, 3)`` when batched.
             l_g: Optional line graph.
             state_attr: Optional state attribute.
@@ -257,13 +246,7 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         Returns:
             Model prediction.
         """
-        if BACKEND == "DGL":
-            g.edata["lattice"] = torch.repeat_interleave(lat, g.batch_num_edges(), dim=0)  # type:ignore[arg-type]
-            g.edata["pbc_offshift"] = (g.edata["pbc_offset"].unsqueeze(dim=-1) * g.edata["lattice"]).sum(dim=1)
-            g.ndata["pos"] = (
-                g.ndata["frac_coords"].unsqueeze(dim=-1) * torch.repeat_interleave(lat, g.batch_num_nodes(), dim=0)  # type:ignore[arg-type]
-            ).sum(dim=1)
-        elif lat is not None:
+        if lat is not None:
             if lat.dim() == 2:
                 lat = lat.unsqueeze(0)
             batch = getattr(g, "batch", None)
@@ -443,7 +426,7 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         """Run the wrapped potential model.
 
         Args:
-            g: Backend graph (DGL ``DGLGraph`` or PyG ``Data``/``Batch``).
+            g: PyG ``Data``/``Batch`` graph.
             lat: Lattice tensor.
             l_g: Optional line graph.
             state_attr: Optional state attribute.
@@ -500,7 +483,7 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             preds = (preds[0], preds[1], preds[2], preds[3].squeeze())
             labels = (labels[0], labels[1], labels[2], labels[3].squeeze())
 
-        num_atoms = g.batch_num_nodes() if BACKEND == "DGL" else torch.bincount(g.batch)
+        num_atoms = torch.bincount(g.batch)
         results = self.loss_fn(
             loss=self.loss,  # type: ignore
             preds=preds,
@@ -512,14 +495,7 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         self._last_preds = preds
         self._last_labels = labels
         self._last_num_atoms = num_atoms
-        if BACKEND == "DGL":
-            if "sample_idx" in g.ndata:
-                offsets = torch.cumsum(num_atoms, dim=0) - num_atoms
-                self._last_indices = g.ndata["sample_idx"][offsets].to(torch.long)
-            else:
-                self._last_indices = None
-        else:
-            self._last_indices = getattr(g, "sample_idx", None)
+        self._last_indices = getattr(g, "sample_idx", None)
 
         return results, batch_size
 
@@ -741,7 +717,7 @@ def fit_element_refs(
 
     Note:
         For inputs already in graph form (e.g. an
-        :class:`~matgl.graph._data_pyg.MGLDataset` of PyG ``Data``
+        :class:`~matgl.graph._data.MGLDataset` of PyG ``Data``
         objects), :meth:`matgl.layers.AtomRef.fit` provides the same
         regression directly on the layer.
 
@@ -1409,8 +1385,6 @@ class MGLPotentialTrainer:
             model, trainer_kwargs={"callbacks": [LogForceRMS()]}
         )
 
-    The trainer is PyG-only; DGL is being deprecated. The class itself
-    imports cleanly under DGL but ``fit`` raises informatively when called.
     """
 
     def __init__(
@@ -1556,10 +1530,10 @@ class MGLPotentialTrainer:
                 shuffle=shuffle,
                 random_state=random_state,
             )
-            return MGLDataLoader(
-                train_data=train_data,
-                val_data=val_data,
-                test_data=test_data,
+            return MGLDataLoader(  # type: ignore[return-value]
+                train_data=train_data,  # type: ignore[arg-type]
+                val_data=val_data,  # type: ignore[arg-type]
+                test_data=test_data,  # type: ignore[arg-type]
                 batch_size=self.batch_size,
                 **loader_kwargs,
             )
@@ -1573,7 +1547,7 @@ class MGLPotentialTrainer:
             raise KeyError(
                 f"Canonical-splits mapping must contain 'train', 'valid', and 'test' keys; got {sorted(splits.keys())}."
             ) from err
-        return MGLDataLoader(
+        return MGLDataLoader(  # type: ignore[return-value]
             train_data=train_ds,
             val_data=val_ds,
             test_data=test_ds,

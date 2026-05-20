@@ -26,54 +26,7 @@ on:
         description: Only run tests or release a new version to PyPI after tests pass.
 
 jobs:
-  test_dgl:
-    strategy:
-      max-parallel: 20
-      matrix:
-        config:
-          - os: ubuntu-latest
-            python: "3.12"
-
-    runs-on: ${{ matrix.config.os }}
-    env:
-      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: "python"
-      PMG_MAPI_KEY: ${{ secrets.PMG_MAPI_KEY }}
-      DGLBACKEND: "pytorch"
-      MATGL_BACKEND: "DGL"
-
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-          python-version: ${{ matrix.config.python }}
-      - name: Virtual env
-        run: uv venv --python ${{ matrix.config.python }} --clear
-      - name: Install dependencies
-        run: |
-          uv pip install -e "." \
-              "numpy<2" \
-              "torch==2.4.0" \
-              "torchdata==0.8.0" \
-              "dgl==2.4.0" \
-              -f https://data.dgl.ai/wheels/torch-2.4/repo.html
-          uv pip install pytest pytest-cov
-      - name: pytest
-        run: |
-          uv run --no-sync python -c "import dgl; print(dgl.__version__)"
-          uv run --no-sync python -c "import torch; print(torch.__version__)"
-          uv run --no-sync python -c "import torchdata; print(torchdata.__version__)"
-          uv run --no-sync pytest --cov=matgl --cov-report=xml --cov-report=term tests --color=yes
-          mv .coverage coverage.dgl
-      - name: Upload coverage artifacts
-        uses: actions/upload-artifact@v5
-        with:
-          name: coverage-dgl
-          path: coverage.dgl
-          if-no-files-found: ignore
-  test_pyg:
+  test:
     strategy:
       max-parallel: 20
       matrix:
@@ -93,7 +46,6 @@ jobs:
     env:
       PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: "python"
       PMG_MAPI_KEY: ${{ secrets.PMG_MAPI_KEY }}
-      MATGL_BACKEND: "PYG"
 
     steps:
       - uses: actions/checkout@v5
@@ -114,20 +66,19 @@ jobs:
         run: |
           uv run python -c "import torch; print(torch.__version__)"
           uv run pytest --cov=matgl --cov-report=xml --cov-report=term tests --color=yes
-          mv .coverage coverage.pyg
       - name: Upload coverage artifacts
         if: matrix.config.optionals == 'ops'
         uses: actions/upload-artifact@v5
         with:
-          name: coverage-pyg
-          path: coverage.pyg
+          name: coverage
+          path: .coverage
           if-no-files-found: ignore
 
   test_grace_parity:
     # Numerical parity job for the GRACE model against the upstream
     # ``tensorpotential`` (TensorFlow) reference. Heavy install (TensorFlow
     # ~500 MB) so it lives in a dedicated job rather than under the main
-    # PYG matrix. ``tensorpotential`` is intentionally NOT declared as a
+    # test matrix. ``tensorpotential`` is intentionally NOT declared as a
     # project dependency or extras group; we install it manually here.
     runs-on: ubuntu-latest
     strategy:
@@ -135,7 +86,6 @@ jobs:
         python: ["3.11"]
     env:
       PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: "python"
-      MATGL_BACKEND: "PYG"
       TF_CPP_MIN_LOG_LEVEL: "2"
     steps:
       - uses: actions/checkout@v5
@@ -147,7 +97,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Virtual env
         run: uv venv --python ${{ matrix.python }} --clear
-      - name: Install matgl (PYG)
+      - name: Install matgl
         run: |
           uv sync --upgrade
           uv pip install -e .
@@ -168,13 +118,6 @@ jobs:
         #
         # We install ``tensorpotential`` itself with ``--no-deps`` and add
         # only the runtime deps the parity test actually exercises.
-        # ``pandas`` / ``pyyaml`` are imported at module-load time by
-        # ``tensorpotential.utils`` (which the GRACE preset reaches
-        # transitively); ``matscipy`` / ``tqdm`` are imported at
-        # module-load time by ``tensorpotential.data.databuilder``, which
-        # is dragged in by ``tensorpotential.potentials.presets``. Without
-        # any of them the test module would skip with
-        # ``ModuleNotFoundError`` at collection time.
         run: |
           uv pip install --no-deps "tensorpotential>=0.5.9"
           uv pip install \
@@ -192,31 +135,16 @@ jobs:
           uv run pytest tests/models/test_grace_parity_tp.py tests/models/test_grace_training_parity.py -v --color=yes
 
   coverage:
-    needs: [test_dgl, test_pyg]
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Download coverage from test_dgl
+      - name: Download coverage
         uses: actions/download-artifact@v5
         with:
-          name: coverage-dgl
-          path: coverage.dgl
+          name: coverage
+          path: .
           merge-multiple: true
-      - name: Download coverage from test_pyg
-        uses: actions/download-artifact@v5
-        with:
-          name: coverage-pyg
-          path: coverage.pyg
-          merge-multiple: true
-      - name: Combine coverage reports
-        run: |
-          pip install coverage
-          ls *
-          cp coverage.dgl/coverage.dgl coverage-dgl
-          cp coverage.pyg/coverage.pyg coverage-pyg
-          echo "Combining coverage files..."
-          coverage combine coverage-* || echo "Warning: coverage combine failed"
-          coverage xml -o coverage.xml || echo "Warning: coverage xml failed"
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
@@ -227,7 +155,7 @@ jobs:
 
   release:
     if: github.event_name == 'release' || inputs.task == 'release'
-    needs: [test_dgl, test_pyg]
+    needs: [test]
     runs-on: ubuntu-latest
     permissions:
       # For pypi trusted publishing
@@ -238,9 +166,6 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Install latest DGL
-        run: |
-          pip install dgl -f https://data.dgl.ai/wheels/torch-2.4/repo.html
       - name: Build
         run: |
           pip install build
