@@ -71,8 +71,8 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: coverage
-          path: .coverage
-          if-no-files-found: ignore
+          path: coverage.xml
+          if-no-files-found: error
 
   test_grace_parity:
     # Numerical parity job for the GRACE model against the upstream
