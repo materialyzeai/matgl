@@ -15,6 +15,7 @@ nav_order: 3
   `{set2set, weighted_atom, reduce_atom}`, `correct_charges`, `predict_dipole_magnitude`,
   `use_vector_representation`, `return_vector_representation`). Forward takes a PyG `Data`/`Batch` and
   aggregates per-graph via `scatter_add` / `bincount`.
+- **Bug fix: `QET` no longer crashes on single-atom structures.** Bare `torch.squeeze()` calls in `QET.forward` collapsed the size-1 node dimension of a one-atom input to a 0-d scalar, raising `IndexError` inside `ElectrostaticPotential`. These now use `.reshape(-1)`, which drops only trailing feature dimensions and never the node dimension.
 
 ## 3.0.3
 - **GRACE (PyG) interatomic potential.** New `matgl.models.GRACE` (beta) joins TensorNet / M3GNet / MEGNet / QET / CHGNet / SO3Net on the PyG backend. (#779)
