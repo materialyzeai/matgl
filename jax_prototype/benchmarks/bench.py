@@ -18,6 +18,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 from ase.calculators.calculator import all_changes
 from matgl.apps.pes import Potential
@@ -76,12 +77,25 @@ def main() -> None:
     parser.add_argument("--xlarge", action="store_true", help="include the ~1000-atom cell")
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--iters", type=int, default=10)
+    parser.add_argument(
+        "--pretrained",
+        default=None,
+        help="load a pretrained model by name (e.g. TensorNet-PES-MatPES-r2SCAN-2025.2) instead of random weights",
+    )
     args = parser.parse_args()
 
     import jax
 
-    print(f"model: {args.model}   jax devices: {jax.devices()}   torch threads: {torch.get_num_threads()}")
-    pot = build_potential(args.model)
+    if args.pretrained:
+        import matgl
+
+        pot = matgl.load_model(args.pretrained)
+        pot.eval()
+        label = args.pretrained
+    else:
+        pot = build_potential(args.model)
+        label = f"{args.model} (random weights)"
+    print(f"model: {label}   jax devices: {jax.devices()}   torch threads: {torch.get_num_threads()}")
 
     rows = []
     for name, struct in make_structures(include_xlarge=args.xlarge).items():
@@ -106,6 +120,7 @@ def main() -> None:
 
         # correctness guard: JAX must agree with eager within float32 noise
         ediff = abs(eager.results["energy"] - jax_calc.results["energy"])
+        fdiff = float(np.abs(eager.results["forces"] - jax_calc.results["forces"]).max())
 
         # subtract the shared graph-build cost to isolate the model speedup
         gb = graph_ms / 1e3
@@ -121,8 +136,9 @@ def main() -> None:
             "speedup": eager_ms / jax_ms,
             "model_speedup": model_speedup,
             "Ediff": ediff,
+            "Fdiff": fdiff,
         }
-        if args.torch_compile:
+        if args.torch_compile and not args.pretrained:
             cpot = build_potential(args.model, compile_model=True)
             ccalc = PESCalculator(cpot, stress_unit="GPa")
             _, c_ms = time_calc(ccalc, atoms, max(args.warmup, 3), args.iters)
@@ -146,7 +162,8 @@ def main() -> None:
     print("ms/step = one energy+forces+stress eval (lower is better).")
     print("speedup = end-to-end vs eager;  model spd = vs eager after subtracting graph build.")
     maxe = max(r["Ediff"] for r in rows)
-    print(f"max |E_eager - E_jax| across systems: {maxe:.2e} eV  (float32 parity check)")
+    maxf = max(r["Fdiff"] for r in rows)
+    print(f"parity vs eager (float32): max |dE| {maxe:.2e} eV, max |dF| {maxf:.2e} eV/A")
 
 
 if __name__ == "__main__":
