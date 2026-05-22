@@ -6,10 +6,14 @@ nav_order: 3
 
 # Change Log
 
-## 3.0.5
+## 4.0.0
 - **DGL backend removed.** All DGL implementations have been deleted. matgl now targets PyTorch Geometric
-  exclusively. The `MATGL_BACKEND` env var, `matgl.set_backend()` API, and `ensure_backend()` helper have
-  been removed. Private `_*_pyg.py` modules have been renamed to drop the `_pyg` suffix.
+  exclusively. The `MATGL_BACKEND` env var and the `ensure_backend()` helper have been removed.
+  `matgl.set_backend()` is retained as a no-op stub for backwards compatibility and emits a
+  `DeprecationWarning` when `"DGL"` is requested. Private `_*_pyg.py` modules have been renamed to drop
+  the `_pyg` suffix.
+
+## 3.0.5
 - **Bug fix: `QET` no longer crashes on single-atom structures.** Bare `torch.squeeze()` calls in `QET.forward` collapsed the size-1 node dimension of a one-atom input to a 0-d scalar, raising `IndexError` inside `ElectrostaticPotential`. These now use `.reshape(-1)`, which drops only trailing feature dimensions and never the node dimension.
 
 ## 3.0.4

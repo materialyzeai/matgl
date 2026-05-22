@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import typing
+import warnings
 from importlib.metadata import PackageNotFoundError, version
 
 import numpy as np
@@ -43,6 +44,7 @@ __all__ = [
     "int_np",
     "int_th",
     "load_model",
+    "set_backend",
     "set_default_dtype",
 ]
 
@@ -74,3 +76,26 @@ def get_best_device() -> typing.Literal["cpu", "cuda", "mps"]:
     if torch.backends.mps.is_available():
         return "mps"
     return "cpu"
+
+
+def set_backend(backend: typing.Literal["DGL", "PYG"] = "PYG") -> None:
+    """Deprecated no-op stub retained for backwards compatibility.
+
+    Earlier versions of matgl supported selecting a graph backend -- DGL or PyTorch
+    Geometric -- through this function. The DGL backend has since been removed and
+    matgl now uses PyTorch Geometric exclusively. This stub is kept so existing code
+    that calls ``matgl.set_backend(...)`` continues to run without modification.
+
+    Args:
+        backend: Retained only for signature compatibility. Requesting ``"DGL"`` emits
+            a ``DeprecationWarning``; the value is otherwise ignored and PyTorch
+            Geometric is always used.
+    """
+    if str(backend).upper() == "DGL":
+        warnings.warn(
+            "The DGL backend no longer exists in matgl; PyTorch Geometric is now the "
+            "only backend and is used regardless of this call. matgl.set_backend() is a "
+            "no-op stub preserved for backwards compatibility.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
