@@ -74,6 +74,22 @@ def test_model(graph_MoS):
     _check_scalar_output(output)
 
 
+@pytest.mark.parametrize("use_smooth", [True, False])
+def test_model_spherical_bessel(graph_MoS, use_smooth):
+    """SphericalBessel RBF must size the embedding/interaction layers correctly.
+
+    The non-smooth basis emits ``max_l * max_n`` features (the smooth one emits
+    ``max_n``); a regression test that the input Linear layers are sized to match.
+    """
+    torch.manual_seed(0)
+    _, graph, _ = graph_MoS
+    model = _make_tensornet(is_intensive=False, rbf_type="SphericalBessel", use_smooth=use_smooth, max_n=4, max_l=3)
+    if BACKEND == "PYG":
+        model.to(_device_of(graph))
+    output = model(g=graph)
+    _check_scalar_output(output)
+
+
 def test_exceptions():
     with pytest.raises(ValueError, match="Invalid activation type"):
         _ = _make_tensornet(element_types=None, is_intensive=False, activation_type="whatever")

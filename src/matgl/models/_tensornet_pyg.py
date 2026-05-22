@@ -168,9 +168,13 @@ class TensorNet(MatGLModel):
         self.ntypes_state = ntypes_state
         self.task_type = task_type
 
-        # make sure the number of radial basis functions correct for tensor embedding
+        # The radial-basis width fed to the embedding / interaction layers must match
+        # the actual SphericalBessel output: the smooth basis emits ``max_n`` features,
+        # the non-smooth basis emits ``max_l * max_n`` (one ``max_n``-wide block per
+        # angular order l). Using ``max_n`` for the non-smooth case sized the input
+        # Linear layers too small and crashed the forward pass with a shape mismatch.
         if rbf_type == "SphericalBessel":
-            num_rbf = max_n
+            num_rbf = max_n if use_smooth else max_l * max_n
 
         EmbeddingCls = TensorEmbeddingWarp if self._use_warp else TensorEmbeddingPyG  # type: ignore[assignment]
         InteractionCls = TensorNetInteractionWarp if self._use_warp else TensorNetInteractionPyG  # type: ignore[assignment]

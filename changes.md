@@ -8,6 +8,7 @@ nav_order: 3
 
 ## 3.0.5
 - **Bug fix: `QET` no longer crashes on single-atom structures.** Bare `torch.squeeze()` calls in `QET.forward` (and in the DGL `LinearQeq` QEq solver) collapsed the size-1 node dimension of a one-atom input to a 0-d scalar, raising `IndexError` inside the PyG `ElectrostaticPotential` and a node-feature shape error on the DGL backend. These now use `.reshape(-1)`, which drops only trailing feature dimensions and never the node dimension.
+- **Bug fix: `TensorNet` / `QET` no longer crash with the non-smooth `SphericalBessel` radial basis.** With `rbf_type="SphericalBessel"` and `use_smooth=False`, the basis emits `max_l * max_n` features, but the embedding / interaction input `Linear` layers were sized for only `max_n`, raising a shape-mismatch `RuntimeError` in the forward pass. The radial-basis width fed to those layers now correctly accounts for `max_l` in the non-smooth case (the smooth `SphericalBessel` and `Gaussian` bases are unaffected). Fixed on both the PyG and DGL backends.
 
 ## 3.0.4
 - **PyG `SO3Net`.** New `matgl.models._so3net_pyg.SO3Net` is the PyG counterpart of the existing DGL
