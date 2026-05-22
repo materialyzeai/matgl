@@ -26,7 +26,7 @@ from matgl.ext.ase import PESCalculator  # noqa: E402
 from matgl.ext.jax import JAXPESCalculator  # noqa: E402
 
 STEPS = 1000
-MODEL = "TensorNet-PES-MatPES-r2SCAN-2025.2"
+MODEL = "QET-PES-MatPES-r2SCAN-2025.2"
 
 
 def get_lifepo4():
