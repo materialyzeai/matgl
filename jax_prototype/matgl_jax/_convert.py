@@ -50,6 +50,28 @@ def _collect(sd, prefix, bias=True):
     return [_lin(sd, f"{prefix}.{i}", bias=bias) for i in idxs]
 
 
+def _distance_projs(sd, prefix):
+    """Convert the embedding's three distance projections.
+
+    The plain PyG ``TensorEmbedding`` keeps them as three separate ``Linear``
+    layers (``distance_proj1/2/3``); the Warp-accelerated ``TensorEmbedding``
+    fuses them into one ``Linear(rbf, 3*units)`` (``distance_proj``) whose weight
+    is the row-concatenation of the three. Accept either so a Warp-enabled
+    TensorNet converts to the same JAX pytree as its PyG twin.
+    """
+    if f"{prefix}.distance_proj.weight" in sd:  # fused Warp layout
+        w, b = sd[f"{prefix}.distance_proj.weight"], sd[f"{prefix}.distance_proj.bias"]
+        units = w.shape[0] // 3
+        return {
+            f"distance_proj{i + 1}": {
+                "w": _arr(w[i * units : (i + 1) * units].T),
+                "b": _arr(b[i * units : (i + 1) * units]),
+            }
+            for i in range(3)
+        }
+    return {f"distance_proj{i}": _lin(sd, f"{prefix}.distance_proj{i}") for i in (1, 2, 3)}
+
+
 def build_config(model) -> dict:
     """Static architecture config (Python scalars + non-learned basis arrays)."""
     return {
@@ -74,9 +96,7 @@ def convert_tensornet(model) -> dict:
     emb = "tensor_embedding"
     params: dict = {
         "tensor_embedding": {
-            "distance_proj1": _lin(sd, f"{emb}.distance_proj1"),
-            "distance_proj2": _lin(sd, f"{emb}.distance_proj2"),
-            "distance_proj3": _lin(sd, f"{emb}.distance_proj3"),
+            **_distance_projs(sd, emb),
             "emb": _arr(sd[f"{emb}.emb.weight"]),
             "emb2": _lin(sd, f"{emb}.emb2"),
             "linears_tensor": _collect(sd, f"{emb}.linears_tensor", bias=False),

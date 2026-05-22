@@ -127,15 +127,20 @@ XLA program (forward + backward together).
   is reused.
 * **Weight conversion.** `_convert.py` maps the torch `state_dict` to a nested
   dict pytree; `nn.Linear` is stored transposed (`x @ W` instead of `x @ W.T`),
-  LayerNorm / Embedding copied verbatim, Bessel-root constants rederived.
+  LayerNorm / Embedding copied verbatim, Bessel-root constants rederived. A
+  Warp-enabled TensorNet (the Warp embedding fuses `distance_proj1/2/3` into one
+  `Linear`) converts to the same JAX pytree as its plain-PyG twin.
 * **Faithful stress.** The strain leaf deforms both the PBC offshift *and* the
   atomic positions, reproducing `Potential.forward`'s two autograd leaves.
 
 ## Limitations
 
 * CPU-measured; GPU/Apple-Metal numbers require the platform JAX wheel.
-* `use_warp=True` (NVIDIA Warp kernels) is not ported — the prototype is the
-  *portable* path. On CUDA the comparison would be JAX/XLA vs hand-tuned Warp.
+* The NVIDIA Warp kernels themselves are not ported — the JAX path *is* the
+  portable alternative (on CUDA the comparison would be JAX/XLA vs Warp). A
+  Warp-enabled TensorNet is still accepted: `convert_potential` reads only the
+  weights (identical to the PyG variant bar the fused `distance_proj`), so the
+  JAX result is the same whether or not the source model used Warp.
 * Training and the per-atom Hessian loop are out of scope (the Hessian is a
   strong future JAX target via `jax.hessian` / forward-over-reverse).
 * Non-smooth spherical Bessel is ported for `l ≤ 4` and only `max_l=1` (matgl's

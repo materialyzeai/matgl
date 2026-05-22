@@ -134,6 +134,43 @@ def test_padding_invariance(struct_name):
         assert np.abs(np.asarray(s0) - np.asarray(s)).max() < 1e-8
 
 
+def test_converts_warp_fused_distance_proj():
+    """A Warp-enabled TensorNet fuses distance_proj1/2/3 into one distance_proj.
+
+    The Warp ``TensorEmbedding`` registers a single ``Linear(rbf, 3*units)``
+    instead of three ``Linear(rbf, units)``; its ``state_dict`` therefore keys
+    that layer as ``distance_proj`` (Warp itself is not installable here, but its
+    fused weight is exactly the row-concatenation of the three PyG layers).
+    ``convert_potential`` must accept that layout and yield identical output.
+    """
+    potential, g, lat = _build(STRUCTURES["GaAs"], CONFIGS["sb-smooth-extensive"])
+
+    params0, cfg0, extras0 = convert_potential(potential)
+    e0, f0, s0 = make_potential_fn(params0, cfg0, extras0, num_graphs=1)(*_jax_inputs(g, lat))
+
+    # Rewrite the embedding to the fused Warp layout.
+    emb = potential.model.tensor_embedding
+    fused = torch.nn.Linear(emb.distance_proj1.in_features, 3 * emb.distance_proj1.out_features).double()
+    with torch.no_grad():
+        fused.weight.copy_(
+            torch.cat([emb.distance_proj1.weight, emb.distance_proj2.weight, emb.distance_proj3.weight], dim=0)
+        )
+        fused.bias.copy_(torch.cat([emb.distance_proj1.bias, emb.distance_proj2.bias, emb.distance_proj3.bias], dim=0))
+    del emb.distance_proj1, emb.distance_proj2, emb.distance_proj3
+    emb.distance_proj = fused
+
+    sd = potential.model.state_dict()
+    assert "tensor_embedding.distance_proj.weight" in sd
+    assert "tensor_embedding.distance_proj1.weight" not in sd
+
+    params1, cfg1, extras1 = convert_potential(potential)
+    e1, f1, s1 = make_potential_fn(params1, cfg1, extras1, num_graphs=1)(*_jax_inputs(g, lat))
+
+    assert abs(float(e0) - float(e1)) < 1e-9
+    assert np.abs(np.asarray(f0) - np.asarray(f1)).max() < 1e-9
+    assert np.abs(np.asarray(s0) - np.asarray(s1)).max() < 1e-9
+
+
 def test_calculator_matches_pescalculator():
     """JAXPESCalculator (float32) tracks matgl's PESCalculator within float32 noise."""
     from ase.calculators.calculator import all_changes
