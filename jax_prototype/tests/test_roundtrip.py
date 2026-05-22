@@ -1,0 +1,215 @@
+"""JAX vs PyTorch parity tests for the TensorNet (and QET) inference path.
+
+Run with:  .venv/bin/python -m pytest jax_prototype/tests/test_roundtrip.py
+
+All comparisons are done in float64 (``jax_enable_x64``) so a mismatch flags a
+real algorithmic divergence rather than float32 accumulation noise.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import jax
+
+jax.config.update("jax_enable_x64", True)
+
+import jax.numpy as jnp  # noqa: E402
+import numpy as np  # noqa: E402
+import pytest  # noqa: E402
+import torch  # noqa: E402
+from matgl.apps.pes import Potential  # noqa: E402
+from matgl.config import DEFAULT_ELEMENTS  # noqa: E402
+from matgl.ext._pymatgen_pyg import Structure2Graph  # noqa: E402
+from matgl.models import TensorNet  # noqa: E402
+from pymatgen.core import Lattice, Structure  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).parents[1]))
+from matgl_jax._convert import convert_potential  # noqa: E402
+from matgl_jax._pad import pad_graph  # noqa: E402
+from matgl_jax._potential import make_potential_fn  # noqa: E402
+
+CUTOFF = 5.0
+
+STRUCTURES = {
+    "Si2": Structure(Lattice.cubic(3.45), ["Si", "Si"], [[0, 0, 0], [0.5, 0.5, 0.5]]),
+    "NaCl-sc": Structure(Lattice.cubic(5.64), ["Na", "Cl"], [[0, 0, 0], [0.5, 0.5, 0.5]]).make_supercell([2, 2, 2])
+    or None,
+    "GaAs": Structure(Lattice.cubic(5.65), ["Ga", "As"], [[0, 0, 0], [0.25, 0.25, 0.25]]),
+}
+# make_supercell mutates in place and returns None — recover the object.
+STRUCTURES["NaCl-sc"] = Structure(Lattice.cubic(5.64), ["Na", "Cl"], [[0, 0, 0], [0.5, 0.5, 0.5]])
+STRUCTURES["NaCl-sc"].make_supercell([2, 2, 2])
+
+CONFIGS = {
+    "sb-smooth-extensive": {
+        "rbf_type": "SphericalBessel",
+        "use_smooth": True,
+        "max_n": 8,
+        "max_l": 3,
+        "is_intensive": False,
+    },
+    "gaussian-extensive": {"rbf_type": "Gaussian", "num_rbf": 16, "is_intensive": False},
+}
+
+
+def _build(struct, cfg_kwargs, seed=0):
+    """Build a torch Potential + JAX converted fn for one (config, structure)."""
+    torch.manual_seed(seed)
+    model = TensorNet(element_types=DEFAULT_ELEMENTS, units=32, nblocks=2, cutoff=CUTOFF, use_warp=False, **cfg_kwargs)
+    model.eval()
+    rng = np.random.default_rng(seed)
+    element_refs = rng.standard_normal(len(DEFAULT_ELEMENTS))
+    potential = Potential(
+        model=model,
+        data_mean=0.37,
+        data_std=0.81,
+        element_refs=element_refs,
+        calc_forces=True,
+        calc_stresses=True,
+    )
+    potential.eval()
+    potential.double()
+
+    conv = Structure2Graph(DEFAULT_ELEMENTS, CUTOFF)
+    g, lat, _ = conv.get_graph(struct)
+    return potential, g, lat.double()
+
+
+def _torch_outputs(potential, g, lat):
+    e, f, s, _ = potential(g, lat)
+    return float(e), f.detach().numpy(), s.detach().numpy()
+
+
+def _jax_inputs(g, lat, pad_to=None):
+    lat3 = jnp.asarray(lat[0].detach().numpy())
+    frac = jnp.asarray(g.frac_coords.double().numpy())
+    pos = frac @ lat3
+    z = jnp.asarray(g.node_type.numpy())
+    edge_index = jnp.asarray(g.edge_index.numpy())
+    pbc_offset = jnp.asarray(g.pbc_offset.double().numpy())
+    n = z.shape[0]
+    batch = jnp.zeros(n, dtype=jnp.int32)
+    strain = jnp.zeros((3, 3))
+    if pad_to is not None:
+        edge_index, pbc_offset, edge_mask = pad_graph(edge_index, pbc_offset, pad_to)
+    else:
+        edge_mask = jnp.ones(edge_index.shape[1])
+    return pos, strain, frac, lat3, pbc_offset, z, edge_index, batch, edge_mask
+
+
+@pytest.mark.parametrize("struct_name", list(STRUCTURES))
+@pytest.mark.parametrize("cfg_name", list(CONFIGS))
+def test_energy_forces_stress_parity(struct_name, cfg_name):
+    potential, g, lat = _build(STRUCTURES[struct_name], CONFIGS[cfg_name])
+    e_t, f_t, s_t = _torch_outputs(potential, g, lat)
+
+    params, cfg, extras = convert_potential(potential)
+    fn = make_potential_fn(params, cfg, extras, num_graphs=1)
+    e_j, f_j, s_j = fn(*_jax_inputs(g, lat))
+    e_j, f_j, s_j = float(e_j), np.asarray(f_j), np.asarray(s_j)
+
+    assert abs(e_t - e_j) < 1e-6, f"energy: torch={e_t} jax={e_j}"
+    assert np.abs(f_t - f_j).max() < 1e-6, f"forces max diff {np.abs(f_t - f_j).max():.2e}"
+    assert np.abs(s_t - s_j).max() < 1e-6, f"stress max diff {np.abs(s_t - s_j).max():.2e}"
+
+
+@pytest.mark.parametrize("struct_name", list(STRUCTURES))
+def test_padding_invariance(struct_name):
+    """Padded (sentinel) edges must contribute exactly zero — no NaN leak."""
+    potential, g, lat = _build(STRUCTURES[struct_name], CONFIGS["sb-smooth-extensive"])
+    params, cfg, extras = convert_potential(potential)
+    fn = make_potential_fn(params, cfg, extras, num_graphs=1)
+
+    n_edges = g.edge_index.shape[1]
+    e0, f0, s0 = fn(*_jax_inputs(g, lat))
+    e1, f1, s1 = fn(*_jax_inputs(g, lat, pad_to=n_edges + 257))
+    e2, f2, s2 = fn(*_jax_inputs(g, lat, pad_to=n_edges + 1024))
+
+    for e, f, s in [(e1, f1, s1), (e2, f2, s2)]:
+        assert np.isfinite(np.asarray(e)).all()
+        assert abs(float(e0) - float(e)) < 1e-8
+        assert np.abs(np.asarray(f0) - np.asarray(f)).max() < 1e-8
+        assert np.abs(np.asarray(s0) - np.asarray(s)).max() < 1e-8
+
+
+def test_calculator_matches_pescalculator():
+    """JAXPESCalculator (float32) tracks matgl's PESCalculator within float32 noise."""
+    from ase.calculators.calculator import all_changes
+    from matgl.ext.ase import PESCalculator
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    sys.path.insert(0, str(Path(__file__).parents[1]))
+    from matgl_jax import JAXPESCalculator
+
+    torch.manual_seed(1)
+    model = TensorNet(
+        element_types=DEFAULT_ELEMENTS,
+        units=32,
+        nblocks=2,
+        cutoff=CUTOFF,
+        use_warp=False,
+        rbf_type="SphericalBessel",
+        use_smooth=True,
+        max_n=8,
+        max_l=3,
+        is_intensive=False,
+    )
+    model.eval()
+    potential = Potential(model=model, data_mean=0.1, data_std=0.9, calc_forces=True, calc_stresses=True)
+    potential.eval()  # float32
+
+    atoms = AseAtomsAdaptor.get_atoms(STRUCTURES["NaCl-sc"])
+    ref = PESCalculator(potential, stress_unit="GPa")
+    jax_calc = JAXPESCalculator(potential, stress_unit="GPa")
+
+    ref.calculate(atoms, ["energy"], all_changes)
+    jax_calc.calculate(atoms, ["energy"], all_changes)
+
+    de = abs(ref.results["energy"] - jax_calc.results["energy"])
+    df = np.abs(ref.results["forces"] - jax_calc.results["forces"]).max()
+    ds = np.abs(ref.results["stress"] - jax_calc.results["stress"]).max()
+    assert de < 5e-3, f"energy diff {de:.2e}"
+    assert df < 5e-3, f"forces diff {df:.2e}"
+    assert ds < 5e-2, f"stress diff {ds:.2e}"
+
+
+def test_calculator_runs_md():
+    """A short NVT MD with JAXPESCalculator runs and stays finite."""
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    sys.path.insert(0, str(Path(__file__).parents[1]))
+    from matgl_jax import JAXPESCalculator
+
+    torch.manual_seed(2)
+    model = TensorNet(
+        element_types=DEFAULT_ELEMENTS,
+        units=32,
+        nblocks=2,
+        cutoff=CUTOFF,
+        use_warp=False,
+        rbf_type="SphericalBessel",
+        use_smooth=True,
+        max_n=8,
+        max_l=3,
+        is_intensive=False,
+    )
+    model.eval()
+    potential = Potential(model=model, calc_forces=True, calc_stresses=True)
+    potential.eval()
+
+    atoms = AseAtomsAdaptor.get_atoms(STRUCTURES["Si2"])
+    atoms.calc = JAXPESCalculator(potential, stress_unit="eV/A3")
+    from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
+    from ase.md.verlet import VelocityVerlet
+
+    MaxwellBoltzmannDistribution(atoms, temperature_K=300)
+    dyn = VelocityVerlet(atoms, timestep=1.0)
+    dyn.run(10)
+    assert np.isfinite(atoms.get_potential_energy())
+    assert np.isfinite(atoms.get_forces()).all()
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-v"]))
