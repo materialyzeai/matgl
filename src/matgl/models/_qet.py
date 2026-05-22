@@ -201,7 +201,7 @@ class QET(TensorNet):
         fea_dict = self.forward_features(g, state_attr)
         x = fea_dict["readout"]
 
-        chi = torch.squeeze(self.chi_readout(x))
+        chi = self.chi_readout(x).reshape(-1)
         if ext_pot is not None:
             chi = chi + ext_pot
 
@@ -211,11 +211,11 @@ class QET(TensorNet):
         node_type = node_type.to(torch.long)
 
         if self.is_hardness_envs:
-            hardness = torch.squeeze(self.hardness_readout(x))  # type: ignore[operator]
+            hardness = self.hardness_readout(x).reshape(-1)  # type: ignore[operator]
         else:
-            hardness = torch.squeeze(self.hardness_readout[node_type])  # type: ignore[index]
+            hardness = self.hardness_readout[node_type].reshape(-1)  # type: ignore[index]
 
-        sigma = torch.squeeze(self.sigma[node_type])
+        sigma = self.sigma[node_type].reshape(-1)
 
         charge = self.qeq(g=g, total_charge=total_charge, chi=chi, hardness=hardness)
         elec_pot = self.elec_pot(g, charge=charge, sigma=sigma)
@@ -224,7 +224,7 @@ class QET(TensorNet):
 
         feats = [x, charge.unsqueeze(dim=1), elec_pot.unsqueeze(dim=1)]
         if self.include_magmom:
-            magmom = torch.squeeze(self.magmom_readout(x))
+            magmom = self.magmom_readout(x).reshape(-1)
             feats.append(magmom.unsqueeze(dim=1))
         node_feat = self.norm(torch.hstack(feats))
         atomic_energies = self.final_layer(node_feat)
