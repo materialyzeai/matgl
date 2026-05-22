@@ -1,4 +1,4 @@
-"""Benchmark: MatCalc ``MDCalc`` 100-step NVT MD of LiFePO4 — JAX vs eager PyTorch.
+"""Benchmark: MatCalc ``MDCalc`` 1000-step NVT MD of LiFePO4 — JAX vs eager PyTorch.
 
 Runs the same MD through MatCalc's ``MDCalc`` PropCalc with matgl's standard eager
 ``PESCalculator`` and with the JAX-accelerated ``JAXPESCalculator``
@@ -25,7 +25,7 @@ from matcalc import MDCalc  # noqa: E402
 from matgl.ext.ase import PESCalculator  # noqa: E402
 from matgl.ext.jax import JAXPESCalculator  # noqa: E402
 
-STEPS = 100
+STEPS = 1000
 MODEL = "TensorNet-PES-MatPES-r2SCAN-2025.2"
 
 
@@ -42,14 +42,14 @@ def get_lifepo4():
 
 
 def run_md(calculator, structure) -> float:
-    """Run a 100-step NVT MD via MatCalc MDCalc; return the wall time in seconds."""
+    """Run the NVT MD via MatCalc MDCalc; return the wall time in seconds."""
     md = MDCalc(
         calculator=calculator,
         ensemble="nvt",
         temperature=300,
         timestep=1.0,
         steps=STEPS,
-        relax_structure=False,  # time only the 100 MD steps
+        relax_structure=False,  # time only the MD steps
         logfile=None,
     )
     t0 = time.perf_counter()
