@@ -1,39 +1,52 @@
-"""Benchmark: JAX/XLA vs eager-PyTorch (vs torch.compile) for TensorNet inference.
+"""Benchmark: JAX/XLA vs eager-PyTorch (vs torch.compile) for TensorNet/QET inference.
 
 Measures the per-step wall time of a full energy + forces + stress evaluation --
 the inner loop of an ASE MD / relaxation -- across system sizes.
 
-    .venv/bin/python jax_prototype/benchmarks/bench.py
-    .venv/bin/python jax_prototype/benchmarks/bench.py --torch-compile --xlarge
+    python dev/jax_benchmark.py
+    python dev/jax_benchmark.py --model qet --torch-compile --xlarge
+    python dev/jax_benchmark.py --pretrained TensorNet-PES-MatPES-r2SCAN-2025.2
 
-XLA compile latency is reported separately from steady-state throughput. All
-backends share one set of (random) TensorNet weights, so the comparison is the
-graph-kernel/dispatch overhead, not the model.
+Requires the optional ``jax`` extra: ``pip install matgl[jax]``. XLA compile
+latency is reported separately from steady-state throughput.
 """
 
 from __future__ import annotations
 
 import argparse
-import sys
 import time
-from pathlib import Path
 
 import numpy as np
 import torch
 from ase.calculators.calculator import all_changes
+from pymatgen.core import Lattice, Structure
+from pymatgen.io.ase import AseAtomsAdaptor
+
 from matgl.apps.pes import Potential
 from matgl.config import DEFAULT_ELEMENTS
 from matgl.ext.ase import PESCalculator
+from matgl.ext.jax import JAXPESCalculator
 from matgl.models import QET, TensorNet
-from pymatgen.io.ase import AseAtomsAdaptor
-
-sys.path.insert(0, str(Path(__file__).parents[1]))
-sys.path.insert(0, str(Path(__file__).parent))
-from structures import make_structures
-
-from matgl_jax import JAXPESCalculator
 
 PROPS = ["energy", "forces", "stress"]
+
+_SI_CONV = Structure.from_spacegroup("Fd-3m", Lattice.cubic(5.43), ["Si"], [[0.0, 0.0, 0.0]])  # 8 atoms
+
+
+def make_structures(include_xlarge: bool = False) -> dict[str, Structure]:
+    """Return ``name -> Structure`` covering a range of system sizes."""
+    out: dict[str, Structure] = {
+        "tiny-2": Structure(Lattice.cubic(3.0), ["Si", "Si"], [[0, 0, 0], [0.5, 0.5, 0.5]]),
+    }
+    for label, mult in [("small-64", 2), ("medium-216", 3), ("large-512", 4)]:
+        s = _SI_CONV.copy()
+        s.make_supercell([mult, mult, mult])
+        out[label] = s
+    if include_xlarge:
+        s = _SI_CONV.copy()
+        s.make_supercell([5, 5, 5])
+        out["xlarge-1000"] = s
+    return out
 
 
 def build_potential(model_type: str = "tensornet", seed: int = 0, **compile_kwargs) -> Potential:
@@ -71,6 +84,7 @@ def time_calc(calc, atoms, n_warmup: int, n_iter: int) -> tuple[float, float]:
 
 
 def main() -> None:
+    """Run the JAX-vs-eager benchmark and print a summary table."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", choices=["tensornet", "qet"], default="tensornet")
     parser.add_argument("--torch-compile", action="store_true", help="also benchmark torch.compile")
@@ -107,7 +121,7 @@ def main() -> None:
         n_edges = int(eager._atoms2graph.get_graph(atoms)[0].edge_index.shape[1])
 
         # graph build is CPU-bound (pymatgen neighbour list) and shared by every
-        # backend — time it on its own so the model speedup can be isolated.
+        # backend -- time it on its own so the model speedup can be isolated.
         for _ in range(args.warmup):
             eager._atoms2graph.get_graph(atoms)
         t0 = time.perf_counter()

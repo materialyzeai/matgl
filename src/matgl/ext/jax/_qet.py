@@ -17,6 +17,7 @@ from math import sqrt
 
 import jax
 import jax.numpy as jnp
+
 from matgl.config import COULOMB_CONSTANT
 
 from ._math import layer_norm, polynomial_cutoff, scatter_add

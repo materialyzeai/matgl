@@ -14,6 +14,7 @@ import numpy as np
 from ase import units
 from ase.calculators.calculator import Calculator, all_changes
 from ase.stress import full_3x3_to_voigt_6_stress
+
 from matgl.ext._ase_pyg import Atoms2Graph
 
 from ._convert import convert_potential

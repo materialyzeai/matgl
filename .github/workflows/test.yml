@@ -86,6 +86,9 @@ jobs:
             optionals: "alchmtk"
           - os: ubuntu-latest
             python: "3.13"
+            optionals: "jax"
+          - os: ubuntu-latest
+            python: "3.13"
           - os: macos-latest
             python: "3.11"
 

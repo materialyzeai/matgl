@@ -110,6 +110,13 @@ MatGL can be installed via pip:
 pip install matgl
 ```
 
+To enable the optional [JAX-accelerated inference backend](#jax-accelerated-inference-experimental), install the `jax`
+extra:
+
+```bash
+pip install matgl[jax]
+```
+
 ## Docker images
 
 Docker images have now been built for matgl, together with LAMMPS support. They are available at the
@@ -191,6 +198,28 @@ struct = Structure.from_spacegroup("Pm-3m", Lattice.cubic(4.1437), ["Cs", "Cl"],
 eform = model.predict_structure(struct)
 print(f"The predicted formation energy for CsCl is {float(eform.numpy()):.3f} eV/atom.")
 ```
+
+### JAX-accelerated inference (experimental)
+
+The optional `matgl.ext.jax` subpackage reimplements the **inference path** (energy + forces + stress) of the PyG-backend
+**TensorNet** and **QET** models in [JAX](https://docs.jax.dev). A pre-trained PyTorch potential is converted to a JAX
+parameter tree and JIT-compiled by XLA into a single fused program, giving a portable (CPU / CUDA / Apple-Silicon)
+**~2-3.5x speedup** over eager PyTorch for the MD / relaxation inner loop — without the NVIDIA-Warp dependency. It
+requires the `jax` extra (`pip install matgl[jax]`).
+
+`JAXPESCalculator` is a drop-in twin of `matgl.ext.ase.PESCalculator` and plugs into the usual `MolecularDynamics` /
+`Relaxer` workflows:
+
+```python
+import matgl
+from matgl.ext.jax import JAXPESCalculator
+
+potential = matgl.load_model("TensorNet-PES-MatPES-r2SCAN-2025.2")
+atoms.calc = JAXPESCalculator(potential, stress_unit="eV/A3")  # any ASE Atoms
+```
+
+Energies, forces and stresses match the PyTorch reference to float64 precision. The backend is inference-only and
+PyG-only; training still goes through the standard PyTorch path. See `dev/jax_benchmark.py` for the benchmark harness.
 
 ## Model Training
 

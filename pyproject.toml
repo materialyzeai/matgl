@@ -69,6 +69,9 @@ ops = [
 alchmtk = [
   "nvalchemi-toolkit",
 ]
+jax = [
+  "jax>=0.4.30",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -191,6 +194,10 @@ ignore_missing_imports = true
 module = ["matgl.kernels.*"]
 ignore_errors = true
 
+[[tool.mypy.overrides]]
+module = ["matgl.ext.jax.*"]
+ignore_errors = true
+
 [tool.coverage.run]
 relative_files = true
 omit = [
@@ -202,6 +209,8 @@ omit = [
     "src/matgl/ext/alchmtk.py",
     "src/matgl/ext/_alchmtk.py",
     "src/matgl/ext/_tensornet_alchmtk.py",
+    # Optional JAX inference backend — only exercised in the dedicated `jax` CI job.
+    "src/matgl/ext/jax/*",
 ]
 
 [tool.coverage.report]

@@ -9,19 +9,21 @@ Covers the three bases :class:`matgl.layers.BondExpansion` can select:
 
 The non-learned Bessel-root / normalisation constants are NOT part of a model's
 ``state_dict``; they are rederived here exactly as ``SphericalBesselFunction``
-does, from ``matgl/utils/sb_roots.npy``.
+does, reusing the in-package ``SPHERICAL_BESSEL_ROOTS`` table.
 """
 
 from __future__ import annotations
 
 from math import pi, sqrt
-from pathlib import Path
 
 import jax.numpy as jnp
-import matgl
 import numpy as np
 
-_SB_ROOTS = np.load(Path(matgl.__file__).parent / "utils" / "sb_roots.npy")  # (128, 128)
+from matgl.utils.maths import SPHERICAL_BESSEL_ROOTS
+
+# Same float32 root table the torch SphericalBesselFunction uses — reused here so
+# the non-smooth basis matches the torch model exactly.
+_SB_ROOTS = SPHERICAL_BESSEL_ROOTS.detach().cpu().numpy()  # (128, 128)
 
 
 # --------------------------------------------------------------------------

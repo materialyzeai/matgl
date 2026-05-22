@@ -1,8 +1,0 @@
-# Lint config for the standalone JAX prototype. Inherits the repo rules but
-# waives docstring requirements for tests / benchmarks (mirrors the root
-# pyproject's per-file-ignores for `tests/`).
-extend = "../pyproject.toml"
-
-[lint.per-file-ignores]
-"tests/*.py" = ["D", "S101", "T201"]
-"benchmarks/*.py" = ["D", "T201"]

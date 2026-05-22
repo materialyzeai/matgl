@@ -7,6 +7,7 @@ nav_order: 3
 # Change Log
 
 ## 3.0.5
+- **Optional JAX inference backend (`matgl.ext.jax`, experimental).** New subpackage that reimplements the inference path (energy + forces + stress) of the PyG-backend `TensorNet` and `QET` models in JAX. A pre-trained PyTorch potential is converted to a JAX parameter tree and JIT-compiled by XLA into one fused program, giving a portable (CPU / CUDA / Apple-Silicon) ~2-3.5x speedup over eager PyTorch for the MD / relaxation inner loop, with no NVIDIA-Warp dependency. `JAXPESCalculator` is a drop-in twin of `matgl.ext.ase.PESCalculator`. Outputs match the PyTorch reference to float64 precision. Requires the optional `jax` extra (`pip install matgl[jax]`); inference-only and PyG-only.
 - **Bug fix: `QET` no longer crashes on single-atom structures.** Bare `torch.squeeze()` calls in `QET.forward` (and in the DGL `LinearQeq` QEq solver) collapsed the size-1 node dimension of a one-atom input to a 0-d scalar, raising `IndexError` inside the PyG `ElectrostaticPotential` and a node-feature shape error on the DGL backend. These now use `.reshape(-1)`, which drops only trailing feature dimensions and never the node dimension.
 
 ## 3.0.4
