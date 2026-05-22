@@ -23,14 +23,13 @@ on:
         type: boolean
       runner_label:
         description: "Label of the GPU runner to use (org-managed)"
-        default: "gpu"
+        default: "GPU"
         type: string
 
 jobs:
   benchmark:
-    # ``runs-on`` references the org-configured GPU runner. GitHub-hosted larger
-    # GPU runners use whatever label the admin assigned (commonly ``gpu`` or
-    # ``linux-nvidia-gpu``). Override via the ``runner_label`` workflow input.
+    # ``runs-on`` references the org-managed GPU runner (label ``GPU``).
+    # Override via the ``runner_label`` workflow input if the label changes.
     runs-on: ${{ inputs.runner_label }}
     strategy:
       fail-fast: false
