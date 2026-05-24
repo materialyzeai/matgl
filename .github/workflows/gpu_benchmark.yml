@@ -1,0 +1,195 @@
+name: GPU Benchmark (TensorNet)
+
+# Runs the warp vs eager vs JAX TensorNet inference benchmark on a GPU runner.
+# Manually triggered to avoid burning GPU minutes on every push. The matrix
+# fans out across the three inference backends; the aggregator job downloads
+# each cell's JSON output and prints a combined speedup table to the workflow
+# summary.
+
+on:
+  workflow_dispatch:
+    inputs:
+      iters:
+        description: "Steady-state iterations per measurement"
+        default: "20"
+        type: string
+      warmup:
+        description: "Warm-up iterations per measurement"
+        default: "5"
+        type: string
+      include_xlarge:
+        description: "Include the ~1000-atom supercell"
+        default: false
+        type: boolean
+      runner_label:
+        description: "Label of the GPU runner to use (org-managed)"
+        default: "GPU"
+        type: string
+
+jobs:
+  benchmark:
+    # ``runs-on`` references the org-managed GPU runner (label ``GPU``).
+    # Override via the ``runner_label`` workflow input if the label changes.
+    runs-on: ${{ inputs.runner_label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [eager, warp, jax]
+    env:
+      PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: "python"
+      MATGL_BACKEND: "PYG"
+      # Force JAX to use the GPU; fail loudly if no GPU is available rather
+      # than silently falling back to CPU and reporting bogus speedups.
+      JAX_PLATFORMS: "cuda,cpu"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: GPU info
+        run: |
+          nvidia-smi || (echo "::error::nvidia-smi not available on runner ${{ inputs.runner_label }}" && exit 1)
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          python-version: "3.12"
+
+      - name: Virtual env
+        run: uv venv --python 3.12 --clear
+
+      - name: Install matgl (PYG) + variant extras
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          uv sync --upgrade
+          uv pip install -e .
+          case "$VARIANT" in
+            warp)
+              # ``nvalchemi-toolkit-ops`` ships the NVIDIA Warp kernels used by
+              # the warp TensorNet path; required for ``--variant warp`` to
+              # construct the model with warp-accelerated layers.
+              uv pip install -e ".[ops]"
+              ;;
+            jax)
+              uv pip install -e ".[jax]"
+              # The default ``jax>=0.4.30`` wheel is CPU-only. For a meaningful
+              # speedup measurement we need the CUDA build; install the matching
+              # plugin into the same env.
+              uv pip install --upgrade "jax[cuda12]"
+              ;;
+          esac
+
+      - name: Sanity check
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          uv run --no-sync python -c "import torch; assert torch.cuda.is_available(), 'torch.cuda.is_available() is False on the GPU runner'; print('torch', torch.__version__, 'device', torch.cuda.get_device_name(0))"
+          if [ "$VARIANT" = "jax" ]; then
+            uv run --no-sync python -c "import jax; devs = jax.devices(); print('jax', jax.__version__, 'devices', devs); assert any(str(d.platform).lower() in {'cuda','gpu'} for d in devs), f'no GPU device in jax.devices(): {devs}'"
+          fi
+          if [ "$VARIANT" = "warp" ]; then
+            uv run --no-sync python -c "import nvalchemiops; print('nvalchemiops', getattr(nvalchemiops, '__version__', '?'))"
+          fi
+
+      - name: Run benchmark
+        env:
+          VARIANT: ${{ matrix.variant }}
+          ITERS: ${{ inputs.iters }}
+          WARMUP: ${{ inputs.warmup }}
+          XLARGE: ${{ inputs.include_xlarge && '--xlarge' || '' }}
+        run: |
+          # All variants go through the same TensorNet (random weights, fixed
+          # seed) so the per-system timings can be diffed across cells. JAX
+          # picks its own device, so we pass --device cuda only to the torch
+          # variants.
+          DEVICE_ARG=""
+          if [ "$VARIANT" != "jax" ]; then
+            DEVICE_ARG="--device cuda"
+          fi
+          uv run --no-sync python dev/jax_benchmark.py \
+            --variant "$VARIANT" \
+            $DEVICE_ARG \
+            --warmup "$WARMUP" \
+            --iters "$ITERS" \
+            $XLARGE \
+            --json "benchmark-${VARIANT}.json"
+
+      - name: Upload variant timings
+        uses: actions/upload-artifact@v5
+        with:
+          name: gpu-benchmark-${{ matrix.variant }}
+          path: benchmark-${{ matrix.variant }}.json
+          if-no-files-found: error
+
+  summary:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    if: always() && needs.benchmark.result != 'skipped'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download all variant timings
+        uses: actions/download-artifact@v5
+        with:
+          path: results
+          pattern: gpu-benchmark-*
+          merge-multiple: true
+
+      - name: Render summary
+        run: |
+          python - <<'PY'
+          import json, os, glob
+
+          rows_by_system = {}
+          meta = {}
+          for path in sorted(glob.glob("results/benchmark-*.json")):
+              variant = path.rsplit("-", 1)[-1].removesuffix(".json")
+              data = json.loads(open(path).read())
+              meta[variant] = data["info"]
+              for r in data["rows"]:
+                  rec = rows_by_system.setdefault(
+                      r["system"], {"atoms": r["atoms"], "edges": r["edges"], "graph_ms": r["graph_ms"]}
+                  )
+                  if variant == "eager":
+                      rec["eager_ms"] = r["eager_ms"]
+                  elif variant == "warp":
+                      rec["warp_ms"] = r["warp_ms"]
+                  elif variant == "jax":
+                      rec["jax_ms"] = r["jax_ms"]
+                      rec["jax_compile_s"] = r["jax_compile_s"]
+
+          def fmt(v, spec):
+              return "n/a" if v is None else format(v, spec)
+
+          def fmt_x(v):
+              return "n/a" if v is None else f"{v:.2f}x"
+
+          lines = []
+          lines.append(f"# GPU TensorNet Benchmark")
+          if meta:
+              first = next(iter(meta.values()))
+              lines.append(f"- model: `{first.get('model', '?')}`")
+              lines.append(f"- torch device: `{first.get('device', '?')}`")
+              if 'jax_devices' in meta.get('jax', {}):
+                  lines.append(f"- jax devices: `{meta['jax']['jax_devices']}`")
+          lines.append("")
+          lines.append("| system | atoms | edges | graph ms | eager ms | warp ms | jax ms | warp speedup | jax speedup |")
+          lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+          for name in sorted(rows_by_system):
+              r = rows_by_system[name]
+              e = r.get("eager_ms"); w = r.get("warp_ms"); j = r.get("jax_ms")
+              ws = (e / w) if (e and w) else None
+              js = (e / j) if (e and j) else None
+              lines.append(
+                  f"| {name} | {r['atoms']} | {r['edges']} | {fmt(r['graph_ms'], '.2f')} | "
+                  f"{fmt(e, '.2f')} | {fmt(w, '.2f')} | {fmt(j, '.2f')} | "
+                  f"{fmt_x(ws)} | {fmt_x(js)} |"
+              )
+          lines.append("")
+          lines.append("_ms/step = one energy+forces+stress eval (lower is better)._")
+          summary = "\n".join(lines)
+          print(summary)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+              fh.write(summary)
+          PY

@@ -14,7 +14,9 @@ nav_order: 3
   the `_pyg` suffix.
 
 ## 3.0.5
+- **Optional JAX inference backend (`matgl.ext.jax`, experimental).** New subpackage that reimplements the inference path (energy + forces + stress) of the `TensorNet` and `QET` models in JAX. A pre-trained PyTorch potential is converted to a JAX parameter tree and JIT-compiled by XLA into one fused program, giving a portable (CPU / CUDA / Apple-Silicon) ~2-3.5x speedup over eager PyTorch for the MD / relaxation inner loop, with no NVIDIA-Warp dependency. `JAXPESCalculator` is a drop-in twin of `matgl.ext.ase.PESCalculator`. Outputs match the PyTorch reference to float64 precision. Requires the optional `jax` extra (`pip install matgl[jax]`); inference-only.
 - **Bug fix: `QET` no longer crashes on single-atom structures.** Bare `torch.squeeze()` calls in `QET.forward` collapsed the size-1 node dimension of a one-atom input to a 0-d scalar, raising `IndexError` inside `ElectrostaticPotential`. These now use `.reshape(-1)`, which drops only trailing feature dimensions and never the node dimension.
+- **Bug fix: `TensorNet` / `QET` no longer crash with the non-smooth `SphericalBessel` radial basis.** With `rbf_type="SphericalBessel"` and `use_smooth=False`, the basis emits `max_l * max_n` features, but the embedding / interaction input `Linear` layers were sized for only `max_n`, raising a shape-mismatch `RuntimeError` in the forward pass. The radial-basis width fed to those layers now correctly accounts for `max_l` in the non-smooth case (the smooth `SphericalBessel` and `Gaussian` bases are unaffected).
 
 ## 3.0.4
 - **PyG `SO3Net`.** New `matgl.models._so3net_pyg.SO3Net` is the PyG counterpart of the existing DGL
