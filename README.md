@@ -310,6 +310,25 @@ JAX-Metal** -- the Gaussian-smeared Coulomb potential uses `jax.scipy.special.er
 which `applejax` currently lowers to an unsupported `stablehlo.composite` op
 ([applejax issue](https://github.com/danielpcox/applejax/issues)).
 
+#### NVIDIA GPUs (Hopper H200, Ampere A40)
+
+Benchmarks on a single H200 and a single A40 for `TensorNet-PES-MatPES-PBE-2025.2` (energy + forces + stress per step) show:
+
+Speedups relative to PyTorch eager on the same GPU are shown in brackets. Bold marks the fastest non-eager backend at each size.
+
+| **Atoms** | **Eager (H200)** | **Warp (H200)** | **JAX (H200)** | **Eager (A40)** | **Warp (A40)** | **JAX (A40)** |
+|------:|-------------:|------------:|---------------:|------------:|-----------:|--------------:|
+|    2  |     14.5 ms  | 18.9 ms (0.77x) | **3.8 ms (3.80x)** |     26.2 ms  | 32.6 ms (0.81x) | **12.3 ms (2.14x)** |
+|   64  |     14.8 ms  | 19.2 ms (0.77x) | **4.3 ms (3.41x)** |     26.9 ms  | 32.8 ms (0.82x) |  **6.2 ms (4.31x)** |
+|  216  |     16.3 ms  | 20.0 ms (0.81x) | **6.8 ms (2.38x)** |     30.3 ms  | 33.1 ms (0.92x) | **10.2 ms (2.96x)** |
+|  512  |     19.4 ms  | 21.5 ms (0.90x) | **8.9 ms (2.18x)** |     52.6 ms  | 39.9 ms (1.32x) | **17.0 ms (3.10x)** |
+| 1000  |     30.4 ms  | 24.3 ms (1.25x) | **14.6 ms (2.08x)** |    96.9 ms  | **37.5 ms (2.59x)** | 33.4 ms (2.90x) |
+| 1728  |     48.1 ms  | 28.8 ms (1.67x) | **28.5 ms (1.69x)** |   163.9 ms  | **49.1 ms (3.34x)** | 71.8 ms (2.28x) |
+| 2744  |     72.6 ms  | **34.2 ms (2.12x)** | 62.3 ms (1.16x) |   258.4 ms  | **67.4 ms (3.84x)** | 150.6 ms (1.72x) |
+| 4096  |    105.9 ms  | **43.4 ms (2.44x)** | 44.8 ms (2.36x) |   385.7 ms  | **100.3 ms (3.84x)** | 156.9 ms (2.46x) |
+
+Larger systems and slower GPUs benefit more from Warp.
+
 ## Model Training
 
 In the PES training, the unit of energies, forces and stresses (optional) in the training, validation and test sets is extremely important to be consistent with the unit used in MatGL.
