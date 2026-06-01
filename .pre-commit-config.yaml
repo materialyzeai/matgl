@@ -18,7 +18,7 @@ ci:
 
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.12
+    rev: v0.15.15
     hooks:
       # ``ruff-check`` is the modern hook id; ``id: ruff`` is the legacy
       # alias and prints a "ruff (legacy alias)" warning every run.
@@ -39,7 +39,7 @@ repos:
       - id: trailing-whitespace
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.0.0
+    rev: v2.1.0
     hooks:
       - id: mypy
         # mypy is given the explicit file list by pre-commit, which makes
