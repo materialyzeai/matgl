@@ -1,0 +1,66 @@
+# Example config for scripts/train/train.py and scripts/train/finetune.py.
+# Run with:  python scripts/train/train.py --config config_example.yaml
+
+# --- Model ---------------------------------------------------------------------
+# train.py:    one of M3GNet / CHGNet / TensorNet / SO3Net / QET (built from model_args).
+# finetune.py: a Hugging Face Hub name (e.g. M3GNet-MP-2021.2.8-PES) or a local model dir.
+model: M3GNet
+model_args:
+  units: 64
+cutoff: 5.0
+# element_types: omit for matgl's DEFAULT_ELEMENTS, "auto" to derive from the
+# training structures, or give an explicit list like [Li, Fe, O]. Ignored by
+# finetune.py, which takes the table from the pre-trained model.
+element_types: auto
+
+# --- Datasets ------------------------------------------------------------------
+# Each file is a JSON of pymatgen structures + labels:
+#   {"structures": [<Structure dict>, ...],
+#    "labels": {"energies": [...], "forces": [...], "stresses": [...]}}
+train: data/train.json
+val: data/val.json
+test: data/test.json
+# Alternatively, one file split on the fly (instead of train/val/test):
+# dataset: data/all.json
+# frac_list: [0.8, 0.1, 0.1]
+# shuffle: true
+# random_state: 42
+
+batch_size: 16
+num_workers: 0
+# include_line_graph: false   # set true for three-body models that need line graphs
+
+# --- Loss weights --------------------------------------------------------------
+energy_weight: 1.0
+force_weight: 1.0
+stress_weight: 0.1   # set 0.0 to ignore stress (also drops it from collation)
+
+# --- Optimizer / LR schedule ---------------------------------------------------
+lr: 0.001
+optimizer: Adam            # any torch.optim class name
+# optimizer_args: {weight_decay: 0.0}
+scheduler: CosineAnnealingLR   # any torch.optim.lr_scheduler class name; default CosineAnnealingLR
+scheduler_args:
+  T_max: 100               # in EPOCHS (the scheduler is stepped once per epoch)
+warmup_epochs: 5           # linear LR warmup epochs (0 to disable); not allowed with ReduceLROnPlateau
+metric_to_track: val_Total_Loss   # monitored by ReduceLROnPlateau and ModelCheckpoint
+max_epochs: 100
+
+# --- Trainer -------------------------------------------------------------------
+accelerator: cpu           # cpu / cuda / mps
+devices: 1
+
+# --- Logging / checkpoints -----------------------------------------------------
+logger: csv                # csv or wandb
+log_dir: logs
+run_name: training
+# wandb_project: my-project
+# wandb_name: run-1
+
+checkpoint: true
+checkpoint_dir: checkpoints
+save_top_k: 1
+# checkpoint_every_n_epochs: 10
+# resume_from: last         # explicit .ckpt path, or "last" to resume <checkpoint_dir>/last.ckpt
+
+model_dir: ./trained_model
