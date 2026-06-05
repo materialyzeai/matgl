@@ -78,10 +78,15 @@ def main() -> None:
     lit_module = _common.build_potential_module(model, config, element_refs)
 
     logger = _common.build_logger(config)
-    trainer = _common.build_trainer(config, logger)
+    trainer = _common.build_trainer(config, logger, _common.build_callbacks(config))
 
     print("Start training...")
-    trainer.fit(model=lit_module, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    trainer.fit(
+        model=lit_module,
+        train_dataloaders=train_loader,
+        val_dataloaders=val_loader,
+        ckpt_path=_common.resume_ckpt_path(config),
+    )
 
     if test_loader is not None:
         print("Testing model...")

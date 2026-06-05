@@ -21,12 +21,13 @@ from __future__ import annotations
 import argparse
 import json
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import lightning as pl
 import numpy as np
 import torch
-from lightning.pytorch.callbacks import LearningRateMonitor
+from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger, WandbLogger
 from monty.serialization import loadfn
 
@@ -458,6 +459,58 @@ def build_logger(config: dict[str, Any]) -> CSVLogger | WandbLogger:
     if logger_name == "csv":
         return CSVLogger(config.get("log_dir", "logs"), name=config.get("run_name", "training"))
     raise ValueError(f"Unknown logger {logger_name!r}; expected 'csv' or 'wandb'.")
+
+
+def build_callbacks(config: dict[str, Any]) -> list[Callback]:
+    """Build optional training callbacks (checkpointing).
+
+    When ``config['checkpoint']`` is truthy (default), a ``ModelCheckpoint`` is
+    returned that tracks ``config['metric_to_track']`` and always writes
+    ``last.ckpt`` for easy resumption. These ``.ckpt`` files capture full training
+    state (weights, optimizer, scheduler, epoch) and are distinct from the
+    deployable model written by ``lit_module.model.save(...)`` at the end.
+
+    Args:
+        config: The training config.
+
+    Returns:
+        A list of callbacks (possibly empty).
+    """
+    if not config.get("checkpoint", True):
+        return []
+    monitor = config.get("metric_to_track", "val_Total_Loss")
+    checkpoint_cb = ModelCheckpoint(
+        dirpath=config.get("checkpoint_dir", "checkpoints"),
+        filename="{epoch:03d}-{" + monitor + ":.4f}",
+        monitor=monitor,
+        mode="min",
+        save_top_k=config.get("save_top_k", 1),
+        save_last=True,
+        every_n_epochs=config.get("checkpoint_every_n_epochs"),
+    )
+    return [checkpoint_cb]
+
+
+def resume_ckpt_path(config: dict[str, Any]) -> str | None:
+    """Resolve the checkpoint path to resume training from.
+
+    ``config['resume_from']`` may be an explicit ``.ckpt`` path or the string
+    ``"last"`` (resolves to ``<checkpoint_dir>/last.ckpt`` if it exists). Returns
+    ``None`` when there is nothing to resume.
+
+    Args:
+        config: The training config.
+
+    Returns:
+        Path to a checkpoint, or ``None``.
+    """
+    resume = config.get("resume_from")
+    if not resume:
+        return None
+    if resume == "last":
+        last = Path(config.get("checkpoint_dir", "checkpoints")) / "last.ckpt"
+        return str(last) if last.exists() else None
+    return resume
 
 
 def build_trainer(
