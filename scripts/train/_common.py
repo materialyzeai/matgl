@@ -11,9 +11,8 @@ The flow mirrors ``examples/Training a QET Potential with PyTorch Lightning.ipyn
 -> ``lightning.Trainer``) but is driven entirely by a config file and reads
 structures + labels from disk rather than from the Materials Project API.
 
-All imports go through MatGL's public, backend-dispatched APIs
-(``matgl.ext.pymatgen``, ``matgl.graph.data``), so the scripts follow whatever
-``MATGL_BACKEND`` selects (PYG by default).
+All imports go through MatGL's public APIs (``matgl.ext.pymatgen``,
+``matgl.graph.data``, ``matgl.utils.training``) rather than private modules.
 """
 
 from __future__ import annotations
