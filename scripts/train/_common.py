@@ -19,16 +19,25 @@ All imports go through MatGL's public, backend-dispatched APIs
 from __future__ import annotations
 
 import argparse
+import json
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+import lightning as pl
+import numpy as np
+import torch
+from lightning.pytorch.callbacks import LearningRateMonitor
+from lightning.pytorch.loggers import CSVLogger, WandbLogger
 from monty.serialization import loadfn
 
 from matgl.config import DEFAULT_ELEMENTS
 from matgl.ext.pymatgen import Structure2Graph, get_element_list
 from matgl.graph.data import MGLDataLoader, MGLDataset, collate_fn_pes, split_dataset
+from matgl.layers import AtomRef
+from matgl.utils.training import PotentialLightningModule
 
 if TYPE_CHECKING:
+    from lightning.pytorch.callbacks import Callback
     from pymatgen.core import Structure
     from torch.utils.data import DataLoader
 
@@ -70,7 +79,10 @@ def load_config(path: str) -> dict[str, Any]:
     config = loadfn(path)
     if not isinstance(config, dict):
         raise ValueError(f"Config file {path!r} must deserialize to a mapping, got {type(config).__name__}.")
-    return config
+    # monty.loadfn parses YAML via ruamel, yielding CommentedMap / ScalarFloat etc.
+    # Those subclasses leak into save_hyperparameters and break checkpoint (un)pickling
+    # under torch's weights_only=True, so coerce everything to plain Python types.
+    return json.loads(json.dumps(config))
 
 
 def load_structures_labels(path: str) -> tuple[list[Structure], dict[str, list]]:
@@ -164,7 +176,9 @@ def build_dataset(
     )
 
 
-def build_datasets(config: dict[str, Any]) -> tuple[MGLDataset, MGLDataset, MGLDataset | None]:
+def build_datasets(
+    config: dict[str, Any],
+) -> tuple[MGLDataset, MGLDataset, MGLDataset | None, tuple[str, ...]]:
     """Build train/val/test datasets from the config.
 
     Two layouts are supported:
@@ -174,12 +188,16 @@ def build_datasets(config: dict[str, Any]) -> tuple[MGLDataset, MGLDataset, MGLD
     * **Single file + split** -- ``config['dataset']`` points at one JSON which
       is split via ``config['frac_list']`` (default ``[0.8, 0.1, 0.1]``).
 
+    The element table is resolved once (from the training structures) and shared
+    across all splits, then returned so callers don't have to reach into dataset
+    internals (split datasets are plain ``Subset`` objects with no structures).
+
     Args:
         config: The training config.
 
     Returns:
-        ``(train_data, val_data, test_data)``; ``test_data`` is ``None`` when no
-        test set is available.
+        ``(train_data, val_data, test_data, element_types)``; ``test_data`` is
+        ``None`` when no test set is available.
     """
     cutoff = config["cutoff"]
     include_line_graph = config.get("include_line_graph", False)
@@ -200,7 +218,7 @@ def build_datasets(config: dict[str, Any]) -> tuple[MGLDataset, MGLDataset, MGLD
             shuffle=config.get("shuffle", True),
             random_state=config.get("random_state", 42),
         )
-        return train_data, val_data, test_data
+        return train_data, val_data, test_data, element_types
 
     if not (config.get("train") and config.get("val")):
         raise ValueError(
@@ -219,7 +237,7 @@ def build_datasets(config: dict[str, Any]) -> tuple[MGLDataset, MGLDataset, MGLD
     if config.get("test"):
         test_structs, test_labels = load_structures_labels(config["test"])
         test_data = build(test_structs, test_labels)
-    return train_data, val_data, test_data
+    return train_data, val_data, test_data, element_types
 
 
 def build_dataloaders(
@@ -263,3 +281,106 @@ def build_dataloaders(
         train_loader, val_loader = loaders
         return train_loader, val_loader, None
     return loaders
+
+
+def compute_element_refs(train_data: MGLDataset, element_types: tuple[str, ...]) -> np.ndarray:
+    """Fit per-element energy offsets on the training set.
+
+    A least-squares ``AtomRef`` is fit so the model learns residual energies.
+    This mirrors the from-scratch training recipe; finetuning instead reuses the
+    pre-trained model's existing offsets.
+
+    Args:
+        train_data: Training dataset (each item yields the graph at index 0 and
+            the labels dict last).
+        element_types: Element table, used to size the offset vector.
+
+    Returns:
+        The fitted ``property_offset`` as a numpy array.
+    """
+    from ase.data import atomic_numbers
+
+    graphs = [item[0] for item in train_data]
+    energies = torch.tensor([item[-1]["energies"] for item in train_data], dtype=torch.float32)
+    max_z = int(np.max([atomic_numbers[el] for el in element_types])) + 1
+    atom_ref = AtomRef(max_z=max_z)
+    atom_ref.fit(graphs, energies)
+    return atom_ref.property_offset
+
+
+def build_potential_module(model: torch.nn.Module, config: dict[str, Any], element_refs: np.ndarray | None) -> PotentialLightningModule:
+    """Wrap a graph model in a ``PotentialLightningModule`` from config.
+
+    Args:
+        model: The graph network to train (e.g. an ``M3GNet``).
+        config: The training config (loss weights, lr, decay schedule).
+        element_refs: Per-element energy offsets, or ``None`` to skip.
+
+    Returns:
+        The configured Lightning module.
+    """
+    return PotentialLightningModule(
+        model=model,
+        element_refs=element_refs,
+        include_line_graph=config.get("include_line_graph", False),
+        energy_weight=config.get("energy_weight", 1.0),
+        force_weight=config.get("force_weight", 1.0),
+        stress_weight=config.get("stress_weight", 0.0),
+        magmom_weight=config.get("magmom_weight", 0.0),
+        charge_weight=config.get("charge_weight", 0.0),
+        lr=config.get("lr", 1e-3),
+        decay_steps=config.get("decay_steps", 1000),
+        decay_alpha=config.get("decay_alpha", 0.01),
+    )
+
+
+def build_logger(config: dict[str, Any]) -> CSVLogger | WandbLogger:
+    """Build the Lightning logger named by ``config['logger']`` (``csv`` or ``wandb``).
+
+    Args:
+        config: The training config.
+
+    Returns:
+        A ``CSVLogger`` (default) or a ``WandbLogger``.
+    """
+    logger_name = config.get("logger", "csv")
+    if logger_name == "wandb":
+        return WandbLogger(
+            project=config.get("wandb_project"),
+            name=config.get("wandb_name"),
+            tags=config.get("tags", []),
+        )
+    if logger_name == "csv":
+        return CSVLogger(config.get("log_dir", "logs"), name=config.get("run_name", "training"))
+    raise ValueError(f"Unknown logger {logger_name!r}; expected 'csv' or 'wandb'.")
+
+
+def build_trainer(
+    config: dict[str, Any],
+    logger: CSVLogger | WandbLogger,
+    extra_callbacks: list[Callback] | None = None,
+) -> pl.Trainer:
+    """Build the Lightning trainer.
+
+    ``inference_mode=False`` is required so forces/stresses (computed via
+    autograd) are available during test/predict.
+
+    Args:
+        config: The training config (``max_epochs``, ``accelerator``, ``devices``).
+        logger: The Lightning logger.
+        extra_callbacks: Additional callbacks to register (e.g. checkpointing).
+
+    Returns:
+        The configured trainer.
+    """
+    callbacks: list[Callback] = [LearningRateMonitor(logging_interval="epoch")]
+    if extra_callbacks:
+        callbacks.extend(extra_callbacks)
+    return pl.Trainer(
+        max_epochs=config["max_epochs"],
+        accelerator=config.get("accelerator", "cpu"),
+        devices=config.get("devices", 1),
+        logger=logger,
+        inference_mode=False,
+        callbacks=callbacks,
+    )
