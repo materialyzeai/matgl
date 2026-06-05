@@ -308,18 +308,121 @@ def compute_element_refs(train_data: MGLDataset, element_types: tuple[str, ...])
     return atom_ref.property_offset
 
 
-def build_potential_module(model: torch.nn.Module, config: dict[str, Any], element_refs: np.ndarray | None) -> PotentialLightningModule:
-    """Wrap a graph model in a ``PotentialLightningModule`` from config.
+class TrainingLightningModule(PotentialLightningModule):
+    """``PotentialLightningModule`` with config-driven optimizer / scheduler + warmup.
+
+    MatGL's mixin steps the scheduler in ``on_train_epoch_end`` *and* returns it
+    from ``configure_optimizers`` (which Lightning also steps), advancing the LR
+    twice per epoch. We override both so the LR advances exactly once per epoch,
+    every scheduler quantity (``warmup_epochs``, ``StepLR.step_size``,
+    ``CosineAnnealingLR.T_max``, ``SequentialLR`` milestones) is interpreted in
+    epochs, and a ``ReduceLROnPlateau`` scheduler gets its ``monitor`` metric.
+    """
+
+    def set_optim(
+        self,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler,
+        monitor: str | None = None,
+    ) -> None:
+        """Attach the prebuilt optimizer / scheduler used by ``configure_optimizers``.
+
+        Args:
+            optimizer: The optimizer.
+            scheduler: The (possibly warmup-wrapped) LR scheduler.
+            monitor: Metric name for ``ReduceLROnPlateau``.
+        """
+        self._optimizer = optimizer
+        self._scheduler = scheduler
+        self._monitor = monitor
+
+    def configure_optimizers(self) -> dict[str, Any]:  # type: ignore[override]
+        """Hand Lightning the optimizer + an epoch-interval scheduler config."""
+        lr_scheduler_config: dict[str, Any] = {"scheduler": self._scheduler, "interval": "epoch", "frequency": 1}
+        if isinstance(self._scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            lr_scheduler_config["monitor"] = self._monitor
+        return {"optimizer": self._optimizer, "lr_scheduler": lr_scheduler_config}
+
+    def on_train_epoch_end(self) -> None:
+        """No-op: Lightning steps the scheduler (configured above) once per epoch."""
+        return
+
+
+def build_optimizer(params: Any, config: dict[str, Any]) -> torch.optim.Optimizer:
+    """Build the optimizer named by ``config['optimizer']`` (default ``Adam``).
+
+    Args:
+        params: Parameters to optimize.
+        config: The training config (``optimizer``, ``lr``, ``optimizer_args``).
+
+    Returns:
+        The optimizer.
+    """
+    name = config.get("optimizer", "Adam")
+    optimizer_args = {"lr": config.get("lr", 1e-3), **config.get("optimizer_args", {})}
+    return getattr(torch.optim, name)(params, **optimizer_args)
+
+
+def build_scheduler(
+    optimizer: torch.optim.Optimizer, config: dict[str, Any]
+) -> torch.optim.lr_scheduler.LRScheduler:
+    """Build an epoch-based LR scheduler with optional linear warmup.
+
+    The decay scheduler is the ``torch.optim.lr_scheduler`` class named by
+    ``config['scheduler']`` (with ``config['scheduler_args']``), falling back to
+    ``CosineAnnealingLR``. When ``config['warmup_epochs'] > 0`` a linear warmup is
+    prepended via ``SequentialLR``.
+
+    Args:
+        optimizer: The optimizer to schedule.
+        config: The training config.
+
+    Returns:
+        The (possibly warmup-wrapped) scheduler.
+    """
+    warmup_epochs = config.get("warmup_epochs", 0)
+    lr = config.get("lr", 1e-3)
+
+    if config.get("scheduler"):
+        decay_scheduler = getattr(torch.optim.lr_scheduler, config["scheduler"])(
+            optimizer, **config.get("scheduler_args", {})
+        )
+    else:
+        decay_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=config.get("decay_steps", config["max_epochs"]) - warmup_epochs,
+            eta_min=lr * config.get("decay_alpha", 0.0),
+        )
+
+    if warmup_epochs > 0:
+        if isinstance(decay_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            raise ValueError(
+                "warmup_epochs is incompatible with ReduceLROnPlateau (SequentialLR cannot chain a "
+                "metric-based scheduler). Use a step-count scheduler such as StepLR or CosineAnnealingLR."
+            )
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=1e-8, end_factor=1.0, total_iters=warmup_epochs
+        )
+        return torch.optim.lr_scheduler.SequentialLR(
+            optimizer, schedulers=[warmup_scheduler, decay_scheduler], milestones=[warmup_epochs]
+        )
+    return decay_scheduler
+
+
+def build_potential_module(
+    model: torch.nn.Module, config: dict[str, Any], element_refs: np.ndarray | None
+) -> TrainingLightningModule:
+    """Wrap a graph model in a Lightning module with config-driven optim/schedule.
 
     Args:
         model: The graph network to train (e.g. an ``M3GNet``).
-        config: The training config (loss weights, lr, decay schedule).
+        config: The training config (loss weights, lr, optimizer, scheduler, warmup).
         element_refs: Per-element energy offsets, or ``None`` to skip.
 
     Returns:
         The configured Lightning module.
     """
-    return PotentialLightningModule(
+    lit_module = TrainingLightningModule(
         model=model,
         element_refs=element_refs,
         include_line_graph=config.get("include_line_graph", False),
@@ -329,9 +432,11 @@ def build_potential_module(model: torch.nn.Module, config: dict[str, Any], eleme
         magmom_weight=config.get("magmom_weight", 0.0),
         charge_weight=config.get("charge_weight", 0.0),
         lr=config.get("lr", 1e-3),
-        decay_steps=config.get("decay_steps", 1000),
-        decay_alpha=config.get("decay_alpha", 0.01),
     )
+    optimizer = build_optimizer(lit_module.parameters(), config)
+    scheduler = build_scheduler(optimizer, config)
+    lit_module.set_optim(optimizer, scheduler, monitor=config.get("metric_to_track", "val_Total_Loss"))
+    return lit_module
 
 
 def build_logger(config: dict[str, Any]) -> CSVLogger | WandbLogger:
