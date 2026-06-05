@@ -1,7 +1,7 @@
 """Shared helpers for the MatGL training / finetuning scripts.
 
-Both ``train.py`` (train a model from scratch) and ``finetune.py`` (continue
-training a pre-trained model) read a single YAML/JSON config file and build the
+Both ``train_pes.py`` (train a potential from scratch) and ``finetune_pes.py``
+(continue training a pre-trained potential) read a single YAML/JSON config file and build the
 same pieces: datasets loaded from pymatgen-serialized structure JSONs, MatGL
 dataloaders, and a PyTorch Lightning trainer. Those pieces live here so the two
 entry-point scripts stay thin and consistent.

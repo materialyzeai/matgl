@@ -1,16 +1,16 @@
-# Example config for scripts/train/train.py and scripts/train/finetune.py.
-# Run with:  python scripts/train/train.py --config config_example.yaml
+# Example config for scripts/train/train_pes.py and scripts/train/finetune_pes.py.
+# Run with:  python scripts/train/train_pes.py --config config_example.yaml
 
 # --- Model ---------------------------------------------------------------------
-# train.py:    one of M3GNet / CHGNet / TensorNet / SO3Net / QET (built from model_args).
-# finetune.py: a Hugging Face Hub name (e.g. M3GNet-MP-2021.2.8-PES) or a local model dir.
+# train_pes.py:    one of M3GNet / CHGNet / TensorNet / SO3Net / QET (built from model_args).
+# finetune_pes.py: a Hugging Face Hub name (e.g. M3GNet-MP-2021.2.8-PES) or a local model dir.
 model: M3GNet
 model_args:
   units: 64
 cutoff: 5.0
 # element_types: omit for matgl's DEFAULT_ELEMENTS, "auto" to derive from the
 # training structures, or give an explicit list like [Li, Fe, O]. Ignored by
-# finetune.py, which takes the table from the pre-trained model.
+# finetune_pes.py, which takes the table from the pre-trained model.
 element_types: auto
 
 # --- Datasets ------------------------------------------------------------------

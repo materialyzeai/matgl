@@ -2,7 +2,7 @@
 
 These exercise the shared helpers in ``scripts/train/_common.py`` (config and
 pymatgen-JSON dataset loading, scheduler/warmup construction, checkpoint resume)
-plus the model registry in ``train.py``. A single tiny TensorNet is trained for
+plus the model registry in ``train_pes.py``. A single tiny TensorNet is trained for
 one or two epochs on CPU, so the whole module runs in a few seconds.
 """
 
@@ -120,7 +120,7 @@ def test_build_scheduler_warmup_steps_once_per_epoch(dataset_files: tuple[Path, 
     }
     train_data, val_data, _, element_types = _common.build_datasets(config)
     train_loader, val_loader, _ = _common.build_dataloaders(train_data, val_data, None, config)
-    train_module = _load_script("train")
+    train_module = _load_script("train_pes")
     model = train_module.build_model(config, element_types)
     refs = _common.compute_element_refs(train_data, element_types)
     lit_module = _common.build_potential_module(model, config, refs)
@@ -178,7 +178,7 @@ def test_train_checkpoint_and_resume(dataset_files: tuple[Path, Path], tmp_path:
     }
     train_data, val_data, _, element_types = _common.build_datasets(config)
     train_loader, val_loader, _ = _common.build_dataloaders(train_data, val_data, None, config)
-    train_module = _load_script("train")
+    train_module = _load_script("train_pes")
 
     def run(cfg):
         model = train_module.build_model(cfg, element_types)

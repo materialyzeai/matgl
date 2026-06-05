@@ -5,12 +5,12 @@ Loads a pre-trained potential (a Hugging Face Hub name like ``M3GNet-MP-2021.2.8
 or a local model directory) via ``matgl.load_model``, then continues training it
 on the datasets named in the config. The element table and per-element energy
 offsets are taken from the pre-trained model, so the only difference from
-``train.py`` is that the model and its ``element_refs`` come from disk rather than
-being built and fit from scratch.
+``train_pes.py`` is that the model and its ``element_refs`` come from disk rather
+than being built and fit from scratch.
 
 Usage::
 
-    python scripts/train/finetune.py --config config.yaml
+    python scripts/train/finetune_pes.py --config config.yaml
 """
 
 from __future__ import annotations

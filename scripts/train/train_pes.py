@@ -10,7 +10,7 @@ entirely by the config file.
 
 Usage::
 
-    python scripts/train/train.py --config config.yaml
+    python scripts/train/train_pes.py --config config.yaml
 """
 
 from __future__ import annotations
