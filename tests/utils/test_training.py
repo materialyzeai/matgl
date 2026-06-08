@@ -432,6 +432,45 @@ def test_potential_lightning_loss_fn_no_num_atoms_branch():
     assert torch.allclose(out["Total_Loss"], torch.tensor(0.0), atol=1e-6)
 
 
+def test_potential_lightning_module_checkpoint_is_weights_only_safe(tmp_path):
+    """Saved hyper_parameters must load under torch.load(weights_only=True).
+
+    The optimizer/scheduler objects are excluded from hparams (their state already lives in
+    the checkpoint's optimizer_states / lr_schedulers) and element_refs is stored as a plain
+    list rather than a numpy array. Otherwise resuming via ``Trainer.fit(ckpt_path=...)``
+    raises an ``UnpicklingError`` on torch>=2.6, whose ``torch.load`` default is
+    ``weights_only=True``.
+    """
+    model = TensorNet(element_types=("Li", "O"), is_intensive=False, use_warp=False)
+    element_refs = np.array([-1.0, -2.0], dtype="float32")
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+    lit = PotentialLightningModule(
+        model=model, element_refs=element_refs, optimizer=optimizer, scheduler=scheduler, stress_weight=0.0
+    )
+
+    # The optimizer/scheduler objects must not leak into hparams, and element_refs is a list.
+    assert "optimizer" not in lit.hparams
+    assert "scheduler" not in lit.hparams
+    assert isinstance(lit.hparams["element_refs"], list)
+
+    # A Lightning-style checkpoint built from these hparams must load under the safe default.
+    ckpt = {
+        "state_dict": lit.state_dict(),
+        "optimizer_states": [optimizer.state_dict()],
+        "lr_schedulers": [scheduler.state_dict()],
+        "hyper_parameters": dict(lit.hparams),
+    }
+    ckpt_path = tmp_path / "last.ckpt"
+    torch.save(ckpt, ckpt_path)
+    torch.load(ckpt_path, weights_only=True)  # must not raise
+
+    # Dropping them from hparams must not change what configure_optimizers builds.
+    optimizers, schedulers = lit.configure_optimizers()
+    assert isinstance(optimizers[0], torch.optim.Adam)
+    assert isinstance(schedulers[0], torch.optim.lr_scheduler.CosineAnnealingLR)
+
+
 def test_potential_lightning_loss_fn_allow_missing_labels():
     """allow_missing_labels=True must drop NaN entries before computing the loss."""
     model = TensorNet(use_warp=False)

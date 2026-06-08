@@ -222,7 +222,8 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         self.scheduler = scheduler
         self.sync_dist = sync_dist
         self.loss_params = loss_params if loss_params is not None else {}
-        self.save_hyperparameters(ignore=["model"])
+        # Exclude optimizer/scheduler objects so checkpoints load under weights_only=True (torch>=2.6).
+        self.save_hyperparameters(ignore=["model", "optimizer", "scheduler"])
 
     def forward(
         self,
@@ -405,7 +406,11 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         self._last_labels: tuple[torch.Tensor, ...] | None = None
         self._last_indices: torch.Tensor | None = None
         self._last_num_atoms: torch.Tensor | None = None
-        self.save_hyperparameters(ignore=["model"])
+        # Exclude optimizer/scheduler objects and store element_refs as a list so checkpoints
+        # load under weights_only=True (torch>=2.6).
+        self.save_hyperparameters(ignore=["model", "optimizer", "scheduler"])
+        if element_refs is not None:
+            self.hparams["element_refs"] = np.asarray(element_refs).tolist()
 
     def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         """Add missing keys to the checkpoint state dict.
