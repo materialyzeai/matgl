@@ -35,6 +35,7 @@ from pymatgen.core.structure import Molecule, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.optimization.neighbors import find_points_in_spheres
 
+import matgl
 from matgl.graph.converters import GraphConverter
 
 try:
@@ -163,7 +164,7 @@ class Atoms2Graph(GraphConverter):
 class PESCalculator(Calculator):
     """Potential calculator for ASE."""
 
-    implemented_properties = ["energy", "free_energy", "forces", "stress", "hessian", "magmoms"]  # noqa:RUF012
+    implemented_properties = ["energy", "free_energy", "forces", "stress", "hessian", "magmoms", "charges"]  # noqa:RUF012
 
     def __init__(
         self,
@@ -172,6 +173,8 @@ class PESCalculator(Calculator):
         stress_unit: Literal["eV/A3", "GPa"] = "GPa",
         stress_weight: float = 1.0,
         use_voigt: bool = False,
+        total_charge: torch.Tensor | None = None,
+        ext_pot: torch.Tensor | None = None,
         **kwargs,
     ):
         """Init PESCalculator with a Potential from matgl.
@@ -183,6 +186,10 @@ class PESCalculator(Calculator):
             stress_unit (str): stress unit either in "GPa" or "eV/A^3". Default: "GPa"
             stress_weight (float): conversion factor from GPa to eV/A^3, if it is set to 1.0, the unit is in GPa
             use_voigt (bool): whether the voigt notation is used for stress output
+            total_charge (tensor): total charge of the structure, consumed only by charge-predicting
+                potentials (calc_charge=True). If None, the sum of atoms.get_initial_charges() is used.
+            ext_pot (tensor): external potential applied to atoms, shape (Natoms,), consumed only by
+                charge-predicting potentials
             **kwargs: Kwargs pass through to super().__init__().
         """
         super().__init__(**kwargs)
@@ -221,6 +228,8 @@ class PESCalculator(Calculator):
         self.element_types: tuple[str, ...] = potential.model.element_types  # type: ignore[assignment,union-attr,attr-defined]
         self.cutoff: float = potential.model.cutoff  # type: ignore[assignment,union-attr,attr-defined]
         self.use_voigt = use_voigt
+        self.total_charge = total_charge
+        self.ext_pot = ext_pot
         self._atoms2graph = Atoms2Graph(self.element_types, self.cutoff)
 
     def calculate(  # type:ignore[override]
@@ -242,10 +251,16 @@ class PESCalculator(Calculator):
         system_changes = system_changes or all_changes
         super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
         graph, lattice, state_attr_default = self._atoms2graph.get_graph(atoms)
-        if self.state_attr is not None:
-            calc_result = self.potential(graph, lattice, self.state_attr)
+        state_attr = self.state_attr if self.state_attr is not None else state_attr_default
+        if self.compute_charge:
+            total_charge = (
+                self.total_charge
+                if self.total_charge is not None
+                else torch.tensor(atoms.get_initial_charges(), dtype=matgl.float_th).sum()
+            )
+            calc_result = self.potential(graph, lattice, state_attr, total_charge=total_charge, ext_pot=self.ext_pot)
         else:
-            calc_result = self.potential(graph, lattice, state_attr_default)
+            calc_result = self.potential(graph, lattice, state_attr)
         energy_val = calc_result[0].detach().cpu().numpy().item()
         self.results.update(
             energy=energy_val,
@@ -264,6 +279,11 @@ class PESCalculator(Calculator):
             self.results.update(hessian=calc_result[3].detach().cpu().numpy())
         if self.compute_magmom:
             self.results.update(magmoms=calc_result[4].detach().cpu().numpy())
+        if self.compute_charge:
+            # Potential output layout is (..., charges) with calc_charge alone, but
+            # (..., charges, magmoms) when calc_magmom is also enabled; the magmoms
+            # branch above would then need index 5. No current model sets both flags.
+            self.results.update(charges=calc_result[4].detach().cpu().numpy())
 
 
 # for backward compatibility

@@ -12,7 +12,8 @@ It requires the optional ``jax`` dependency::
 Public entry points:
 
 * :func:`~matgl.ext.jax._convert.convert_potential` -- torch ``Potential`` -> JAX pytree.
-* :func:`~matgl.ext.jax._potential.make_potential_fn` -- jitted ``(E, forces, stress)`` fn.
+* :func:`~matgl.ext.jax._potential.make_potential_fn` -- jitted ``(E, forces, stress)`` fn
+  (optionally + QEq charges for QET).
 * :class:`~matgl.ext.jax._calculator.JAXPESCalculator` -- ASE calculator, a twin of
   ``matgl.ext.ase.PESCalculator``.
 """

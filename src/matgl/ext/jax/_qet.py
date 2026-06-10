@@ -57,8 +57,14 @@ def electrostatic_potential(charge, sigma, pos, edge_index, pbc_offshift, cutoff
     return scatter_add(edge_msg * _COULOMB * edge_mask, src, charge.shape[0])
 
 
-def qet_energy(params, cfg, z, pos, edge_index, pbc_offshift, batch, num_graphs, edge_mask):
-    """Per-graph QET energy (raw model output, before Potential denorm)."""
+def qet_energy_and_charges(
+    params, cfg, z, pos, edge_index, pbc_offshift, batch, num_graphs, edge_mask, total_charge=None
+):
+    """Per-graph QET energy plus the QEq per-atom charges.
+
+    ``total_charge`` may be a traced scalar so per-structure charges do not
+    trigger recompilation; ``None`` falls back to the static ``cfg`` value.
+    """
     x = forward_features(params, cfg, z, pos, edge_index, pbc_offshift, edge_mask)
 
     # chi / hardness readouts use fixed activations (SiLU / Softplus), independent
@@ -70,7 +76,9 @@ def qet_energy(params, cfg, z, pos, edge_index, pbc_offshift, batch, num_graphs,
         hardness = params["hardness_readout"][z]
     sigma = params["sigma"][z]
 
-    charge = linear_qeq(chi, hardness, batch, num_graphs, cfg.get("total_charge", 0.0))
+    if total_charge is None:
+        total_charge = cfg.get("total_charge", 0.0)
+    charge = linear_qeq(chi, hardness, batch, num_graphs, total_charge)
     elec_pot = electrostatic_potential(charge, sigma, pos, edge_index, pbc_offshift, cfg["cutoff"], edge_mask)
 
     feats = [x, charge[:, None], elec_pot[:, None]]
@@ -81,5 +89,10 @@ def qet_energy(params, cfg, z, pos, edge_index, pbc_offshift, batch, num_graphs,
     atomic = gated_mlp(params["final_layer"], node_feat, activate_last=False).reshape(-1)
 
     if num_graphs == 1:
-        return jnp.sum(atomic)[None]
-    return scatter_add(atomic, batch, num_graphs)
+        return jnp.sum(atomic)[None], charge
+    return scatter_add(atomic, batch, num_graphs), charge
+
+
+def qet_energy(params, cfg, z, pos, edge_index, pbc_offshift, batch, num_graphs, edge_mask):
+    """Per-graph QET energy (raw model output, before Potential denorm)."""
+    return qet_energy_and_charges(params, cfg, z, pos, edge_index, pbc_offshift, batch, num_graphs, edge_mask)[0]

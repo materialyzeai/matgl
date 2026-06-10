@@ -274,3 +274,61 @@ def test_qet_energy_forces_stress_parity(struct_name, cfg_name):
     assert abs(e_t - e_j) < 1e-6, f"energy: torch={e_t} jax={e_j}"
     assert np.abs(f_t - f_j).max() < 1e-6, f"forces max diff {np.abs(f_t - f_j).max():.2e}"
     assert np.abs(s_t - s_j).max() < 1e-6, f"stress max diff {np.abs(s_t - s_j).max():.2e}"
+
+
+def test_qet_calculator_charges():
+    """JAXPESCalculator exposes QEq charges, honors the total charge, and matches PESCalculator."""
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    from matgl.ext.ase import PESCalculator
+
+    torch.manual_seed(3)
+    model = QET(
+        element_types=DEFAULT_ELEMENTS,
+        units=32,
+        nblocks=2,
+        cutoff=CUTOFF,
+        use_warp=False,
+        **QET_CONFIGS["gaussian-default"],
+    )
+    model.eval()
+    potential = Potential(model=model, calc_forces=True, calc_stresses=True, calc_charge=True)
+    potential.eval()
+
+    atoms = AseAtomsAdaptor.get_atoms(QET_STRUCTURES["GaAs"])
+    atoms.calc = JAXPESCalculator(potential, stress_unit="GPa")
+    e_neutral = atoms.get_potential_energy()
+    q_neutral = atoms.get_charges()
+    assert q_neutral.shape == (len(atoms),)
+    # QEq constrains the partial charges to sum to the total charge
+    np.testing.assert_allclose(q_neutral.sum(), 0.0, atol=1e-5)
+
+    # parity with the torch PESCalculator (both float32)
+    ref_atoms = atoms.copy()
+    ref_atoms.calc = PESCalculator(potential, stress_unit="GPa")
+    np.testing.assert_allclose(q_neutral, ref_atoms.get_charges(), atol=1e-4)
+
+    # initial charges set the QEq total charge; same calculator instance, so the
+    # traced total_charge argument changes without recompilation
+    charged = atoms.copy()
+    initial = np.zeros(len(charged))
+    initial[0] = 1.0
+    charged.set_initial_charges(initial)
+    charged.calc = atoms.calc
+    e_charged = charged.get_potential_energy()
+    q_charged = charged.get_charges()
+    np.testing.assert_allclose(q_charged.sum(), 1.0, atol=1e-5)
+    assert not np.isclose(e_charged, e_neutral, rtol=0, atol=1e-8)
+
+    # an explicit total_charge overrides the initial charges
+    explicit = atoms.copy()
+    explicit.calc = JAXPESCalculator(potential, stress_unit="GPa", total_charge=1.0)
+    np.testing.assert_allclose(explicit.get_charges(), q_charged, atol=1e-6)
+
+
+def test_make_potential_fn_with_charges_requires_qet():
+    """``with_charges=True`` is rejected for non-QET conversions."""
+    potential, _, _ = _build(TN_STRUCTURES["Si2"], TN_CONFIGS["gaussian-extensive"])
+    params, cfg, extras = convert_potential(potential)
+    with pytest.raises(ValueError, match="requires a converted QET model"):
+        make_potential_fn(params, cfg, extras, num_graphs=1, with_charges=True)
