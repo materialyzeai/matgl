@@ -6,6 +6,23 @@ nav_order: 3
 
 # Change Log
 
+## 4.0.2
+- **Bug fix: charges restored for charge-predicting potentials (QET) in the ASE calculators.**
+  `PESCalculator.get_charges()` raised `PropertyNotImplementedError` because the PyG calculator never
+  implemented the charge output of the removed DGL calculator, and `total_charge` was silently ignored:
+  charged cells ran as neutral (QEq treats a missing total charge as 0) with no error. `PESCalculator`
+  now exposes `"charges"` in results and accepts `total_charge` / `ext_pot` kwargs, falling back to
+  `atoms.get_initial_charges()`. `Relaxer` and `MolecularDynamics` inherit this. `JAXPESCalculator`
+  gains the same support; `make_potential_fn(with_charges=True)` (QET only) returns
+  `(E, forces, stress, charges)` with `total_charge` as a traced argument, so varying it triggers no
+  recompilation. **If you ran charged-cell MD or relaxations with QET on 4.0.0/4.0.1, those runs used
+  a neutral cell.**
+- **Bug fix: `state_attr` is cast to long before the `nn.Embedding` lookup in `EmbeddingBlock`**,
+  fixing failures with float state attributes.
+- Internal: the electrostatics modules (`LinearQeq`, electrostatic potential) now live in
+  `matgl.layers`; no public API change. Backend-related redirects removed. Notebooks updated to
+  remove DGL references.
+
 ## 4.0.1
 - **Intermediate features now exposed via ``model.feature_dict``.** All ``MatGLModel`` subclasses
   (``TensorNet``, ``M3GNet``, ``CHGNet``, ``QET``, ``MEGNet``, ``SO3Net``, ``GRACE``, and the
