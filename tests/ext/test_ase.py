@@ -4,11 +4,14 @@ import os.path
 
 import numpy as np
 import pytest
+import torch
 from ase.build import molecule
 from pymatgen.io.ase import AseAtomsAdaptor
 
 import matgl
+from matgl.apps.pes import Potential
 from matgl.ext.ase import Atoms2Graph, M3GNetCalculator, MolecularDynamics, PESCalculator, Relaxer
+from matgl.models import QET
 
 
 def test_PESCalculator_and_M3GNetCalculator(MoS, caplog):
@@ -105,6 +108,34 @@ def test_PESCalculator_mol(AcAla3NHMe):
     assert isinstance(mol.get_potential_energy(), float)
     assert list(mol.get_forces().shape) == [42, 3]
     np.testing.assert_allclose(mol.get_potential_energy(), -249.194916, atol=1e-3)
+
+
+def test_PESCalculator_charges(MoS):
+    torch.manual_seed(0)
+    adaptor = AseAtomsAdaptor()
+    atoms = adaptor.get_atoms(MoS)  # type: ignore
+    pot = Potential(model=QET(use_warp=False, is_intensive=False), calc_charge=True)
+
+    atoms.calc = PESCalculator(potential=pot, stress_unit="eV/A3")
+    e_neutral = atoms.get_potential_energy()
+    charges = atoms.get_charges()
+    assert charges.shape == (len(atoms),)
+    # QEq constrains the partial charges to sum to the total charge
+    np.testing.assert_allclose(charges.sum(), 0.0, atol=1e-5)
+
+    # initial charges on the Atoms set the QEq total charge
+    charged = atoms.copy()
+    charged.set_initial_charges([1.0, 0.0])
+    charged.calc = PESCalculator(potential=pot, stress_unit="eV/A3")
+    e_charged = charged.get_potential_energy()
+    np.testing.assert_allclose(charged.get_charges().sum(), 1.0, atol=1e-5)
+    assert not np.isclose(e_charged, e_neutral, rtol=0, atol=1e-8)
+
+    # an explicit total_charge overrides the initial charges
+    explicit = atoms.copy()
+    explicit.calc = PESCalculator(potential=pot, stress_unit="eV/A3", total_charge=torch.tensor(1.0))
+    np.testing.assert_allclose(explicit.get_charges(), charged.get_charges(), atol=1e-6)
+    np.testing.assert_allclose(explicit.get_potential_energy(), e_charged, atol=1e-6)
 
 
 def test_Relaxer(MoS):
