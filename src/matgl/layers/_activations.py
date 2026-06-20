@@ -56,6 +56,11 @@ class SoftExponential(nn.Module):
     References: https://arxiv.org/pdf/1602.01321.pdf
     """
 
+    # |alpha| below this is treated as the identity (alpha -> 0) region, and it
+    # also floors the log argument / denominator to keep the activation and its
+    # gradient finite.
+    _eps = 1e-6
+
     def __init__(self, alpha: float | None = None):
         """Init SoftExponential with alpha value.
 
@@ -75,17 +80,41 @@ class SoftExponential(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Evaluate activation function given the input tensor x.
 
+        Branch selection uses ``torch.where`` rather than a Python ``if`` on
+        ``self.alpha``: a host-side ``bool(self.alpha < 0)`` test forces a device
+        sync and drops the branch from the autograd graph, so ``alpha`` could
+        only ever learn within whichever sign region it was initialised in.
+        ``torch.where`` keeps both formulas in the graph. Because ``where`` still
+        evaluates both sides, the denominators and the ``log`` argument are
+        guarded so the discarded branch cannot inject NaN/Inf into the gradient
+        (the "double where" trick).
+
         Args:
             x (torch.tensor): Input tensor
 
         Returns:
             out (torch.tensor): Output tensor
         """
-        if self.alpha == 0.0:
-            return x
-        if self.alpha < 0.0:
-            return -torch.log(1.0 - self.alpha * (x + self.alpha)) / self.alpha
-        return (torch.exp(self.alpha * x) - 1.0) / self.alpha + self.alpha
+        alpha = self.alpha
+        # Treat |alpha| < eps as the identity region (the alpha -> 0 limit)
+        # instead of testing exact equality to 0.0, which a learned float never
+        # hits after the first optimizer step.
+        near_zero = alpha.abs() < self._eps
+        # Never divide by a (near) zero alpha, even on the branch that gets
+        # discarded, otherwise NaN/Inf would poison alpha.grad.
+        safe_alpha = torch.where(near_zero, torch.ones_like(alpha), alpha)
+
+        # alpha < 0 branch: -log(1 - alpha*(x + alpha)) / alpha. The log argument
+        # can go <= 0 for sufficiently negative x; clamp it to a small positive
+        # floor on the live branch so it never produces NaN/Inf.
+        neg_log_arg = torch.where(alpha < 0.0, 1.0 - alpha * (x + alpha), torch.ones_like(x))
+        neg = -torch.log(neg_log_arg.clamp_min(self._eps)) / safe_alpha
+
+        # alpha > 0 branch: (exp(alpha*x) - 1)/alpha + alpha; expm1 is accurate near 0.
+        pos = torch.expm1(safe_alpha * x) / safe_alpha + safe_alpha
+
+        out = torch.where(alpha < 0.0, neg, pos)
+        return torch.where(near_zero, x, out)
 
 
 def softplus_inverse(x: torch.Tensor):

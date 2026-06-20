@@ -7,6 +7,14 @@ nav_order: 3
 # Change Log
 
 ## Unreleased
+- **Fix: `SoftExponential` activation autograd correctness and NaN safety (#788).** `forward` now selects
+  its `alpha < 0` / `alpha > 0` / `alpha ≈ 0` branches with `torch.where` instead of a Python `if` on the
+  learnable `alpha` parameter. The old `if self.alpha < 0.0` forced a host-device sync and dropped the
+  branch from the autograd graph (so `alpha` was effectively trapped in its initial sign region); the
+  `alpha == 0.0` exact-float test was unreachable after the first optimizer step; and the `alpha < 0`
+  formula produced NaN/Inf for sufficiently negative inputs. The log argument and denominators are now
+  guarded so both the activation and `alpha.grad` stay finite. Values in the well-defined region are
+  unchanged.
 - **New: `matgl.utils.MCDropoutWrapper` for uncertainty-aware inference.** Enables Monte Carlo Dropout
   (Gal & Ghahramani, 2016) on any pretrained MatGL model (CHGNet, M3GNet, TensorNet, …) without
   retraining: the backbone stays in `eval()` while only the readout dropout is sampled, and
