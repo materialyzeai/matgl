@@ -52,10 +52,24 @@ class PairMATGLKokkos : public PairMATGL {
   torch::Device torch_device_ = torch::kCPU;
 
   // Persistent device-side buffers — re-allocated on size change.
-  Kokkos::View<int64_t **, DeviceType> d_edge_index_;        // (2, E)
-  Kokkos::View<int64_t **, DeviceType> d_unit_shifts_;       // (E, 3)
+  // NOTE: explicit LayoutRight is required here. Without it, DeviceType's
+  // default array_layout (LayoutLeft on Cuda, LayoutRight on host) leaves
+  // the on-device memory column-major, while blob_from_view()/from_blob()
+  // below always reinterpret the raw buffer as row-major. On the CUDA
+  // backend that mismatch scrambled edge_index into a bogus graph topology
+  // (wrong energy, zero/NaN forces); the host backend happened to match by
+  // coincidence since its default layout is already LayoutRight.
+  Kokkos::View<int64_t **, Kokkos::LayoutRight, DeviceType> d_edge_index_;        // (2, E)
+  Kokkos::View<int64_t **, Kokkos::LayoutRight, DeviceType> d_unit_shifts_;       // (E, 3)
   Kokkos::View<int64_t *, DeviceType> d_atomic_numbers_;     // (N,)
   Kokkos::View<bool *, DeviceType> d_local_or_ghost_;        // (N,)
+  // local_row_of_(j) = the local (owned, <nlocal) row representing the same
+  // physical atom as row j. Identity for local rows; for ghosts, the owned
+  // copy with the same tag. Built host-side once per compute() (cheap vs.
+  // the model forward pass) and uploaded -- see pair_matgl.cpp for why this
+  // exists (TensorNet needs one consistent row per atom; periodicity goes
+  // through unit_shifts, not through ghost-row duplication).
+  Kokkos::View<int *, DeviceType> d_local_row_of_;           // (N,)
 
   // Edge-counting scratch.
   Kokkos::View<int *, DeviceType> d_numneigh_short_;
