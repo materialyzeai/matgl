@@ -116,6 +116,14 @@ pip install matgl[ops]    # NVIDIA Warp kernels for TensorNet/QET (NVIDIA GPU, t
 pip install matgl[jax]    # JAX/XLA inference for TensorNet/QET (CPU / CUDA / Apple Silicon)
 ```
 
+## LAMMPS support
+
+MatGL ships a native LAMMPS `pair_style matgl` that evaluates a TorchScript-compiled MatGL **TensorNet** PES
+(energies, forces, and virials) on every timestep via LibTorch, with both a CPU/serial pair style and a Kokkos
+GPU/host variant (`pair_style matgl/kk`). Export a LAMMPS-loadable model from any pre-trained TensorNet with
+`mgl create-lammps-model`. Build and usage instructions, the input-deck syntax, and current limitations are in
+[`lammps/README.md`](lammps/README.md).
+
 ## Docker images
 
 Docker images have now been built for matgl, together with LAMMPS support. They are available at the
@@ -429,8 +437,6 @@ We wrote [tutorials] on how to use MatGL. These were generated from [Jupyter not
 - [API docs][apidocs] for all classes and methods.
 - [Developer Guide](developer.md) outlines the key design elements of `matgl`, especially for developers wishing to
   train and contribute matgl models.
-- AdvancedSoft has implemented a [LAMMPS interface](https://github.com/advancesoftcorp/lammps/tree/based-on-lammps_2Jun2022/src/ML-M3GNET)
-  to both the TF and MatGL version of M3GNet.
 
 ## References
 

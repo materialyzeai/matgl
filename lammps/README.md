@@ -17,9 +17,9 @@ This directory ships:
 The Python side (one repo up) ships `mgl create-lammps-model`, which
 produces the `.pt` artifact these pair styles consume.
 
-> **Status — Phases 2 + 3 of the MatGL LAMMPS-Kokkos plugin.** CPU CI
-> exists (`.github/workflows/lammps-build.yml`); GPU runs require a
-> CUDA-capable runner (not in CI yet).
+> **Status.** The CPU/serial pair style is exercised in CI
+> (`.github/workflows/lammps-build.yml`). The Kokkos GPU variant builds
+> but is not yet covered in CI, as GitHub-hosted runners have no GPU.
 
 ## Building
 
@@ -144,8 +144,9 @@ Currently a no-op.
   proportionally to the number of ranks.
 - **No restart support.** The model lives on disk; `restart` files don't
   capture the path. Re-issue `pair_style` / `pair_coeff` after a restart.
-- **TensorNet only.** M3GNet, CHGNet, MEGNet, SO3Net, QET are DGL-only
-  in the matgl repo and would need PyG ports first.
+- **TensorNet only.** The pair style loads a TorchScript-compiled
+  TensorNet PES. Other architectures (M3GNet, CHGNet, MEGNet, SO3Net,
+  QET) are not yet wired into the LAMMPS export path.
 
 ## Continuous integration
 
@@ -158,8 +159,8 @@ through `LAMMPSMatGLModel`, runs the `in.matgl_si` deck, and diffs the
 LAMMPS energy against the Python reference.
 
 The Kokkos variant is **not** exercised in CI today — GitHub-hosted
-runners have no GPU. Hardware-accelerated CI is on the Phase-3 follow-up
-list and likely lives on a self-hosted CUDA runner.
+runners have no GPU. Hardware-accelerated CI would need a self-hosted
+CUDA runner.
 
 ## Verifying a build
 
@@ -205,8 +206,5 @@ stresses (when nonzero) within `1e-3 GPa`.
 
 ## Reference
 
-Plan and design notes:
-[`develop-a-kokkos-plugin-eventual-hare.md`](https://github.com/materialyzeai/matgl/tree/lammps).
-
-The Python wrapper is documented inline at
-`src/matgl/ext/_lammps.py` in the matgl repo.
+The Python wrapper that exports LAMMPS-loadable models is documented
+inline at `src/matgl/ext/_lammps.py` in the matgl repo.
