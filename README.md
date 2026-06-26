@@ -118,11 +118,11 @@ pip install matgl[jax]    # JAX/XLA inference for TensorNet/QET (CPU / CUDA / Ap
 
 ## LAMMPS support
 
-MatGL ships a native LAMMPS `pair_style matgl` that evaluates a TorchScript-compiled MatGL **TensorNet** PES
-(energies, forces, and virials) on every timestep via LibTorch, with both a CPU/serial pair style and a Kokkos
-GPU/host variant (`pair_style matgl/kk`). Export a LAMMPS-loadable model from any pre-trained TensorNet with
-`mgl create-lammps-model`. Build and usage instructions, the input-deck syntax, and current limitations are in
-[`lammps/README.md`](lammps/README.md).
+MatGL ships a native LAMMPS `pair_style matgl` that evaluates a TorchScript-compiled MatGL **TensorNet** or
+**M3GNet** PES (energies, forces, and virials) on every timestep via LibTorch, with both a CPU/serial pair style
+and a Kokkos GPU/host variant (`pair_style matgl/kk`). Export a LAMMPS-loadable model from a pre-trained TensorNet
+or M3GNet with `mgl create-lammps-model`. Build and usage instructions, the input-deck syntax, and current
+limitations are in [`lammps/README.md`](lammps/README.md).
 
 ## Docker images
 

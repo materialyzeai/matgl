@@ -24,7 +24,7 @@ from pymatgen.core.periodic_table import Element
 from torch import Tensor, nn
 from torch.autograd import grad
 
-from matgl.graph._compute_pyg import (
+from matgl.graph._compute import (
     compute_pair_vector_and_distance,
     compute_theta_and_phi,
     create_line_graph_torch,
@@ -34,7 +34,7 @@ from matgl.utils.cutoff import polynomial_cutoff
 from matgl.utils.maths import decompose_tensor, tensor_norm
 
 if TYPE_CHECKING:
-    from matgl.apps._pes_pyg import Potential
+    from matgl.apps.pes import Potential
 
 logger = logging.getLogger(__name__)
 
@@ -343,8 +343,8 @@ class LAMMPSMatGLModel(nn.Module):
 
         # Imports kept local so the public ``matgl.ext`` namespace doesn't
         # hard-require these submodules at import time.
-        from matgl.models._m3gnet_pyg import M3GNet
-        from matgl.models._tensornet_pyg import TensorNet
+        from matgl.models._m3gnet import M3GNet
+        from matgl.models._tensornet import TensorNet
 
         model = potential.model
 

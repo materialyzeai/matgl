@@ -1,7 +1,7 @@
 # MatGL → LAMMPS pair_style
 
 `pair_matgl` is a LAMMPS pair style that loads a TorchScript-compiled
-**MatGL TensorNet** PES (PyG backend, no-Warp, extensive head) and uses
+**MatGL TensorNet or M3GNet** PES (PyG backend, extensive head) and uses
 LibTorch to evaluate energies, forces, and the virial tensor on every
 timestep.
 
@@ -144,9 +144,14 @@ Currently a no-op.
   proportionally to the number of ranks.
 - **No restart support.** The model lives on disk; `restart` files don't
   capture the path. Re-issue `pair_style` / `pair_coeff` after a restart.
-- **TensorNet only.** The pair style loads a TorchScript-compiled
-  TensorNet PES. Other architectures (M3GNet, CHGNet, MEGNet, SO3Net,
-  QET) are not yet wired into the LAMMPS export path.
+- **TensorNet and M3GNet only.** The export path (`mgl
+  create-lammps-model` / `LAMMPSMatGLModel`) supports the PyG TensorNet
+  and M3GNet PES models with an extensive head (TensorNet must be
+  no-Warp; both require `use_smooth=True`, and M3GNet requires
+  `use_phi=False`). For M3GNet the three-body line graph is built inside
+  the TorchScript module, so both the CPU and Kokkos pair styles run it
+  with no extra handling. CHGNet, MEGNet, SO3Net, and QET are not yet
+  wired into the LAMMPS export path.
 
 ## Continuous integration
 

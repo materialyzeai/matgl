@@ -241,7 +241,7 @@ def create_lammps_model(args: argparse.Namespace) -> int:
     print("  r_max     :", wrapper.r_max)
     print("  n_species :", wrapper.n_species)
     print("  dtype     :", args.dtype)
-    species = list(potential.model.element_types)  # type:ignore[union-attr,arg-type]
+    species = list(potential.model.element_types)  # type:ignore[union-attr,arg-type,attr-defined]
     print("  species   :", species[: wrapper.n_species])
     return 0
 

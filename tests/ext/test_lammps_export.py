@@ -11,20 +11,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
-
-import matgl
-
-if matgl.config.BACKEND != "PYG":
-    pytest.skip("LAMMPS export only supports PyG backend", allow_module_level=True)
-
 from pymatgen.core import Lattice, Structure
 from pymatgen.optimization.neighbors import find_points_in_spheres
 
-from matgl.apps._pes_pyg import Potential
-from matgl.ext._lammps import LAMMPSMatGLModel
-from matgl.ext._pymatgen_pyg import Structure2Graph
-from matgl.models._m3gnet_pyg import M3GNet
-from matgl.models._tensornet_pyg import TensorNet
+import matgl
+from matgl.apps.pes import Potential
+from matgl.ext.lammps import LAMMPSMatGLModel
+from matgl.ext.pymatgen import Structure2Graph
+from matgl.models import M3GNet, TensorNet
 
 
 def _build_lammps_inputs(structure: Structure, element_types: tuple[str, ...], cutoff: float, dtype: torch.dtype):
