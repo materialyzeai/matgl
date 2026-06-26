@@ -42,6 +42,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 
 using namespace LAMMPS_NS;
 
@@ -126,7 +127,54 @@ void PairMATGL::coeff(int narg, char **arg)
   if (std::strcmp(arg[0], "*") != 0 || std::strcmp(arg[1], "*") != 0)
     error->all(FLERR, "pair_coeff matgl requires both type indices to be '*'");
 
-  const std::string model_path = arg[2];
+  std::string model_path = arg[2];
+  {
+    namespace fs = std::filesystem;
+    fs::path p(model_path);
+    fs::path dir = fs::is_directory(p) ? p : p.parent_path();
+    fs::path native_config = dir / "model.json";
+    fs::path native_state = dir / "state.pt";
+
+    if (fs::exists(native_config) && fs::exists(native_state)) {
+      // `dir` holds a matgl IOMixIn checkpoint (model.json + model.pt +
+      // state.pt) rather than a LAMMPS-ready TorchScript module. Export
+      // (and cache) a scripted model alongside it, then load that instead.
+      fs::path cached = dir / "lammps_model.pt";
+
+      bool need_export = !fs::exists(cached);
+      if (!need_export) {
+        auto cached_time = fs::last_write_time(cached);
+        for (const auto &src : {native_config, native_state})
+          if (fs::last_write_time(src) > cached_time) need_export = true;
+      }
+
+      if (need_export) {
+        if (comm->me == 0) {
+          utils::logmesg(lmp,
+                         "pair_matgl: exporting matgl checkpoint '{}' to LAMMPS "
+                         "TorchScript format (one-time, cached as '{}')...\n",
+                         dir.string(), cached.string());
+          static const std::string kPython = "/global/cfs/cdirs/m4845/repos/matgl/.venv/bin/python";
+          static const std::string kExportScript =
+              "/global/cfs/cdirs/m4845/repos/lammps/src/ML-MATGL/export_matgl_checkpoint.py";
+          std::string cmd = kPython + " '" + kExportScript + "' '" + dir.string() + "' '" +
+                             cached.string() + "'";
+          int rc = std::system(cmd.c_str());
+          if (rc != 0)
+            error->one(FLERR, "pair_matgl: export of matgl checkpoint '{}' failed (command '{}' exited {})",
+                       dir.string(), cmd, rc);
+        }
+        MPI_Barrier(world);
+        if (!fs::exists(cached))
+          error->all(FLERR, "pair_matgl: expected exported model '{}' not found after export",
+                     cached.string());
+      }
+
+      model_path = cached.string();
+    } else if (fs::exists(p) && fs::is_directory(p)) {
+      model_path = (p / "model.pt").string();
+    }
+  }
 
   // Try-catch around torch::jit::load: if libtorch can't read the file or the
   // module's forward signature isn't ours, surface a useful error early.
@@ -308,6 +356,26 @@ void PairMATGL::compute(int eflag, int vflag)
   edge_dst.reserve(nall * 32);
   edge_shifts.reserve(nall * 32 * 3);
 
+  // TensorNet's message-passing layers require every physical atom to be
+  // addressed by ONE consistent row index across all its edges; periodicity
+  // must be encoded as a position offset on that same row (unit_shifts @
+  // cell), not as a second "ghost" row. A ghost row only ever appears as an
+  // edge destination here (only owned atoms are loop centers below), so it
+  // never propagates outgoing messages and the real atom never receives the
+  // message that landed on its ghost -- silently dropping every
+  // periodic-boundary bond's contribution. So: resolve every neighbor `j`
+  // back to the local row of the atom it represents via its tag, and
+  // recover the integer image vector from the (cancelling-boxlo) Cartesian
+  // offset between the ghost and its owned copy.
+  if (comm->nprocs > 1)
+    error->all(FLERR,
+               "pair_style matgl: multi-rank (MPI-decomposed) runs are not "
+               "yet supported -- ghost atoms may be owned by a different "
+               "rank, so there is no local row to fold periodic edges back "
+               "onto. Run with a single MPI rank.");
+
+  const double *const h_inv = domain->h_inv;
+
   for (int ii = 0; ii < inum; ++ii) {
     const int i = ilist[ii];
     const double xi = x[i][0];
@@ -324,20 +392,36 @@ void PairMATGL::compute(int eflag, int vflag)
       const double rsq = dx * dx + dy * dy + dz * dz;
       if (rsq > r_max_squared_) continue;
 
-      // unit_shifts: integer image vector (nx,ny,nz) such that
-      //   x[j] == x_owned[j_local] + (nx,ny,nz) @ cell
-      // For LAMMPS' "i and ghost j" pattern we leave shifts at zero and
-      // let the Python wrapper compute pbc_offshift = unit_shifts @ cell;
-      // it always evaluates to zero because LAMMPS hands us already-imaged
-      // ghost positions. The wrapper gradient with respect to the strain
-      // tensor still propagates correctly because the cell appears via
-      //   pos_s = positions @ (I + strain)
-      // applied to BOTH local and ghost positions.
+      // Fold `j` (local or ghost) back onto the local row of the atom it
+      // represents. For a local atom this is `j` itself (shift 0,0,0); for
+      // a ghost it's the owned copy with the same tag.
+      const int j_local = atom->map(atom->tag[j]);
+      if (j_local < 0 || j_local >= nlocal)
+        error->one(FLERR,
+                   "pair_style matgl: could not resolve neighbor atom "
+                   "{} (tag {}) to a local row -- is `atom_modify map yes` "
+                   "set, and is this a single-rank run?",
+                   j, atom->tag[j]);
+
+      // Integer image vector (nx,ny,nz) such that
+      //   x[j] == x[j_local] + (nx,ny,nz) @ cell
+      // boxlo cancels in the difference, so this is the same affine map
+      // Domain::x2lamda uses, applied to (x[j] - x[j_local]) directly.
+      const double ddx = x[j][0] - x[j_local][0];
+      const double ddy = x[j][1] - x[j_local][1];
+      const double ddz = x[j][2] - x[j_local][2];
+      const double lz = h_inv[2] * ddz;
+      const double ly = h_inv[1] * ddy + h_inv[3] * ddz;
+      const double lx = h_inv[0] * ddx + h_inv[5] * ddy + h_inv[4] * ddz;
+      const int64_t nx = static_cast<int64_t>(std::lround(lx));
+      const int64_t ny = static_cast<int64_t>(std::lround(ly));
+      const int64_t nz = static_cast<int64_t>(std::lround(lz));
+
       edge_src.push_back(static_cast<int64_t>(i));
-      edge_dst.push_back(static_cast<int64_t>(j));
-      edge_shifts.push_back(0);
-      edge_shifts.push_back(0);
-      edge_shifts.push_back(0);
+      edge_dst.push_back(static_cast<int64_t>(j_local));
+      edge_shifts.push_back(nx);
+      edge_shifts.push_back(ny);
+      edge_shifts.push_back(nz);
     }
   }
 

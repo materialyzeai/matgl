@@ -183,14 +183,23 @@ stresses (when nonzero) within `1e-3 GPa`.
 - The pair style requests a **full neighbor list with ghost atoms**
   (`REQ_FULL | REQ_GHOST`). The model expects edge indices that span both
   owned and ghost atoms.
-- Bond vectors are computed from LAMMPS' already-imaged ghost positions,
-  so `unit_shifts` is always zero — the strain-based stress trick still
-  works because the strain is applied to all atomic positions (owned and
-  ghost) on the model side.
+- Every edge is folded back onto the *local* row of the atom it represents
+  (via `atom->map(atom->tag[j])`) rather than pointing at the ghost row
+  directly. TensorNet's message-passing layers need one consistent row
+  per physical atom — a ghost row never propagates outgoing messages back
+  to the atom it duplicates. The periodic image is recovered explicitly as
+  an integer `unit_shifts` (the ghost/local position difference,
+  transformed through the box's inverse deformation matrix and rounded to
+  the nearest integer), rather than relying on LAMMPS' already-imaged
+  ghost positions with `unit_shifts = 0`. Single-rank only: ghost atoms
+  can be owned by a different MPI rank, so there is no local row to fold
+  onto in a multi-rank run.
 - Forces are accumulated for **all** atoms (owned + ghost). LAMMPS' usual
   `comm->reverse_comm` step then sums ghost contributions back to the
   rank that owns each atom. This requires `newton on`.
-- Virials are written into the global `virial[6]` array directly. We set
+- Virials are written into the global `virial[6]` array directly as
+  `virial -= va` (the model returns `virials = dE/dstrain = -W`, while
+  LAMMPS' convention is `W = sum_i r_i ⊗ f_i`). We set
   `no_virial_fdotr_compute = 1` in the constructor so LAMMPS doesn't
   recompute the virial from forces.
 

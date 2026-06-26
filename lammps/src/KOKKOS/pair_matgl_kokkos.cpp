@@ -10,9 +10,12 @@
 
      * the model forward signature (we pass `compute_virials: bool`),
      * the output dict keys (`total_energy_local`, `forces`, `virials`),
-     * `unit_shifts` is held at zero because LAMMPS hands us already-imaged
-       ghost positions; the strain-grad still propagates correctly because
-       the wrapper applies the strain to *every* position (owned and ghost).
+     * every edge is folded back onto a *local* row (via `local_row_of_`)
+       with a recovered integer `unit_shifts`, rather than pointing at the
+       ghost row directly -- TensorNet's message-passing layers need one
+       consistent row per physical atom, and a ghost row never propagates
+       outgoing messages back to the atom it duplicates (see pair_matgl.cpp
+       for the full explanation and how the shift is recovered).
 
    Caveats on multi-rank Kokkos with libtorch (mirroring MACE):
      * Single-GPU runs are the supported configuration.
@@ -73,7 +76,8 @@ void PairMATGLKokkos<DeviceType>::init_style()
 
   // Pick the matching libtorch device.
   if (std::is_same<DeviceType, Kokkos::Cuda>::value) {
-    const int gpu = lmp->kokkos->ngpus > 0 ? lmp->kokkos->local_rank : 0;
+    int gpu = 0;
+    if (lmp->kokkos->ngpus > 0) cudaGetDevice(&gpu);
     torch_device_ = torch::Device(torch::kCUDA, gpu);
   } else {
     torch_device_ = torch::kCPU;
@@ -131,6 +135,14 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
   auto f = atomKK->k_f.template view<DeviceType>();
   auto type = atomKK->k_type.template view<DeviceType>();
 
+  if (comm->nprocs > 1)
+    error->all(FLERR,
+               "pair_style matgl/kk: multi-rank (MPI-decomposed) runs are "
+               "not yet supported -- ghost atoms may be owned by a "
+               "different rank, so there is no local row to fold periodic "
+               "edges back onto. Run with a single MPI rank (`-k on g 1` "
+               "single-GPU is the supported configuration).");
+
   const int inum = list->inum;
   const int nall = atom->nlocal + atom->nghost;
   const int nlocal = atom->nlocal;
@@ -147,6 +159,9 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
         Kokkos::view_alloc(Kokkos::WithoutInitializing, "matgl:Z"), atom_capacity_);
     d_local_or_ghost_ = Kokkos::View<bool *, DeviceType>(
         Kokkos::view_alloc(Kokkos::WithoutInitializing, "matgl:mask"),
+        atom_capacity_);
+    d_local_row_of_ = Kokkos::View<int *, DeviceType>(
+        Kokkos::view_alloc(Kokkos::WithoutInitializing, "matgl:localrow"),
         atom_capacity_);
     d_numneigh_short_ = Kokkos::View<int *, DeviceType>(
         Kokkos::view_alloc(Kokkos::WithoutInitializing, "matgl:nshort"),
@@ -166,6 +181,25 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
         d_atomic_numbers_(i) = type_to_z(t);
         d_local_or_ghost_(i) = (i < nlocal);
       });
+
+  // local_row_of_(j) = the owned row representing the same physical atom as
+  // row j (identity for local rows; the owned copy with the same tag for
+  // ghosts). atom->map() is a host-only lookup, and `nall` is small (a few
+  // thousand atoms) next to the GPU model forward pass below, so we just
+  // build this on the host once per compute() call. See pair_matgl.cpp for
+  // why every edge must resolve to one consistent row per atom.
+  atomKK->sync(Host, TAG_MASK);
+  auto h_local_row_of = Kokkos::create_mirror_view(d_local_row_of_);
+  for (int j = 0; j < nall; ++j) {
+    const int j_local = atom->map(atom->tag[j]);
+    if (j_local < 0 || j_local >= nlocal)
+      error->one(FLERR,
+                 "pair_style matgl/kk: could not resolve atom {} (tag {}) "
+                 "to a local row -- is `atom_modify map yes` set?",
+                 j, atom->tag[j]);
+    h_local_row_of(j) = j_local;
+  }
+  Kokkos::deep_copy(d_local_row_of_, h_local_row_of);
 
   // 2) Count short-cutoff neighbors per i (only inum atoms are listed,
   //    so initialize numneigh_short_ for ghost atoms to zero).
@@ -209,15 +243,22 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
 
   if (total_edges > edge_capacity_) {
     edge_capacity_ = total_edges;
-    d_edge_index_ = Kokkos::View<int64_t **, DeviceType>(
+    d_edge_index_ = Kokkos::View<int64_t **, Kokkos::LayoutRight, DeviceType>(
         Kokkos::view_alloc(Kokkos::WithoutInitializing, "matgl:edges"), 2,
         edge_capacity_);
-    d_unit_shifts_ = Kokkos::View<int64_t **, DeviceType>(
+    d_unit_shifts_ = Kokkos::View<int64_t **, Kokkos::LayoutRight, DeviceType>(
         Kokkos::view_alloc(Kokkos::WithoutInitializing, "matgl:shifts"),
         edge_capacity_, 3);
   }
 
-  // 4) Fill edge_index + unit_shifts.
+  // 4) Fill edge_index + unit_shifts. Every edge must resolve to the local
+  //    row of the atom it represents -- TensorNet's message-passing layers
+  //    need one consistent row per physical atom (periodicity goes through
+  //    unit_shifts, not through ghost-row duplication; see pair_matgl.cpp).
+  const auto d_local_row_of = d_local_row_of_;
+  const double *const h_inv_host = domain->h_inv;
+  const double hinv0 = h_inv_host[0], hinv1 = h_inv_host[1], hinv2 = h_inv_host[2];
+  const double hinv3 = h_inv_host[3], hinv4 = h_inv_host[4], hinv5 = h_inv_host[5];
   Kokkos::parallel_for(
       "matgl_kk:fill_edges",
       Kokkos::RangePolicy<DeviceType>(0, inum),
@@ -235,11 +276,24 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
           const double dz = x(j, 2) - zi;
           const double rsq = dx * dx + dy * dy + dz * dz;
           if (rsq > r_max_sq) continue;
+
+          const int j_local = d_local_row_of(j);
+          // Integer image vector (nx,ny,nz) such that
+          //   x[j] == x[j_local] + (nx,ny,nz) @ cell
+          // (boxlo cancels in the difference -- same affine map as
+          // Domain::x2lamda, applied directly to x[j] - x[j_local]).
+          const double ddx = x(j, 0) - x(j_local, 0);
+          const double ddy = x(j, 1) - x(j_local, 1);
+          const double ddz = x(j, 2) - x(j_local, 2);
+          const double lz = hinv2 * ddz;
+          const double ly = hinv1 * ddy + hinv3 * ddz;
+          const double lx = hinv0 * ddx + hinv5 * ddy + hinv4 * ddz;
+
           d_edge_index_(0, e) = i;
-          d_edge_index_(1, e) = j;
-          d_unit_shifts_(e, 0) = 0;
-          d_unit_shifts_(e, 1) = 0;
-          d_unit_shifts_(e, 2) = 0;
+          d_edge_index_(1, e) = j_local;
+          d_unit_shifts_(e, 0) = static_cast<int64_t>(Kokkos::round(lx));
+          d_unit_shifts_(e, 1) = static_cast<int64_t>(Kokkos::round(ly));
+          d_unit_shifts_(e, 2) = static_cast<int64_t>(Kokkos::round(lz));
           ++e;
         }
       });
@@ -335,15 +389,18 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
       });
 
   // 9) Virial — the model returns a small 3x3 tensor; pull to host.
+  //    The model returns virials = dE/dstrain (strain_grad), but LAMMPS'
+  //    virial[] convention is W = sum_i r_i (x) f_i = -dE/dstrain (matches
+  //    pair_gnnp.cpp: virial -= volume * stress, with ASE stress = dE/dstrain / V).
   if (vflag_global) {
     auto vir_t = out.at("virials").toTensor().to(torch::kFloat64).cpu();
     auto va = vir_t.accessor<double, 2>();
-    virial[0] += va[0][0];
-    virial[1] += va[1][1];
-    virial[2] += va[2][2];
-    virial[3] += 0.5 * (va[0][1] + va[1][0]);
-    virial[4] += 0.5 * (va[0][2] + va[2][0]);
-    virial[5] += 0.5 * (va[1][2] + va[2][1]);
+    virial[0] -= va[0][0];
+    virial[1] -= va[1][1];
+    virial[2] -= va[2][2];
+    virial[3] -= 0.5 * (va[0][1] + va[1][0]);
+    virial[4] -= 0.5 * (va[0][2] + va[2][0]);
+    virial[5] -= 0.5 * (va[1][2] + va[2][1]);
   }
 }
 
