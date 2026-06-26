@@ -190,12 +190,13 @@ module = ["requests.*", "tabulate.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["matgl.kernels.*"]
+module = ["matgl.kernels.*", "matgl.ext.jax.*", "matgl.ext._lammps"]
 ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = ["matgl.ext.jax.*"]
-ignore_errors = true
+# ``register_buffer`` returns ``Tensor | Module`` in mypy's view; indexing,
+# iterating, or attribute-accessing those triggers spurious errors.
+# Annotating the buffers at class scope to fix it breaks TorchScript's
+# annotation resolver, so silence the affected codes.
+disable_error_code = ["index", "arg-type", "operator", "union-attr"]
 
 [tool.coverage.run]
 relative_files = true

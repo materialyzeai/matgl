@@ -1,0 +1,50 @@
+# in.matgl_si
+#
+# Single-point energy/force/stress on a 4-atom Mo-S unit cell using a
+# pair_matgl-loaded TorchScript model. Compare ``log.lammps`` energies
+# against the Python reference produced by ``python_reference.py`` in the
+# same directory.
+#
+# Usage:
+#   <lammps>/build/lmp -in in.matgl_si
+#
+# Requires:
+#   - LAMMPS built with PKG_ML-MATGL=ON (see ../README.md).
+#   - A TorchScript artifact at ./model.pt produced via:
+#       mgl create-lammps-model -m <model> -o lammps/tests/model.pt --dtype float32
+
+units           metal
+atom_style      atomic
+boundary        p p p
+
+atom_modify     map yes
+newton          on
+
+# 4-atom Mo-S cell matching tests/ext/test_lammps_export.py::mo_s_supercell
+lattice         custom 1.0 a1 4.5 0.0 0.0 a2 0.0 4.5 0.0 a3 0.0 0.0 4.5 &
+                origin 0 0 0 &
+                basis 0.00 0.00 0.00 &
+                basis 0.50 0.50 0.50 &
+                basis 0.50 0.00 0.25 &
+                basis 0.00 0.50 0.75
+region          box prism 0 1 0 1 0 1 0 0 0 units lattice
+create_box      2 box
+create_atoms    1 box basis 1 1 basis 2 2 basis 3 1 basis 4 2
+
+# Mass values are ignored by pair_matgl but LAMMPS still requires them.
+mass            1 95.95          # Mo
+mass            2 32.06          # S
+
+pair_style      matgl
+pair_coeff      * * model.pt Mo S
+
+# `fx`/`fy`/`fz` aren't valid thermo keywords — dump per-atom forces with
+# `dump` if you want them, the parity check only needs the scalar `pe`.
+thermo_style    custom step pe pxx pyy pzz pyz pxz pxy
+thermo          1
+
+dump            forces all custom 1 forces.dump id type x y z fx fy fz
+dump_modify     forces sort id
+
+# Single-point evaluation.
+run             0

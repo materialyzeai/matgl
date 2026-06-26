@@ -157,10 +157,12 @@ class SphericalBesselFunction(nn.Module):
             return self._call_smooth_sbf(r)
         return self._call_sbf(r)
 
+    @torch.jit.ignore
     def _call_smooth_sbf(self, r):
         results = [i(r) for i in self.funcs]
         return torch.t(torch.stack(results))
 
+    @torch.jit.ignore
     def _call_sbf(self, r):
         # ``r`` is per-edge distance. The non-smooth spherical Bessel basis is
         # j_l(root_{l,n} * r / cutoff) * sqrt(2/cutoff^3) / |j_{l+1}(root_{l,n})|
@@ -351,17 +353,22 @@ def spherical_bessel_smooth(r: Tensor, cutoff: float = 5.0, max_n: int = 10) -> 
     Returns:
         expanded spherical harmonics with derivatives smooth at boundary
     """
+    # ``pi`` and ``sqrt(2.0)`` declared locally so this function survives
+    # ``torch.jit.script`` (closed-over module globals are not resolvable
+    # in TorchScript's annotation context).
+    pi_local = 3.141592653589793
+    sqrt2 = 1.4142135623730951
     n = torch.arange(max_n).type(dtype=matgl.float_th)[None, :]
     r = r[:, None]
     fnr = (
         (-1) ** n
-        * sqrt(2.0)
-        * pi
+        * sqrt2
+        * pi_local
         / cutoff**1.5
         * (n + 1)
         * (n + 2)
         / torch.sqrt(2 * n**2 + 6 * n + 5)
-        * (_sinc(r * (n + 1) * pi / cutoff) + _sinc(r * (n + 2) * pi / cutoff))
+        * (_sinc(r * (n + 1) * pi_local / cutoff) + _sinc(r * (n + 2) * pi_local / cutoff))
     )
     en = n**2 * (n + 2) ** 2 / (4 * (n + 1) ** 4 + 1)
     dn = [torch.tensor(1.0)]

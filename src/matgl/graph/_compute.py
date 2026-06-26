@@ -163,6 +163,96 @@ def _compute_3body_indices(
     return line_edge_index, n_triple_ij, max_bond_id
 
 
+def _compute_3body_indices_torch(edge_index: torch.Tensor, num_nodes: int) -> tuple[torch.Tensor, torch.Tensor, int]:
+    """Tensor-only port of :func:`_compute_3body_indices`.
+
+    Same semantics as the numpy/Python-loop original but expressed in pure
+    tensor ops so it can be inlined inside a ``torch.jit.script``-ed forward
+    (the LAMMPS export wrapper needs this). Assumes ``edge_index[0]`` is
+    sorted ascending — matches what
+    :func:`pymatgen.optimization.neighbors.find_points_in_spheres` and the
+    LAMMPS neighbor-list walk produce.
+
+    Args:
+        edge_index: ``(2, E)`` parent edge indices.
+        num_nodes: Number of atoms in the parent graph.
+
+    Returns:
+        Same ``(line_edge_index, n_triple_ij, max_bond_id)`` triple as the
+        legacy implementation.
+    """
+    src = edge_index[0]
+    E = int(src.size(0))
+    device = src.device
+    if E == 0:
+        empty_2 = torch.zeros((2, 0), dtype=torch.long, device=device)
+        empty_1 = torch.zeros((0,), dtype=torch.long, device=device)
+        return empty_2, empty_1, 0
+
+    src_long = src.to(torch.long)
+    n_b = torch.bincount(src_long, minlength=num_nodes)
+    cum = torch.zeros(num_nodes + 1, dtype=torch.long, device=device)
+    cum[1:] = n_b.cumsum(0)
+
+    n_triple_ij = (n_b[src_long] - 1).clamp(min=0).to(torch.long)
+    total = int(n_triple_ij.sum().item())
+    if total == 0:
+        empty_2 = torch.zeros((2, 0), dtype=torch.long, device=device)
+        return empty_2, n_triple_ij, 0
+
+    src_bond = torch.repeat_interleave(torch.arange(E, dtype=torch.long, device=device), n_triple_ij)
+    cum_triples = torch.zeros(E + 1, dtype=torch.long, device=device)
+    cum_triples[1:] = n_triple_ij.cumsum(0)
+    j_within = torch.arange(total, dtype=torch.long, device=device) - cum_triples[src_bond]
+
+    bond_local = torch.arange(E, dtype=torch.long, device=device) - cum[src_long]
+    bond_local_per = bond_local[src_bond]
+    j_actual = j_within + (j_within >= bond_local_per).to(torch.long)
+
+    src_atom = src_long[src_bond]
+    dst_bond = cum[src_atom] + j_actual
+
+    line_edge_index = torch.stack([src_bond, dst_bond], dim=0)
+    max_bond_id = int(line_edge_index.max().item()) + 1
+    return line_edge_index, n_triple_ij, max_bond_id
+
+
+def create_line_graph_torch(
+    edge_index: torch.Tensor,
+    bond_dist: torch.Tensor,
+    bond_vec: torch.Tensor,
+    num_nodes: int,
+    threebody_cutoff: float,
+) -> dict[str, torch.Tensor]:
+    """TorchScript-friendly variant of :func:`create_line_graph`.
+
+    Drops the optional ``pbc_offset`` and the ``Callable`` argument that
+    ``prune_edges_by_features`` uses; otherwise produces the same line-graph
+    bundle keys M3GNet's PyG forward consumes.
+
+    Args:
+        edge_index: ``(2, E)`` parent edges (sorted ascending by source atom).
+        bond_dist: Per-edge distances of the parent graph.
+        bond_vec: Per-edge bond vectors of the parent graph.
+        num_nodes: Number of atoms in the parent graph.
+        threebody_cutoff: Distance cutoff used to drop edges before forming
+            three-body terms.
+    """
+    valid = bond_dist <= threebody_cutoff
+    pruned_edge_index = edge_index[:, valid]
+    pruned_bond_dist = bond_dist[valid]
+    pruned_bond_vec = bond_vec[valid]
+
+    line_edge_index, n_triple_ij, max_bond_id = _compute_3body_indices_torch(pruned_edge_index, num_nodes)
+
+    return {
+        "bond_dist": pruned_bond_dist[:max_bond_id],
+        "bond_vec": pruned_bond_vec[:max_bond_id],
+        "line_edge_index": line_edge_index,
+        "n_triple_ij": n_triple_ij[:max_bond_id],
+    }
+
+
 def create_line_graph(
     edge_index: torch.Tensor,
     bond_dist: torch.Tensor,

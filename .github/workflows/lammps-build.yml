@@ -1,0 +1,602 @@
+name: LAMMPS pair_matgl build
+
+# Builds LAMMPS with PKG_ML-MATGL inside the materialyzeai/lammps image
+# and runs a single-point parity check against the Python ASE calculator.
+#
+# The image is expected to ship:
+#   * a LAMMPS source checkout (path discovered at run time),
+#   * libtorch (CXX11 ABI),
+#   * gcc/g++/cmake/python3.
+# If any of those are missing the workflow falls back to downloading them.
+#
+# A second job, build_pair_matgl_kokkos, exercises the Kokkos/GPU variant
+# (pair_style matgl/kk). It needs a self-hosted runner labeled
+# [self-hosted, gpu, cuda] with an NVIDIA driver + nvcc on PATH — there is
+# no such runner registered against this repo today, so the job will queue
+# forever until one exists. Verified manually on a single-GPU NERSC node;
+# not yet exercised by this workflow.
+
+on:
+  push:
+    branches: ["*"]
+    paths:
+      - "lammps/**"
+      - "src/matgl/ext/_lammps.py"
+      - "src/matgl/ext/lammps.py"
+      - ".github/workflows/lammps-build.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "lammps/**"
+      - "src/matgl/ext/_lammps.py"
+      - "src/matgl/ext/lammps.py"
+      - ".github/workflows/lammps-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build_pair_matgl_cpu:
+    name: pair_matgl (CPU)
+    runs-on: ubuntu-latest
+
+    container:
+      image: materialyzeai/lammps:latest
+
+    env:
+      LIBTORCH_VERSION: "2.5.1"
+
+    steps:
+      - name: Install build + CI tooling
+        # The materialyzeai/lammps image is a runtime image — it ships the
+        # `lmp` binary but none of the build toolchain. We install
+        # everything we need (compiler, cmake, ninja, fftw headers,
+        # curl/unzip/git for downloads & checkout, python venv for uv).
+        shell: bash
+        run: |
+          if command -v apt-get >/dev/null 2>&1; then
+              apt-get update -qq
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                  curl unzip git ca-certificates xz-utils \
+                  build-essential gcc g++ cmake ninja-build pkg-config \
+                  libfftw3-dev libpng-dev libjpeg-dev \
+                  python3 python3-venv python3-dev
+          elif command -v dnf >/dev/null 2>&1; then
+              dnf install -y curl unzip git ca-certificates xz \
+                  gcc gcc-c++ cmake ninja-build pkgconf-pkg-config make \
+                  fftw-devel libpng-devel libjpeg-devel \
+                  python3 python3-devel
+          elif command -v apk >/dev/null 2>&1; then
+              apk add --no-cache curl unzip git ca-certificates xz \
+                  build-base cmake samurai pkgconfig \
+                  fftw-dev libpng-dev jpeg-dev \
+                  python3 python3-dev
+          else
+              echo "No supported package manager found in image" >&2
+              exit 1
+          fi
+          echo "Installed compiler: $(gcc --version | head -1)"
+          echo "Installed cmake:    $(cmake --version | head -1)"
+
+      - name: Checkout matgl
+        uses: actions/checkout@v4
+        with:
+          path: matgl
+
+      - name: Probe image for LAMMPS source + libtorch
+        id: probe
+        shell: bash
+        run: |
+          set -e
+          # LAMMPS source — check the usual suspects.
+          for cand in /opt/lammps /usr/local/src/lammps /lammps "$HOME/lammps"; do
+              if [ -f "$cand/cmake/CMakeLists.txt" ]; then
+                  echo "lammps_src=$cand" >> "$GITHUB_OUTPUT"
+                  echo "Found LAMMPS source at: $cand"
+                  break
+              fi
+          done
+          # libtorch — check the usual suspects.
+          for cand in /opt/libtorch /usr/local/libtorch /libtorch "$HOME/libtorch"; do
+              if [ -f "$cand/share/cmake/Torch/TorchConfig.cmake" ]; then
+                  echo "libtorch=$cand" >> "$GITHUB_OUTPUT"
+                  echo "Found libtorch at: $cand"
+                  break
+              fi
+          done
+
+      - name: Cache libtorch (fallback)
+        if: steps.probe.outputs.libtorch == ''
+        id: cache-libtorch
+        uses: actions/cache@v4
+        with:
+          path: libtorch
+          key: libtorch-${{ env.LIBTORCH_VERSION }}-cpu-cxx11abi
+
+      - name: Download libtorch (fallback)
+        if: steps.probe.outputs.libtorch == '' && steps.cache-libtorch.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          curl -L -o libtorch.zip \
+            "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2Bcpu.zip"
+          unzip -q libtorch.zip
+          rm libtorch.zip
+
+      - name: Resolve libtorch path
+        id: libtorch
+        shell: bash
+        run: |
+          if [ -n "${{ steps.probe.outputs.libtorch }}" ]; then
+              echo "path=${{ steps.probe.outputs.libtorch }}" >> "$GITHUB_OUTPUT"
+          else
+              echo "path=${GITHUB_WORKSPACE}/libtorch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clone LAMMPS (fallback)
+        if: steps.probe.outputs.lammps_src == ''
+        shell: bash
+        run: |
+          git clone --depth 1 --branch develop \
+              https://github.com/lammps/lammps.git lammps_src
+
+      - name: Resolve LAMMPS source path
+        id: lammps
+        shell: bash
+        run: |
+          if [ -n "${{ steps.probe.outputs.lammps_src }}" ]; then
+              echo "path=${{ steps.probe.outputs.lammps_src }}" >> "$GITHUB_OUTPUT"
+          else
+              echo "path=${GITHUB_WORKSPACE}/lammps_src" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Python deps (uv) for parity reference
+        shell: bash
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          cd matgl
+          uv venv --python 3.12
+          uv pip install -e .
+          uv pip install pytest
+
+      - name: Export tiny LAMMPS-loadable model + Python reference
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd matgl
+          mkdir -p ../lammps_artifacts
+          uv run python - <<'PY'
+          import json
+          import numpy as np
+          import torch
+          from pymatgen.core import Lattice, Structure
+          from pymatgen.optimization.neighbors import find_points_in_spheres
+          from matgl.apps._pes_pyg import Potential
+          from matgl.ext._lammps import LAMMPSMatGLModel
+          from matgl.models._tensornet_pyg import TensorNet
+
+          torch.manual_seed(0)
+          m = TensorNet(
+              element_types=("Mo", "S"),
+              is_intensive=False,
+              units=16, nblocks=1, num_rbf=8,
+              cutoff=4.0, use_warp=False, rbf_type="Gaussian",
+          )
+          p = Potential(model=m, calc_forces=True, calc_stresses=True)
+          p.eval()
+          w = LAMMPSMatGLModel(potential=p, dtype=torch.float32)
+          w.eval()
+          torch.jit.script(w).save("../lammps_artifacts/model.pt")
+
+          struct = Structure(
+              Lattice.cubic(4.5),
+              ["Mo", "S", "Mo", "S"],
+              [[0, 0, 0], [0.5, 0.5, 0.5], [0.5, 0, 0.25], [0, 0.5, 0.75]],
+          )
+          src, dst, images, dist = find_points_in_spheres(
+              struct.cart_coords, struct.cart_coords, r=4.0,
+              pbc=np.array([1, 1, 1], dtype=np.int64),
+              lattice=np.array(struct.lattice.matrix), tol=1e-8,
+          )
+          keep = (src != dst) | (dist > 1e-8)
+          src, dst, images = src[keep], dst[keep], images[keep]
+          pos = torch.tensor(struct.cart_coords, dtype=torch.float32)
+          eidx = torch.tensor(np.stack([src, dst]), dtype=torch.long)
+          ushifts = torch.tensor(images, dtype=torch.long)
+          cell = torch.tensor(np.array(struct.lattice.matrix), dtype=torch.float32)
+          z = torch.tensor([s.specie.Z for s in struct], dtype=torch.long)
+          local = torch.ones(len(struct), dtype=torch.bool)
+          out = w(pos, eidx, ushifts, cell, z, local, True)
+          ref = {
+              "energy": float(out["total_energy_local"].item()),
+              "forces": out["forces"].detach().tolist(),
+          }
+          with open("../lammps_artifacts/reference.json", "w") as fh:
+              json.dump(ref, fh, indent=2)
+          print(json.dumps(ref, indent=2))
+          PY
+
+      - name: Drop ML-MATGL sources into LAMMPS src/
+        # LAMMPS' style-header generator only scans top-level src/*.h plus
+        # *enabled* package subdirs, and ML-MATGL is not in LAMMPS' standard
+        # package list. Copy the .cpp/.h directly into src/ so the
+        # PairStyle(matgl, ...) macro gets picked up by style_pair.h, then
+        # also include our cmake snippet so libtorch ends up on the link line.
+        shell: bash
+        env:
+          LAMMPS_SRC: ${{ steps.lammps.outputs.path }}
+        run: |
+          cp matgl/lammps/src/ML-MATGL/pair_matgl.cpp "${LAMMPS_SRC}/src/"
+          cp matgl/lammps/src/ML-MATGL/pair_matgl.h   "${LAMMPS_SRC}/src/"
+          if ! grep -q ML-MATGL.cmake "${LAMMPS_SRC}/cmake/CMakeLists.txt"; then
+              echo "include(${GITHUB_WORKSPACE}/matgl/lammps/cmake/ML-MATGL-CI.cmake)" \
+                  >> "${LAMMPS_SRC}/cmake/CMakeLists.txt"
+          fi
+          # Generate a minimal CI-only cmake fragment that just links Torch;
+          # the regular ML-MATGL.cmake assumes sources live in a subdir.
+          cat > matgl/lammps/cmake/ML-MATGL-CI.cmake <<'CM'
+          find_package(Torch REQUIRED)
+          target_compile_features(lammps PRIVATE cxx_std_17)
+          target_link_libraries(lammps PRIVATE ${TORCH_LIBRARIES})
+          if(DEFINED TORCH_CXX_FLAGS)
+              set_property(TARGET lammps APPEND_STRING
+                  PROPERTY COMPILE_FLAGS " ${TORCH_CXX_FLAGS}")
+          endif()
+          message(STATUS "ML-MATGL (CI): linked against TORCH_LIBRARIES=${TORCH_LIBRARIES}")
+          CM
+
+      - name: Configure LAMMPS
+        shell: bash
+        env:
+          LAMMPS_SRC: ${{ steps.lammps.outputs.path }}
+          LIBTORCH: ${{ steps.libtorch.outputs.path }}
+        run: |
+          BUILD_DIR="${GITHUB_WORKSPACE}/lammps_build"
+          rm -rf "${BUILD_DIR}"
+          # The CPU libtorch ships a broken Caffe2/MKL include dir reference
+          # in its CMake config; supply a harmless existing path so the
+          # generator step doesn't fail. The CPU build doesn't actually need
+          # MKL headers.
+          cmake -B "${BUILD_DIR}" -S "${LAMMPS_SRC}/cmake" \
+            -G Ninja \
+            -D PKG_ML-MATGL=ON \
+            -D CMAKE_PREFIX_PATH="${LIBTORCH}" \
+            -D MKL_INCLUDE_DIR=/usr/include \
+            -D CMAKE_BUILD_TYPE=Release \
+            -D BUILD_MPI=OFF \
+            -D BUILD_OMP=ON \
+            -D CMAKE_CXX_STANDARD=17
+
+      - name: Build LAMMPS
+        shell: bash
+        run: |
+          cmake --build "${GITHUB_WORKSPACE}/lammps_build" -j 2
+
+      - name: Run pair_matgl single-point deck
+        shell: bash
+        env:
+          LIBTORCH: ${{ steps.libtorch.outputs.path }}
+        run: |
+          export LD_LIBRARY_PATH="${LIBTORCH}/lib:${LD_LIBRARY_PATH:-}"
+          cp lammps_artifacts/model.pt matgl/lammps/tests/model.pt
+          cd matgl/lammps/tests
+          "${GITHUB_WORKSPACE}/lammps_build/lmp" -in in.matgl_si | tee log.lammps
+
+      - name: Diff LAMMPS energy against Python reference
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd matgl
+          uv run python - <<'PY'
+          import json
+          import sys
+
+          ref = json.load(open("../lammps_artifacts/reference.json"))
+          log = open("lammps/tests/log.lammps").read()
+          # thermo_style for the test deck is "step pe fx fy fz pxx pyy pzz".
+          # With ``run 0`` LAMMPS prints one numeric row; pull its second column.
+          pe = None
+          for line in log.splitlines():
+              cols = line.split()
+              if len(cols) >= 2 and cols[0].lstrip("-").isdigit():
+                  try:
+                      pe = float(cols[1])
+                  except ValueError:
+                      continue
+          assert pe is not None, "Could not find PotEng row in log.lammps"
+          ref_e = ref["energy"]
+          diff = abs(pe - ref_e)
+          print(f"LAMMPS PotEng = {pe!r}, Python ref = {ref_e!r}, diff = {diff:.3e}")
+          if diff > 1e-3:
+              print("ENERGY MISMATCH!", file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lammps-debug
+          path: |
+            matgl/lammps/tests/log.lammps
+            lammps_artifacts/
+            lammps_build/CMakeFiles/CMakeOutput.log
+            lammps_build/CMakeFiles/CMakeError.log
+          if-no-files-found: ignore
+
+  build_pair_matgl_kokkos:
+    name: pair_matgl/kk (GPU, Kokkos)
+    # Requires a self-hosted runner with an NVIDIA GPU, driver, and nvcc on
+    # PATH, labeled to match below. No such runner is registered against
+    # this repo yet, so this job will queue indefinitely until one exists.
+    # `timeout-minutes` bounds that queue time instead of hanging forever.
+    runs-on: [self-hosted, gpu, cuda]
+    timeout-minutes: 60
+
+    env:
+      LIBTORCH_VERSION: "2.5.1"
+      # libtorch CUDA wheel tag (e.g. cu118, cu121, cu124) — must match the
+      # CUDA toolkit installed on the runner. Override via repo/org variable
+      # CUDA_TAG if the runner ships a different CUDA version.
+      CUDA_TAG: ${{ vars.CUDA_TAG || 'cu121' }}
+      # Kokkos GPU architecture flag (see Kokkos_ARCH_* options) — must match
+      # the runner's GPU. Override via repo/org variable KOKKOS_ARCH.
+      KOKKOS_ARCH: ${{ vars.KOKKOS_ARCH || 'AMPERE80' }}
+
+    steps:
+      - name: Checkout matgl
+        uses: actions/checkout@v4
+        with:
+          path: matgl
+
+      - name: Probe runner for CUDA + LAMMPS source
+        id: probe
+        shell: bash
+        run: |
+          set -e
+          if ! command -v nvidia-smi >/dev/null 2>&1; then
+              echo "No NVIDIA driver found on this runner (nvidia-smi missing)" >&2
+              exit 1
+          fi
+          nvidia-smi
+          for cand in /opt/lammps /usr/local/src/lammps /lammps "$HOME/lammps"; do
+              if [ -f "$cand/cmake/CMakeLists.txt" ]; then
+                  echo "lammps_src=$cand" >> "$GITHUB_OUTPUT"
+                  echo "Found LAMMPS source at: $cand"
+                  break
+              fi
+          done
+          for cand in /opt/libtorch /usr/local/libtorch /libtorch "$HOME/libtorch"; do
+              if [ -f "$cand/share/cmake/Torch/TorchConfig.cmake" ]; then
+                  echo "libtorch=$cand" >> "$GITHUB_OUTPUT"
+                  echo "Found libtorch at: $cand"
+                  break
+              fi
+          done
+
+      - name: Cache CUDA libtorch (fallback)
+        if: steps.probe.outputs.libtorch == ''
+        id: cache-libtorch
+        uses: actions/cache@v4
+        with:
+          path: libtorch
+          key: libtorch-${{ env.LIBTORCH_VERSION }}-${{ env.CUDA_TAG }}-cxx11abi
+
+      - name: Download CUDA libtorch (fallback)
+        if: steps.probe.outputs.libtorch == '' && steps.cache-libtorch.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          curl -L -o libtorch.zip \
+            "https://download.pytorch.org/libtorch/${CUDA_TAG}/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2B${CUDA_TAG}.zip"
+          unzip -q libtorch.zip
+          rm libtorch.zip
+
+      - name: Resolve libtorch path
+        id: libtorch
+        shell: bash
+        run: |
+          if [ -n "${{ steps.probe.outputs.libtorch }}" ]; then
+              echo "path=${{ steps.probe.outputs.libtorch }}" >> "$GITHUB_OUTPUT"
+          else
+              echo "path=${GITHUB_WORKSPACE}/libtorch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clone LAMMPS (fallback)
+        # Vanilla LAMMPS source ships lib/kokkos/ (incl. bin/nvcc_wrapper)
+        # in-tree — no separate Kokkos checkout needed.
+        if: steps.probe.outputs.lammps_src == ''
+        shell: bash
+        run: |
+          git clone --depth 1 --branch develop \
+              https://github.com/lammps/lammps.git lammps_src
+
+      - name: Resolve LAMMPS source path
+        id: lammps
+        shell: bash
+        run: |
+          if [ -n "${{ steps.probe.outputs.lammps_src }}" ]; then
+              echo "path=${{ steps.probe.outputs.lammps_src }}" >> "$GITHUB_OUTPUT"
+          else
+              echo "path=${GITHUB_WORKSPACE}/lammps_src" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Python deps (uv) for parity reference
+        shell: bash
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          cd matgl
+          uv venv --python 3.12
+          uv pip install -e .
+          uv pip install pytest
+
+      - name: Export tiny LAMMPS-loadable model + Python reference
+        # Same fixture as the CPU job: a 4-atom Mo-S cell, tiny untrained
+        # TensorNet. Export runs on CPU — no GPU needed to build the
+        # TorchScript artifact, only to evaluate it inside LAMMPS later.
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd matgl
+          mkdir -p ../lammps_artifacts
+          uv run python - <<'PY'
+          import json
+          import numpy as np
+          import torch
+          from pymatgen.core import Lattice, Structure
+          from pymatgen.optimization.neighbors import find_points_in_spheres
+          from matgl.apps._pes_pyg import Potential
+          from matgl.ext._lammps import LAMMPSMatGLModel
+          from matgl.models._tensornet_pyg import TensorNet
+
+          torch.manual_seed(0)
+          m = TensorNet(
+              element_types=("Mo", "S"),
+              is_intensive=False,
+              units=16, nblocks=1, num_rbf=8,
+              cutoff=4.0, use_warp=False, rbf_type="Gaussian",
+          )
+          p = Potential(model=m, calc_forces=True, calc_stresses=True)
+          p.eval()
+          w = LAMMPSMatGLModel(potential=p, dtype=torch.float32)
+          w.eval()
+          torch.jit.script(w).save("../lammps_artifacts/model.pt")
+
+          struct = Structure(
+              Lattice.cubic(4.5),
+              ["Mo", "S", "Mo", "S"],
+              [[0, 0, 0], [0.5, 0.5, 0.5], [0.5, 0, 0.25], [0, 0.5, 0.75]],
+          )
+          src, dst, images, dist = find_points_in_spheres(
+              struct.cart_coords, struct.cart_coords, r=4.0,
+              pbc=np.array([1, 1, 1], dtype=np.int64),
+              lattice=np.array(struct.lattice.matrix), tol=1e-8,
+          )
+          keep = (src != dst) | (dist > 1e-8)
+          src, dst, images = src[keep], dst[keep], images[keep]
+          pos = torch.tensor(struct.cart_coords, dtype=torch.float32)
+          eidx = torch.tensor(np.stack([src, dst]), dtype=torch.long)
+          ushifts = torch.tensor(images, dtype=torch.long)
+          cell = torch.tensor(np.array(struct.lattice.matrix), dtype=torch.float32)
+          z = torch.tensor([s.specie.Z for s in struct], dtype=torch.long)
+          local = torch.ones(len(struct), dtype=torch.bool)
+          out = w(pos, eidx, ushifts, cell, z, local, True)
+          ref = {
+              "energy": float(out["total_energy_local"].item()),
+              "forces": out["forces"].detach().tolist(),
+          }
+          with open("../lammps_artifacts/reference.json", "w") as fh:
+              json.dump(ref, fh, indent=2)
+          print(json.dumps(ref, indent=2))
+          PY
+
+      - name: Drop ML-MATGL-KOKKOS sources into LAMMPS src/KOKKOS/
+        # src/KOKKOS/ is a *standard* LAMMPS package directory, always
+        # scanned for PairStyle(...) macros when PKG_KOKKOS=ON — unlike
+        # ML-MATGL, it doesn't need RegisterStyles() wired into
+        # CMakeLists.txt by hand (that's only needed on the hand-patched
+        # NERSC checkout this package was developed against). Dropping the
+        # .cpp/.h straight in mirrors the CPU job's src/-root trick.
+        shell: bash
+        env:
+          LAMMPS_SRC: ${{ steps.lammps.outputs.path }}
+        run: |
+          cp matgl/lammps/src/ML-MATGL/pair_matgl.cpp "${LAMMPS_SRC}/src/"
+          cp matgl/lammps/src/ML-MATGL/pair_matgl.h   "${LAMMPS_SRC}/src/"
+          cp matgl/lammps/src/KOKKOS/pair_matgl_kokkos.cpp "${LAMMPS_SRC}/src/KOKKOS/"
+          cp matgl/lammps/src/KOKKOS/pair_matgl_kokkos.h   "${LAMMPS_SRC}/src/KOKKOS/"
+          if ! grep -q ML-MATGL-KOKKOS-CI.cmake "${LAMMPS_SRC}/cmake/CMakeLists.txt"; then
+              echo "include(${GITHUB_WORKSPACE}/matgl/lammps/cmake/ML-MATGL-KOKKOS-CI.cmake)" \
+                  >> "${LAMMPS_SRC}/cmake/CMakeLists.txt"
+          fi
+          # CI-only cmake fragment: just link Torch. The base pair_matgl.cpp
+          # in src/ also needs Torch linked (same as the CPU job); the
+          # Kokkos sources in src/KOKKOS/ are picked up automatically by
+          # LAMMPS' own KOKKOS package glob once PKG_KOKKOS=ON.
+          cat > matgl/lammps/cmake/ML-MATGL-KOKKOS-CI.cmake <<'CM'
+          find_package(Torch REQUIRED)
+          target_compile_features(lammps PRIVATE cxx_std_17)
+          target_link_libraries(lammps PRIVATE ${TORCH_LIBRARIES})
+          if(DEFINED TORCH_CXX_FLAGS)
+              set_property(TARGET lammps APPEND_STRING
+                  PROPERTY COMPILE_FLAGS " ${TORCH_CXX_FLAGS}")
+          endif()
+          message(STATUS "ML-MATGL-KOKKOS (CI): linked against TORCH_LIBRARIES=${TORCH_LIBRARIES}")
+          CM
+
+      - name: Configure LAMMPS (Kokkos/CUDA)
+        shell: bash
+        env:
+          LAMMPS_SRC: ${{ steps.lammps.outputs.path }}
+          LIBTORCH: ${{ steps.libtorch.outputs.path }}
+        run: |
+          BUILD_DIR="${GITHUB_WORKSPACE}/lammps_build"
+          rm -rf "${BUILD_DIR}"
+          cmake -B "${BUILD_DIR}" -S "${LAMMPS_SRC}/cmake" \
+            -G Ninja \
+            -D PKG_KOKKOS=ON \
+            -D Kokkos_ENABLE_CUDA=ON \
+            -D Kokkos_ENABLE_CUDA_LAMBDA=ON \
+            -D Kokkos_ARCH_${KOKKOS_ARCH}=ON \
+            -D CMAKE_CXX_COMPILER="${LAMMPS_SRC}/lib/kokkos/bin/nvcc_wrapper" \
+            -D CMAKE_PREFIX_PATH="${LIBTORCH}" \
+            -D MKL_INCLUDE_DIR=/usr/include \
+            -D CMAKE_BUILD_TYPE=Release \
+            -D BUILD_MPI=OFF
+
+      - name: Build LAMMPS
+        shell: bash
+        run: |
+          cmake --build "${GITHUB_WORKSPACE}/lammps_build" -j 2
+
+      - name: Run pair_matgl/kk single-point deck on GPU
+        # Same in.matgl_si deck as the CPU job, unmodified — `-sf kk`
+        # dispatches `pair_style matgl` to `matgl/kk` automatically.
+        shell: bash
+        env:
+          LIBTORCH: ${{ steps.libtorch.outputs.path }}
+        run: |
+          export LD_LIBRARY_PATH="${LIBTORCH}/lib:${LD_LIBRARY_PATH:-}"
+          cp lammps_artifacts/model.pt matgl/lammps/tests/model.pt
+          cd matgl/lammps/tests
+          "${GITHUB_WORKSPACE}/lammps_build/lmp" -k on g 1 -sf kk -in in.matgl_si | tee log.lammps
+
+      - name: Diff LAMMPS energy against Python reference
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd matgl
+          uv run python - <<'PY'
+          import json
+          import sys
+
+          ref = json.load(open("../lammps_artifacts/reference.json"))
+          log = open("lammps/tests/log.lammps").read()
+          # thermo_style for the test deck is "step pe fx fy fz pxx pyy pzz".
+          # With ``run 0`` LAMMPS prints one numeric row; pull its second column.
+          pe = None
+          for line in log.splitlines():
+              cols = line.split()
+              if len(cols) >= 2 and cols[0].lstrip("-").isdigit():
+                  try:
+                      pe = float(cols[1])
+                  except ValueError:
+                      continue
+          assert pe is not None, "Could not find PotEng row in log.lammps"
+          ref_e = ref["energy"]
+          diff = abs(pe - ref_e)
+          print(f"LAMMPS PotEng = {pe!r}, Python ref = {ref_e!r}, diff = {diff:.3e}")
+          if diff > 1e-3:
+              print("ENERGY MISMATCH!", file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lammps-kokkos-debug
+          path: |
+            matgl/lammps/tests/log.lammps
+            lammps_artifacts/
+            lammps_build/CMakeFiles/CMakeOutput.log
+            lammps_build/CMakeFiles/CMakeError.log
+          if-no-files-found: ignore

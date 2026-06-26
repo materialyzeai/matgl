@@ -198,6 +198,54 @@ def clear_cache(args: argparse.Namespace) -> None:
     matgl.clear_cache(not args.yes)
 
 
+def create_lammps_model(args: argparse.Namespace) -> int:
+    """Export a MatGL Potential as a LAMMPS-loadable TorchScript artifact.
+
+    Loads the named/local model, wraps it in :class:`LAMMPSMatGLModel`, runs
+    ``torch.jit.script``, and writes the result to ``--outfile``. The artifact
+    is consumed by the ``pair_matgl`` and ``pair_matgl/kokkos`` LAMMPS pair
+    styles via ``torch::jit::load``.
+
+    Args:
+        args: Parsed CLI arguments — ``model``, ``outfile``, ``dtype``,
+            ``device``, ``no_script``.
+
+    Returns:
+        ``0`` on success, ``1`` if the underlying potential is unsupported.
+    """
+    # Lazy import keeps the CLI responsive when this subcommand isn't used and
+    # avoids dragging the export-only deps onto the import path.
+    from matgl.ext._lammps import LAMMPSMatGLModel
+
+    dtype_map = {"float32": torch.float32, "float64": torch.float64}
+    dtype = dtype_map[args.dtype]
+
+    logger.info("Loading model %s ...", args.model)
+    potential = _load_potential(args.model)
+    potential.eval()
+
+    if args.device != "cpu":
+        potential.to(args.device)
+
+    wrapper = LAMMPSMatGLModel(potential=potential, dtype=dtype)  # type:ignore[arg-type]
+    wrapper.eval()
+
+    if args.no_script:
+        torch.save(wrapper, args.outfile)
+        print(f"Wrote eager wrapper (NOT TorchScript-compiled) to {args.outfile}")
+    else:
+        scripted = torch.jit.script(wrapper)
+        scripted.save(args.outfile)
+        print(f"Wrote scripted LAMMPS-MatGL artifact to {args.outfile}")
+
+    print("  r_max     :", wrapper.r_max)
+    print("  n_species :", wrapper.n_species)
+    print("  dtype     :", args.dtype)
+    species = list(potential.model.element_types)  # type:ignore[union-attr,arg-type]
+    print("  species   :", species[: wrapper.n_species])
+    return 0
+
+
 def main():
     """Handle main."""
     parser = argparse.ArgumentParser(
@@ -459,6 +507,47 @@ def main():
     )
 
     p_clear.set_defaults(func=clear_cache)
+
+    # LAMMPS export
+    p_lammps = subparsers.add_parser(
+        "create-lammps-model",
+        help="Export a MatGL Potential as a TorchScript artifact loadable by pair_matgl[/kokkos].",
+    )
+    p_lammps.add_argument(
+        "-m",
+        "--model",
+        dest="model",
+        required=True,
+        help="Path or name of a saved MatGL model (TensorNet PyG, extensive PES).",
+    )
+    p_lammps.add_argument(
+        "-o",
+        "--outfile",
+        dest="outfile",
+        required=True,
+        help="Output path for the LAMMPS-loadable artifact (e.g. matgl_model.pt).",
+    )
+    p_lammps.add_argument(
+        "--dtype",
+        dest="dtype",
+        choices=["float32", "float64"],
+        default="float32",
+        help="Wrapper buffer dtype. Match what your LAMMPS LibTorch was built with.",
+    )
+    p_lammps.add_argument(
+        "--device",
+        dest="device",
+        default="cpu",
+        help="Device to load weights onto before export (cpu | cuda[:N]).",
+    )
+    p_lammps.add_argument(
+        "--no-script",
+        dest="no_script",
+        action="store_true",
+        help="Save the eager wrapper instead of running torch.jit.script. "
+        "Only useful for debugging — not loadable from LAMMPS C++.",
+    )
+    p_lammps.set_defaults(func=create_lammps_model)
 
     args = parser.parse_args()
 

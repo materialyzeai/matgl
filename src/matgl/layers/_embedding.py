@@ -80,7 +80,12 @@ class EmbeddingBlock(nn.Module):
             dim_edges = [degree_rbf, dim_edge_embedding]
             self.layer_edge_embedding = MLP(dim_edges, activation=activation, activate_last=True)
 
-    def forward(self, node_attr, edge_attr, state_attr):
+    def forward(
+        self,
+        node_attr: torch.Tensor,
+        edge_attr: torch.Tensor,
+        state_attr: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """Output embedded features.
 
         Args:
@@ -101,16 +106,16 @@ class EmbeddingBlock(nn.Module):
             edge_feat = self.layer_edge_embedding(edge_attr.to(matgl.float_th))
         else:
             edge_feat = edge_attr
+        state_feat: torch.Tensor | None = None
         if self.include_state is True:
-            if self.ntypes_state and self.dim_state_embedding is not None:
+            assert state_attr is not None, "state_attr must be provided when include_state=True"
+            if self.ntypes_state is not None and self.dim_state_embedding is not None:
                 state_feat = self.layer_state_embedding(state_attr.long())
             elif self.dim_state_feats is not None:
                 state_attr = torch.unsqueeze(state_attr, 0)
                 state_feat = self.layer_state_embedding(state_attr.to(matgl.float_th))
             else:
                 state_feat = state_attr
-        else:
-            state_feat = None
         return node_feat, edge_feat, state_feat
 
 
@@ -174,7 +179,16 @@ class TensorEmbedding(nn.Module):
             linear.reset_parameters()
         self.init_norm.reset_parameters()
 
-    def message(self, x_i, x_j, edge_attr, edge_weight, Iij, Aij, Sij):
+    def message(
+        self,
+        x_i: torch.Tensor,
+        x_j: torch.Tensor,
+        edge_attr: torch.Tensor,
+        edge_weight: torch.Tensor,
+        Iij: torch.Tensor,
+        Aij: torch.Tensor,
+        Sij: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Message function for edge updates."""
         vi = x_i  # Source node features
         vj = x_j  # Destination node features
@@ -184,13 +198,19 @@ class TensorEmbedding(nn.Module):
         scalars = Zij[..., None, None] * Iij
         skew_matrices = Zij[..., None, None] * Aij
         traceless_tensors = Zij[..., None, None] * Sij
-        return {"I": scalars, "A": skew_matrices, "S": traceless_tensors}
+        return scalars, skew_matrices, traceless_tensors
 
-    def aggregate(self, msg, index, dim_size=None):
+    def aggregate(
+        self,
+        msg: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        index: torch.Tensor,
+        dim_size: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Aggregate messages for node updates."""
-        scalars = scatter_add(msg["I"], index, dim_size=dim_size)
-        skew_matrices = scatter_add(msg["A"], index, dim_size=dim_size)
-        traceless_tensors = scatter_add(msg["S"], index, dim_size=dim_size)
+        scalars_msg, skew_msg, traceless_msg = msg
+        scalars = scatter_add(scalars_msg, index, dim_size=dim_size)
+        skew_matrices = scatter_add(skew_msg, index, dim_size=dim_size)
+        traceless_tensors = scatter_add(traceless_msg, index, dim_size=dim_size)
         return scalars, skew_matrices, traceless_tensors
 
     def forward(
@@ -200,8 +220,8 @@ class TensorEmbedding(nn.Module):
         edge_attr: torch.Tensor,
         edge_weight: torch.Tensor,
         edge_vec: torch.Tensor,
-        state_attr=None,
-    ):
+        state_attr: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Compute embedded node tensors and (optional) state features.
 
         Args:

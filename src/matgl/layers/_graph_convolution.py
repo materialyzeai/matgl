@@ -156,9 +156,16 @@ class TensorNetInteraction(nn.Module):
         dX = scalars + skew_metrices + traceless_tensors
         return X + dX + torch.matmul(dX, dX)
 
-    def message(self, edge_index, x_I: torch.Tensor, x_A: torch.Tensor, x_S: torch.Tensor, edge_attr: torch.Tensor):
+    def message(
+        self,
+        edge_index: torch.Tensor,
+        x_I: torch.Tensor,
+        x_A: torch.Tensor,
+        x_S: torch.Tensor,
+        edge_attr: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute messages for each edge."""
-        _, dst = edge_index
+        dst = edge_index[1]
         x_I_j = x_I[dst]
         x_A_j = x_A[dst]
         x_S_j = x_S[dst]
@@ -167,7 +174,12 @@ class TensorNetInteraction(nn.Module):
         )
         return scalars, skew_metrices, traceless_tensors
 
-    def aggregate(self, inputs, index, dim_size):
+    def aggregate(
+        self,
+        inputs: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        index: torch.Tensor,
+        dim_size: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Aggregate messages for node updates."""
         scalars, skew_matrices, traceless_tensors = inputs
         scalars_agg = scatter_add(scalars, index, dim_size=dim_size)
@@ -381,7 +393,7 @@ class MEGNetBlock(Module):
             edge_index, edge_feat, node_feat, state_feat, node_batch, edge_batch, num_nodes, num_graphs
         )
 
-        if self.dropout:
+        if self.dropout is not None:
             edge_feat = self.dropout(edge_feat)
             node_feat = self.dropout(node_feat)
             state_feat = self.dropout(state_feat)
@@ -499,7 +511,12 @@ class M3GNetGraphConv(Module):
         """Compute the state update (Eq. 6) using per-graph mean of node features."""
         uv = _per_graph_mean(node_feat, node_batch, num_graphs)
         inputs = torch.hstack([state_feat, uv])
-        return self.state_update_func(inputs)  # type: ignore[misc]
+        # Narrow ``state_update_func`` from Optional[Module] to Module for
+        # TorchScript — the caller already gates on ``include_state`` so the
+        # assert is informational only.
+        func = self.state_update_func
+        assert func is not None
+        return func(inputs)
 
     def forward(
         self,
@@ -592,7 +609,7 @@ class M3GNetBlock(Module):
         edge_feat, node_feat, state_feat = self.conv(
             edge_index, edge_feat, node_feat, state_feat, rbf, node_batch, edge_batch, num_nodes, num_graphs
         )
-        if self.dropout:
+        if self.dropout is not None:
             edge_feat = self.dropout(edge_feat)
             node_feat = self.dropout(node_feat)
             if state_feat is not None:

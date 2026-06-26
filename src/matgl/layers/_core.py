@@ -71,6 +71,7 @@ class MLP(nn.Module):
         return f"MLP({', '.join(dims)})"
 
     @property
+    @torch.jit.unused
     def last_linear(self) -> Linear:
         """Return the last linear layer in the network."""
         for layer in reversed(self.layers):
@@ -80,11 +81,13 @@ class MLP(nn.Module):
         raise RuntimeError(msg)
 
     @property
+    @torch.jit.unused
     def depth(self) -> int:
         """Returns depth of MLP."""
         return self._depth
 
     @property
+    @torch.jit.unused
     def in_features(self) -> int:
         """Return input features of MLP."""
         first_layer = self.layers[0]
@@ -92,6 +95,7 @@ class MLP(nn.Module):
         return first_layer.in_features
 
     @property
+    @torch.jit.unused
     def out_features(self) -> int:
         """Returns output features of MLP."""
         for layer in reversed(self.layers):

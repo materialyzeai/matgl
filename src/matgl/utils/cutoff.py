@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from math import pi
-
 import torch
 
 
@@ -40,4 +38,4 @@ def cosine_cutoff(r: torch.Tensor, cutoff: float) -> torch.Tensor:
     Returns:
         cosine cutoff function
     """
-    return torch.where(r <= cutoff, 0.5 * (torch.cos(pi * r / cutoff) + 1), 0.0)
+    return torch.where(r <= cutoff, 0.5 * (torch.cos(torch.pi * r / cutoff) + 1), 0.0)
