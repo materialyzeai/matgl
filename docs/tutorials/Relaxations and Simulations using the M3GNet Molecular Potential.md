@@ -19,17 +19,13 @@ import warnings
 
 from ase.build import molecule
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
-from matgl.ext._ase_dgl import MolecularDynamics, PESCalculator, Relaxer
 
 import matgl
+from matgl.ext.ase import MolecularDynamics, PESCalculator, Relaxer
 
 # To suppress warnings for clearer output
 warnings.simplefilter("ignore")
 ```
-
-    /Users/kenko/miniconda3/envs/mavrl/lib/python3.11/site-packages/tqdm/auto.py:21: TqdmWarning: IProgress not found. Please update jupyter and ipywidgets. See https://ipywidgets.readthedocs.io/en/stable/user_install.html
-      from .autonotebook import tqdm as notebook_tqdm
-
 
 # Loading the pre-trained M3GNet PES model
 
@@ -39,7 +35,7 @@ We will first load the M3GNet PES model, which is trained on the subset of ANI-1
 ```python
 # You can load any pretrained potentials stored in the 'pretrained_models' directory
 # To see available models, use get_available_pretrained_models()
-pot = matgl.load_model("M3GNet-ANI-1x-Subset-PES/")
+pot = matgl.load_model("M3GNet-PES-MatPES-PBE-2025.2")
 ```
 
 # Structure Relaxation
@@ -64,10 +60,10 @@ print(f"The final energy is {float(final_energy):.3f} eV.")
     Reduced Formula: H2O
     Charge = 0, Spin Mult = 1
     Sites (3)
-    0 O     0.000000    -0.000000     0.116472
-    1 H     0.000000     0.760003    -0.475652
-    2 H     0.000000    -0.760003    -0.475652
-    The final energy is -2078.627 eV.
+    0 O     0.000000    -0.000000     0.113199
+    1 H     0.000000     0.773732    -0.474016
+    2 H     0.000000    -0.773732    -0.474016
+    The final energy is -14.219 eV.
 
 
 # Molecular Dynamics
@@ -85,7 +81,7 @@ driver.run(100)
 print(f"The potential energy of H2O at 300 K after 100 steps is {float(atoms.get_potential_energy()):.3f} eV.")
 ```
 
-    The potential energy of H2O at 300 K after 100 steps is -2078.431 eV.
+    The potential energy of H2O at 300 K after 100 steps is -14.101 eV.
 
 
 # Single point energy calculation
@@ -101,4 +97,7 @@ atoms.set_calculator(calc)
 print(f"The calculated potential energy is {atoms.get_potential_energy():.3f} eV.")
 ```
 
-    The calculated potential energy is -2078.431 eV.
+    The stress unit is now in GPa. Please set stress_unit='eV/A3' if you want to use PESCalculator for other ASE applications.
+
+
+    The calculated potential energy is -14.101 eV.

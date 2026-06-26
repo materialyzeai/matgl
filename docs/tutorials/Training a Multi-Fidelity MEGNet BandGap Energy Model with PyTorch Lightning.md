@@ -25,13 +25,12 @@ import lightning as L
 import matplotlib.pyplot as plt
 import pandas as pd
 import requests
-from dgl.data.utils import split_dataset
 from lightning.pytorch.loggers import CSVLogger
-from matgl.ext._pymatgen_dgl import Structure2Graph
-from matgl.graph._data_dgl import MGLDataLoader, MGLDataset, collate_fn_graph
 from pymatgen.core import Structure
 
 from matgl.config import DEFAULT_ELEMENTS
+from matgl.ext.pymatgen import Structure2Graph
+from matgl.graph.data import MGLDataLoader, MGLDataset, collate_fn_graph, split_dataset
 from matgl.models import MEGNet
 from matgl.utils.training import ModelLightningModule
 
@@ -199,7 +198,7 @@ _ = plt.legend()
 ```python
 # This code just performs cleanup for this notebook.
 
-for fn in ("dgl_graph.bin", "lattice.pt", "dgl_line_graph.bin", "state_attr.pt", "labels.json"):
+for fn in ("pyg_graph.pt", "lattice.pt", "pyg_line_graph.pt", "state_attr.pt", "labels.json"):
     try:
         os.remove(fn)
     except FileNotFoundError:

@@ -19,18 +19,15 @@ from functools import partial
 
 import lightning as L
 import numpy as np
-from dgl.data.utils import split_dataset
 from lightning.pytorch.loggers import CSVLogger
-from matgl.ext._pymatgen_dgl import Structure2Graph
-from matgl.graph._data_dgl import MGLDataLoader, MGLDataset, collate_fn_pes
-from matgl.models._qet_dgl import QET
-from mp_api.client import MPRester
+from pymatgen.ext.matproj import MPRester
 
 import matgl
 from matgl.config import DEFAULT_ELEMENTS
+from matgl.ext.pymatgen import Structure2Graph
+from matgl.graph.data import MGLDataLoader, MGLDataset, collate_fn_pes, split_dataset
+from matgl.models import QET
 from matgl.utils.training import PotentialLightningModule
-
-matgl.config.BACKEND = "DGL"
 
 # To suppress warnings for clearer output
 warnings.simplefilter("ignore")
@@ -41,7 +38,7 @@ For the purposes of demonstration, we will download all Si-O compounds in the Ma
 
 ```python
 # Obtain your API key here: https://next-gen.materialsproject.org/api
-mpr = MPRester(api_key="YOUR_API_KEY")
+mpr = MPRester()
 entries = mpr.get_entries_in_chemsys(["Si", "O"])
 structures = [e.structure for e in entries]
 energies = [e.energy for e in entries]
@@ -57,6 +54,9 @@ labels = {
 
 print(f"{len(structures)} downloaded from MP.")
 ```
+
+    407 downloaded from MP.
+
 
 We will first setup the QET model and the LightningModule.
 
@@ -91,6 +91,10 @@ model = QET(element_types=element_types, is_intensive=False, use_smooth=True, rb
 lit_module = PotentialLightningModule(model=model, stress_weight=0.01, charge_weight=0.001)
 ```
 
+    Processing...
+    Done!
+
+
 Finally, we will initialize the Pytorch Lightning trainer and run the fitting. Here, the max_epochs is set to 2 just for demonstration purposes. In a real fitting, this would be a much larger number. Also, the `accelerator="cpu"` was set just to ensure compatibility with M1 Macs. In a real world use case, please remove the kwarg or set it to cuda for GPU based training.
 
 
@@ -124,7 +128,7 @@ In the previous cells, we demonstrated the process of training an QET from scrat
 
 ```python
 # download a pre-trained M3GNet
-qet_nnp = matgl.load_model("QET-MatQ-PES")
+qet_nnp = matgl.load_model("QET-PES-MatPES-PBE-2025.2")
 model_pretrained = qet_nnp.model
 # obtain element energy offset
 property_offset = qet_nnp.element_refs.property_offset
@@ -153,7 +157,7 @@ trained_model = matgl.load_model(path=model_save_path)
 ```python
 # This code just performs cleanup for this notebook.
 
-for fn in ("dgl_graph.bin", "lattice.pt", "dgl_line_graph.bin", "state_attr.pt", "labels.json"):
+for fn in ("pyg_graph.pt", "lattice.pt", "pyg_line_graph.pt", "state_attr.pt", "labels.json"):
     try:
         os.remove(fn)
     except FileNotFoundError:

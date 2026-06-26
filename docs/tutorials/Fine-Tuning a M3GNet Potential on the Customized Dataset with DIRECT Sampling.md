@@ -19,14 +19,13 @@ from functools import partial
 
 import lightning as L
 import numpy as np
-from dgl.data.utils import split_dataset
 from lightning.pytorch.loggers import CSVLogger
-from matgl.ext._pymatgen_dgl import Structure2Graph
-from matgl.graph._data_dgl import MGLDataLoader, MGLDataset, collate_fn_pes
-from mp_api.client import MPRester
+from pymatgen.ext.matproj import MPRester
 
 import matgl
 from matgl.config import DEFAULT_ELEMENTS
+from matgl.ext.pymatgen import Structure2Graph
+from matgl.graph.data import MGLDataLoader, MGLDataset, collate_fn_pes, split_dataset
 from matgl.utils.training import PotentialLightningModule
 
 try:
@@ -39,6 +38,11 @@ except ImportError:
 # To suppress warnings for clearer output
 warnings.simplefilter("ignore")
 ```
+
+    MAML is not installed or the import failed.
+    Please install it by running:
+    pip install maml
+
 
 For the purposes of demonstration, we will download all Si-O compounds in the Materials Project via the MPRester. The forces and stresses are set to zero, though in a real context, these would be non-zero and obtained from DFT calculations.
 
@@ -151,7 +155,7 @@ trained_model = matgl.load_model(path=model_save_path)
 ```python
 # This code just performs cleanup for this notebook.
 
-for fn in ("dgl_graph.bin", "lattice.pt", "dgl_line_graph.bin", "state_attr.pt", "labels.json"):
+for fn in ("pyg_graph.pt", "lattice.pt", "pyg_line_graph.pt", "state_attr.pt", "labels.json"):
     try:
         os.remove(fn)
     except FileNotFoundError:

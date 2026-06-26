@@ -22,13 +22,12 @@ import lightning as L
 import matplotlib.pyplot as plt
 import pandas as pd
 import requests
-from dgl.data.utils import split_dataset
 from lightning.pytorch.loggers import CSVLogger
-from matgl.ext._pymatgen_dgl import Structure2Graph, get_element_list
-from matgl.graph._data_dgl import MGLDataLoader, MGLDataset, collate_fn_graph
 from pymatgen.core import Structure
 from tqdm import tqdm
 
+from matgl.ext.pymatgen import Structure2Graph, get_element_list
+from matgl.graph.data import MGLDataLoader, MGLDataset, collate_fn_graph, split_dataset
 from matgl.models import M3GNet
 from matgl.utils.training import ModelLightningModule
 
@@ -88,6 +87,54 @@ def load_dataset() -> tuple[list[Structure], list[str], list[float]]:
 
 structures, mp_ids, eform_per_atom = load_dataset()
 ```
+
+    Downloading dataset from https://figshare.com/ndownloader/files/15087992...
+
+
+
+    ---------------------------------------------------------------------------
+
+    BadZipFile                                Traceback (most recent call last)
+
+    Cell In[2], line 45
+         41
+         42     return structures, mp_ids, data["formation_energy_per_atom"].tolist()
+         43
+         44
+    ---> 45 structures, mp_ids, eform_per_atom = load_dataset()
+
+
+    Cell In[2], line 28, in load_dataset()
+         24     # Download and extract the dataset if it does not exist
+         25     if not os.path.exists(json_filename):
+         26         print(f"Downloading dataset from {url}...")
+         27         download_file(url, zip_filename)
+    ---> 28         with zipfile.ZipFile(zip_filename, "r") as zf:
+         29             zf.extractall(".")
+         30         os.remove(zip_filename)  # Clean up the zip file
+         31
+
+
+    File ~/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/zipfile/__init__.py:1370, in ZipFile.__init__(self, file, mode, compression, allowZip64, compresslevel, strict_timestamps, metadata_encoding)
+       1368 try:
+       1369     if mode == 'r':
+    -> 1370         self._RealGetContents()
+       1371     elif mode in ('w', 'x'):
+       1372         # set the modified flag so central directory gets written
+       1373         # even if no files are added to the archive
+       1374         self._didModify = True
+
+
+    File ~/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/zipfile/__init__.py:1437, in ZipFile._RealGetContents(self)
+       1435     raise BadZipFile("File is not a zip file")
+       1436 if not endrec:
+    -> 1437     raise BadZipFile("File is not a zip file")
+       1438 if self.debug > 1:
+       1439     print(endrec)
+
+
+    BadZipFile: File is not a zip file
+
 
 For demonstration purposes, we are only going to select 100 structures from the entire set of structures to shorten the training time.
 
@@ -182,7 +229,7 @@ _ = plt.legend()
 ```python
 # This code just performs cleanup for this notebook.
 
-for fn in ("dgl_graph.bin", "lattice.pt", "dgl_line_graph.bin", "state_attr.pt", "labels.json"):
+for fn in ("pyg_graph.pt", "lattice.pt", "pyg_line_graph.pt", "state_attr.pt", "labels.json"):
     try:
         os.remove(fn)
     except FileNotFoundError:

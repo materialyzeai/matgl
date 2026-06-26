@@ -25,12 +25,12 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from matgl.ext._ase_dgl import Relaxer
 from pymatgen.core import Composition, Lattice, Structure
 from pymatgen.ext.matproj import MPRester
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 import matgl
+from matgl.ext.ase import Relaxer
 
 warnings.filterwarnings("ignore")
 ```
@@ -96,6 +96,191 @@ data = data[data["Material"] != "Rb"]
 data = data.set_index("Material")
 print(data[61:80])
 ```
+
+
+    ---------------------------------------------------------------------------
+
+    HTTPError                                 Traceback (most recent call last)
+
+    Cell In[3], line 1
+    ----> 1 data = pd.read_html("http://en.wikipedia.org/wiki/Lattice_constant")[0]
+          2 struct_types = [
+          3     "Hexagonal",
+          4     "Wurtzite",
+
+
+    File ~/repos/matgl/.venv/lib/python3.12/site-packages/pandas/io/html.py:1226, in read_html(io, match, flavor, header, index_col, skiprows, attrs, parse_dates, thousands, encoding, decimal, converters, na_values, keep_default_na, displayed_only, extract_links, dtype_backend, storage_options)
+       1222 check_dtype_backend(dtype_backend)
+       1224 io = stringify_path(io)
+    -> 1226 return _parse(
+       1227     flavor=flavor,
+       1228     io=io,
+       1229     match=match,
+       1230     header=header,
+       1231     index_col=index_col,
+       1232     skiprows=skiprows,
+       1233     parse_dates=parse_dates,
+       1234     thousands=thousands,
+       1235     attrs=attrs,
+       1236     encoding=encoding,
+       1237     decimal=decimal,
+       1238     converters=converters,
+       1239     na_values=na_values,
+       1240     keep_default_na=keep_default_na,
+       1241     displayed_only=displayed_only,
+       1242     extract_links=extract_links,
+       1243     dtype_backend=dtype_backend,
+       1244     storage_options=storage_options,
+       1245 )
+
+
+    File ~/repos/matgl/.venv/lib/python3.12/site-packages/pandas/io/html.py:979, in _parse(flavor, io, match, attrs, encoding, displayed_only, extract_links, storage_options, **kwargs)
+        968 p = parser(
+        969     io,
+        970     compiled_match,
+       (...)    975     storage_options,
+        976 )
+        978 try:
+    --> 979     tables = p.parse_tables()
+        980 except ValueError as caught:
+        981     # if `io` is an io-like object, check if it's seekable
+        982     # and try to rewind it before trying the next parser
+        983     if hasattr(io, "seekable") and io.seekable():
+
+
+    File ~/repos/matgl/.venv/lib/python3.12/site-packages/pandas/io/html.py:237, in _HtmlFrameParser.parse_tables(self)
+        229 def parse_tables(self):
+        230     """
+        231     Parse and return all tables from the DOM.
+        232
+       (...)    235     list of parsed (header, body, footer) tuples from tables.
+        236     """
+    --> 237     tables = self._parse_tables(self._build_doc(), self.match, self.attrs)
+        238     return (self._parse_thead_tbody_tfoot(table) for table in tables)
+
+
+    File ~/repos/matgl/.venv/lib/python3.12/site-packages/pandas/io/html.py:789, in _LxmlFrameParser._build_doc(self)
+        786 parser = HTMLParser(recover=True, encoding=self.encoding)
+        788 if is_url(self.io):
+    --> 789     with get_handle(self.io, "r", storage_options=self.storage_options) as f:
+        790         r = parse(f.handle, parser=parser)
+        791 else:
+        792     # try to parse the input in the simplest way
+
+
+    File ~/repos/matgl/.venv/lib/python3.12/site-packages/pandas/io/common.py:776, in get_handle(path_or_buf, mode, encoding, compression, memory_map, is_text, errors, storage_options)
+        773     codecs.lookup_error(errors)
+        775 # open URLs
+    --> 776 ioargs = _get_filepath_or_buffer(
+        777     path_or_buf,
+        778     encoding=encoding,
+        779     compression=compression,
+        780     mode=mode,
+        781     storage_options=storage_options,
+        782 )
+        784 handle = ioargs.filepath_or_buffer
+        785 handles: list[BaseBuffer]
+
+
+    File ~/repos/matgl/.venv/lib/python3.12/site-packages/pandas/io/common.py:405, in _get_filepath_or_buffer(filepath_or_buffer, encoding, compression, mode, storage_options)
+        403 # assuming storage_options is to be interpreted as headers
+        404 req_info = urllib.request.Request(filepath_or_buffer, headers=storage_options)
+    --> 405 with urlopen(req_info) as req:
+        406     content_encoding = req.headers.get("Content-Encoding", None)
+        407     if content_encoding == "gzip":
+        408         # Override compression based on Content-Encoding header
+
+
+    File ~/repos/matgl/.venv/lib/python3.12/site-packages/pandas/io/common.py:282, in urlopen(*args, **kwargs)
+        276 """
+        277 Lazy-import wrapper for stdlib urlopen, as that imports a big chunk of
+        278 the stdlib.
+        279 """
+        280 import urllib.request
+    --> 282 return urllib.request.urlopen(*args, **kwargs)
+
+
+    File ~/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/urllib/request.py:215, in urlopen(url, data, timeout, cafile, capath, cadefault, context)
+        213 else:
+        214     opener = _opener
+    --> 215 return opener.open(url, data, timeout)
+
+
+    File ~/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/urllib/request.py:521, in OpenerDirector.open(self, fullurl, data, timeout)
+        519 for processor in self.process_response.get(protocol, []):
+        520     meth = getattr(processor, meth_name)
+    --> 521     response = meth(req, response)
+        523 return response
+
+
+    File ~/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/urllib/request.py:630, in HTTPErrorProcessor.http_response(self, request, response)
+        627 # According to RFC 2616, "2xx" code indicates that the client's
+        628 # request was successfully received, understood, and accepted.
+        629 if not (200 <= code < 300):
+    --> 630     response = self.parent.error(
+        631         'http', request, response, code, msg, hdrs)
+        633 return response
+
+
+    File ~/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/urllib/request.py:553, in OpenerDirector.error(self, proto, *args)
+        551     http_err = 0
+        552 args = (dict, proto, meth_name) + args
+    --> 553 result = self._call_chain(*args)
+        554 if result:
+        555     return result
+
+
+    File ~/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/urllib/request.py:492, in OpenerDirector._call_chain(self, chain, kind, meth_name, *args)
+        490 for handler in handlers:
+        491     func = getattr(handler, meth_name)
+    --> 492     result = func(*args)
+        493     if result is not None:
+        494         return result
+
+
+    File ~/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/urllib/request.py:745, in HTTPRedirectHandler.http_error_302(self, req, fp, code, msg, headers)
+        742 fp.read()
+        743 fp.close()
+    --> 745 return self.parent.open(new, timeout=req.timeout)
+
+
+    File ~/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/urllib/request.py:521, in OpenerDirector.open(self, fullurl, data, timeout)
+        519 for processor in self.process_response.get(protocol, []):
+        520     meth = getattr(processor, meth_name)
+    --> 521     response = meth(req, response)
+        523 return response
+
+
+    File ~/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/urllib/request.py:630, in HTTPErrorProcessor.http_response(self, request, response)
+        627 # According to RFC 2616, "2xx" code indicates that the client's
+        628 # request was successfully received, understood, and accepted.
+        629 if not (200 <= code < 300):
+    --> 630     response = self.parent.error(
+        631         'http', request, response, code, msg, hdrs)
+        633 return response
+
+
+    File ~/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/urllib/request.py:559, in OpenerDirector.error(self, proto, *args)
+        557 if http_err:
+        558     args = (dict, 'default', 'http_error_default') + orig_args
+    --> 559     return self._call_chain(*args)
+
+
+    File ~/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/urllib/request.py:492, in OpenerDirector._call_chain(self, chain, kind, meth_name, *args)
+        490 for handler in handlers:
+        491     func = getattr(handler, meth_name)
+    --> 492     result = func(*args)
+        493     if result is not None:
+        494         return result
+
+
+    File ~/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/urllib/request.py:639, in HTTPDefaultErrorHandler.http_error_default(self, req, fp, code, msg, hdrs)
+        638 def http_error_default(self, req, fp, code, msg, hdrs):
+    --> 639     raise HTTPError(req.full_url, code, msg, hdrs, fp)
+
+
+    HTTPError: HTTP Error 403: Forbidden
+
 
 In the next cell, we generate an initial structure for all the phases. The cubic constant is set to an arbitrary value of 5 angstroms for all structures. It does not matter too much what you set it to, but it cannot be too large or it will result in isolated atoms due to the cutoffs used in m3gnet to determine bonds. We then call the Relaxer, which is the M3GNet universal IAP pre-trained on the Materials Project.
 

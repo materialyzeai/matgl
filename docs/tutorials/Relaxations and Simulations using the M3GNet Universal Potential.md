@@ -18,11 +18,11 @@ from __future__ import annotations
 import warnings
 
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
-from matgl.ext._ase_dgl import MolecularDynamics, PESCalculator, Relaxer
 from pymatgen.core import Lattice, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 
 import matgl
+from matgl.ext.ase import MolecularDynamics, PESCalculator, Relaxer
 
 # To suppress warnings for clearer output
 warnings.simplefilter("ignore")

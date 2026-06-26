@@ -33,22 +33,14 @@ import warnings
 import numpy as np
 import torch
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
-from matgl.ext._ase_pyg import MolecularDynamics, PESCalculator, Relaxer
 from pymatgen.core import Lattice, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 
 import matgl
+from matgl.ext.ase import MolecularDynamics, PESCalculator, Relaxer
 
 warnings.filterwarnings("ignore")
 ```
-
-    /home/bdeng/anaconda3/matgl/lib/python3.11/site-packages/tqdm/auto.py:21: TqdmWarning: IProgress not found. Please update jupyter and ipywidgets. See https://ipywidgets.readthedocs.io/en/stable/user_install.html
-      from .autonotebook import tqdm as notebook_tqdm
-
-
-    /home/bdeng/anaconda3/matgl/lib/python3.11/site-packages/torch/__config__.py:9: UserWarning: CUDA initialization: The NVIDIA driver on your system is too old (found version 12040). Please update your GPU driver by downloading and installing a new version from the URL: http://www.nvidia.com/Download/index.aspx Alternatively, go to: https://pytorch.org to install a PyTorch version that has been compiled with your version of the CUDA driver. (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:119.)
-      return torch._C._show_config()
-
 
 ## 1. Load the pre-trained CHGNet-PyG model
 
@@ -246,8 +238,8 @@ print(f"Magnetic moments: {magmoms.flatten().tolist()}  μB")
 
 
     Energy          : -28.8047 eV  (-14.4023 eV/atom)
-    Max |force|     : 1.7136e-07 eV/Å
-    Magnetic moments: [2.7359468936920166, 2.7359461784362793]  μB
+    Max |force|     : 1.2666e-07 eV/Å
+    Magnetic moments: [2.735947370529175, 2.7359464168548584]  μB
 
 
 ### 2a. Direct Potential call (without ASE)
@@ -257,7 +249,7 @@ You can also call the `Potential` directly with a PyG graph for finer control
 
 
 ```python
-from matgl.ext._pymatgen_pyg import Structure2Graph
+from matgl.ext.pymatgen import Structure2Graph
 
 conv = Structure2Graph(
     element_types=pot.model.element_types,
@@ -281,13 +273,13 @@ print(f"Magmom (μB) : {magmom_t.detach().flatten().tolist()}")
 
     Energy/atom : -14.4023 eV
     Forces (eV/Å):
-    [[-2.9802322e-08 -3.7252903e-08 -1.4901161e-08]
-     [-0.0000000e+00  7.4505806e-09  7.4505806e-09]]
+    [[-5.9604645e-08 -0.0000000e+00 -0.0000000e+00]
+     [ 6.7055225e-08  1.4901161e-08 -3.7252903e-08]]
     Stress (GPa):
-    [[ 1.2303020e+00 -7.2461411e-08  3.6230705e-07]
-     [-7.2461410e-07  1.2303020e+00 -2.1738423e-07]
-     [ 0.0000000e+00 -7.2461411e-08  1.2303011e+00]]
-    Magmom (μB) : [2.7359468936920166, 2.7359461784362793]
+    [[ 1.2303069e+00 -4.3476845e-07  2.1738423e-07]
+     [-5.0722986e-07  1.2303065e+00  2.1738423e-07]
+     [-2.1738423e-07  0.0000000e+00  1.2303057e+00]]
+    Magmom (μB) : [2.735947370529175, 2.7359464168548584]
 
 
 ## 3. Structure relaxation
@@ -323,13 +315,13 @@ print(f"Final structure :\n{final_struct}")
     Full Formula (Cs1 Cl1)
     Reduced Formula: CsCl
     abc   :   4.126269   4.126269   4.126277
-    angles:  90.000000  90.000000  90.107797
+    angles:  90.000000  90.000001  90.107806
     pbc   :       True       True       True
     Sites (2)
-      #  SP            a         b     c  final_magmom
-    ---  ----  ---------  --------  ----  --------------
-      0  Cs    -0.010176  0.010176  -0    [-0.00871292]
-      1  Cl     0.490176  0.509824   0.5  [-0.01081806]
+      #  SP            a         b    c  final_magmom
+    ---  ----  ---------  --------  ---  --------------
+      0  Cs    -0.010176  0.010176  0    [-0.00871307]
+      1  Cl     0.490176  0.509824  0.5  [-0.01081812]
 
 
 
@@ -367,28 +359,28 @@ df[["energies", "forces"]].head()
   <tbody>
     <tr>
       <th>0</th>
-      <td>-35.308643</td>
-      <td>[[0.0070515014, -0.0070515377, -0.0], [-0.0070...</td>
+      <td>-35.308647</td>
+      <td>[[0.007051613, -0.0070515927, -0.0], [-0.00705...</td>
     </tr>
     <tr>
       <th>1</th>
       <td>-35.322723</td>
-      <td>[[0.0032790117, -0.0032787677, -0.0], [-0.0032...</td>
+      <td>[[0.003279036, -0.003278911, -0.0], [-0.003279...</td>
     </tr>
     <tr>
       <th>2</th>
       <td>-35.348724</td>
-      <td>[[-0.00494536, 0.0049444847, -0.0], [0.0049453...</td>
+      <td>[[-0.004945389, 0.004944224, -0.0], [0.0049454...</td>
     </tr>
     <tr>
       <th>3</th>
       <td>-35.382706</td>
-      <td>[[-0.014665338, 0.0146656595, -0.0], [0.014665...</td>
+      <td>[[-0.014665502, 0.014665462, -0.0], [0.0146654...</td>
     </tr>
     <tr>
       <th>4</th>
-      <td>-35.420620</td>
-      <td>[[-0.025606597, 0.025606595, -0.0], [0.0256065...</td>
+      <td>-35.420616</td>
+      <td>[[-0.02560742, 0.02560746, -0.0], [0.02560737,...</td>
     </tr>
   </tbody>
 </table>
@@ -424,7 +416,7 @@ driver.run(steps=100)
 print("MD finished. Final potential energy:", atoms.get_potential_energy(), "eV")
 ```
 
-    MD finished. Final potential energy: -35.33189010620117 eV
+    MD finished. Final potential energy: -35.44999313354492 eV
 
 
 ## 5. Training a CHGNet model from scratch
@@ -438,10 +430,9 @@ magnetic moment head.
 
 
 ```python
-from matgl.models._chgnet_pyg import CHGNet
-
 from matgl.ext.pymatgen import get_element_list
 from matgl.graph.data import MGLDataset
+from matgl.models import CHGNet
 from matgl.utils.training import MGLPotentialTrainer, fit_element_refs
 ```
 
@@ -489,14 +480,10 @@ print(f"Dataset: {len(dataset)} structures")
     Processing...
 
 
-    Element refs (eV): {'S': -4.987499999999998, 'Mo': -4.9875}
+    Element refs (eV): {'S': -4.987499999999999, 'Mo': -4.987500000000002}
 
 
-
-  0%|          | 0/6 [00:00<?, ?it/s]
-
-
-100%|██████████| 6/6 [00:00<00:00, 2776.15it/s]
+    100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 6/6 [00:00<00:00, 1649.68it/s]
 
     Dataset: 6 structures
 
@@ -542,17 +529,9 @@ print("Training complete.")
 ```
 
     Seed set to 42
-
-
-    GPU available: False, used: False
-
-
+    GPU available: True (mps), used: False
     TPU available: False, using: 0 TPU cores
-
-
     💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
-
-
     💡 Tip: For seamless cloud uploads and versioning, try installing [litmodels](https://pypi.org/project/litmodels/) to enable LitModelCheckpoint, which syncs automatically with the Lightning model registry.
 
 
@@ -580,6 +559,10 @@ print("Training complete.")
 
 
 
+
+    Output()
+
+
     `Trainer.fit` stopped: `max_epochs=5` reached.
 
 
@@ -589,20 +572,24 @@ print("Training complete.")
 
 
 
+    Output()
+
+
+
 <pre style="white-space:pre;overflow-x:auto;line-height:normal;font-family:Menlo,'DejaVu Sans Mono',consolas,'Courier New',monospace">┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃<span style="font-weight: bold">        Test metric        </span>┃<span style="font-weight: bold">       DataLoader 0        </span>┃
 ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
 │<span style="color: #008080; text-decoration-color: #008080">      test_Charge_MAE      </span>│<span style="color: #800080; text-decoration-color: #800080">            0.0            </span>│
 │<span style="color: #008080; text-decoration-color: #008080">     test_Charge_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">            0.0            </span>│
-│<span style="color: #008080; text-decoration-color: #008080">      test_Energy_MAE      </span>│<span style="color: #800080; text-decoration-color: #800080">     0.000213623046875     </span>│
-│<span style="color: #008080; text-decoration-color: #008080">     test_Energy_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">     0.000213623046875     </span>│
-│<span style="color: #008080; text-decoration-color: #008080">      test_Force_MAE       </span>│<span style="color: #800080; text-decoration-color: #800080">  3.3954467709707004e-11   </span>│
-│<span style="color: #008080; text-decoration-color: #008080">      test_Force_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">  5.4448282688079885e-11   </span>│
+│<span style="color: #008080; text-decoration-color: #008080">      test_Energy_MAE      </span>│<span style="color: #800080; text-decoration-color: #800080">    0.0143890380859375     </span>│
+│<span style="color: #008080; text-decoration-color: #008080">     test_Energy_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">    0.0143890380859375     </span>│
+│<span style="color: #008080; text-decoration-color: #008080">      test_Force_MAE       </span>│<span style="color: #800080; text-decoration-color: #800080">   2.637534635141492e-11   </span>│
+│<span style="color: #008080; text-decoration-color: #008080">      test_Force_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">   3.453685601395584e-11   </span>│
 │<span style="color: #008080; text-decoration-color: #008080">      test_Magmom_MAE      </span>│<span style="color: #800080; text-decoration-color: #800080">            0.0            </span>│
 │<span style="color: #008080; text-decoration-color: #008080">     test_Magmom_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">            0.0            </span>│
-│<span style="color: #008080; text-decoration-color: #008080">      test_Stress_MAE      </span>│<span style="color: #800080; text-decoration-color: #800080">   0.0021507737692445517   </span>│
-│<span style="color: #008080; text-decoration-color: #008080">     test_Stress_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">   0.003725249320268631    </span>│
-│<span style="color: #008080; text-decoration-color: #008080">      test_Total_Loss      </span>│<span style="color: #800080; text-decoration-color: #800080">   7.166915452216926e-07   </span>│
+│<span style="color: #008080; text-decoration-color: #008080">      test_Stress_MAE      </span>│<span style="color: #800080; text-decoration-color: #800080">   0.006952452939003706    </span>│
+│<span style="color: #008080; text-decoration-color: #008080">     test_Stress_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">   0.012042000889778137    </span>│
+│<span style="color: #008080; text-decoration-color: #008080">      test_Total_Loss      </span>│<span style="color: #800080; text-decoration-color: #800080">  0.00011077270028181374   </span>│
 └───────────────────────────┴───────────────────────────┘
 </pre>
 
@@ -774,28 +761,12 @@ print("Fine-tuning complete.")
 ```
 
     Processing...
-
-
-
-  0%|          | 0/6 [00:00<?, ?it/s]
-
-
-100%|██████████| 6/6 [00:00<00:00, 3113.43it/s]
-
-
+    100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 6/6 [00:00<00:00, 2660.80it/s]
     Done!
     Seed set to 42
-
-
-    GPU available: False, used: False
-
-
+    GPU available: True (mps), used: False
     TPU available: False, using: 0 TPU cores
-
-
     💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
-
-
     💡 Tip: For seamless cloud uploads and versioning, try installing [litmodels](https://pypi.org/project/litmodels/) to enable LitModelCheckpoint, which syncs automatically with the Lightning model registry.
 
 
@@ -823,12 +794,20 @@ print("Fine-tuning complete.")
 
 
 
+
+    Output()
+
+
     `Trainer.fit` stopped: `max_epochs=5` reached.
 
 
 
 <pre style="white-space:pre;overflow-x:auto;line-height:normal;font-family:Menlo,'DejaVu Sans Mono',consolas,'Courier New',monospace"></pre>
 
+
+
+
+    Output()
 
 
 
@@ -839,12 +818,12 @@ print("Fine-tuning complete.")
 │<span style="color: #008080; text-decoration-color: #008080">     test_Charge_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">            0.0            </span>│
 │<span style="color: #008080; text-decoration-color: #008080">      test_Energy_MAE      </span>│<span style="color: #800080; text-decoration-color: #800080">    11.532892227172852     </span>│
 │<span style="color: #008080; text-decoration-color: #008080">     test_Energy_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">    11.532892227172852     </span>│
-│<span style="color: #008080; text-decoration-color: #008080">      test_Force_MAE       </span>│<span style="color: #800080; text-decoration-color: #800080">  4.6566128730773926e-09   </span>│
-│<span style="color: #008080; text-decoration-color: #008080">      test_Force_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">   6.224319726300109e-09   </span>│
+│<span style="color: #008080; text-decoration-color: #008080">      test_Force_MAE       </span>│<span style="color: #800080; text-decoration-color: #800080">   5.277494441457975e-09   </span>│
+│<span style="color: #008080; text-decoration-color: #008080">      test_Force_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">   7.411673941248864e-09   </span>│
 │<span style="color: #008080; text-decoration-color: #008080">      test_Magmom_MAE      </span>│<span style="color: #800080; text-decoration-color: #800080">            0.0            </span>│
 │<span style="color: #008080; text-decoration-color: #008080">     test_Magmom_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">            0.0            </span>│
 │<span style="color: #008080; text-decoration-color: #008080">      test_Stress_MAE      </span>│<span style="color: #800080; text-decoration-color: #800080">    0.9226765036582947     </span>│
-│<span style="color: #008080; text-decoration-color: #008080">     test_Stress_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">    1.5981225967407227     </span>│
+│<span style="color: #008080; text-decoration-color: #008080">     test_Stress_RMSE      </span>│<span style="color: #800080; text-decoration-color: #800080">    1.5981227159500122     </span>│
 │<span style="color: #008080; text-decoration-color: #008080">      test_Total_Loss      </span>│<span style="color: #800080; text-decoration-color: #800080">    11.108492851257324     </span>│
 └───────────────────────────┴───────────────────────────┘
 </pre>

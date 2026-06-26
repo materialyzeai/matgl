@@ -18,11 +18,11 @@ from __future__ import annotations
 import warnings
 
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
-from matgl.ext._ase_dgl import MolecularDynamics, PESCalculator, Relaxer
 from pymatgen.core import Lattice, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 
 import matgl
+from matgl.ext.ase import MolecularDynamics, PESCalculator, Relaxer
 
 # To suppress warnings for clearer output
 warnings.simplefilter("ignore")
@@ -36,7 +36,7 @@ We will first load the QET PES model, which is trained on the MatQ dataset. This
 ```python
 # You can load any pretrained potentials stored in the 'pretrained_models' directory
 # To see available models, use get_available_pretrained_models()
-pot = matgl.load_model("../pretrained_models/QET-MatQ-PES")
+pot = matgl.load_model("QET-PES-MatPES-PBE-2025.2")
 ```
 
 # Structure Relaxation
@@ -59,15 +59,15 @@ print(f"The final energy is {float(final_energy):.3f} eV.")
 
     Full Formula (Cs1 Cl1)
     Reduced Formula: CsCl
-    abc   :   4.207706   4.207706   4.207706
+    abc   :   4.204927   4.204927   4.204927
     angles:  90.000000  90.000000  90.000000
     pbc   :       True       True       True
     Sites (2)
-      #  SP      a    b    c    final_charge
-    ---  ----  ---  ---  ---  --------------
-      0  Cs    0    0    0          0.819602
-      1  Cl    0.5  0.5  0.5       -0.819602
-    The final energy is -6.532 eV.
+      #  SP      a    b     c
+    ---  ----  ---  ---  ----
+      0  Cs    0    0    -0
+      1  Cl    0.5  0.5   0.5
+    The final energy is -6.491 eV.
 
 
 # Molecular Dynamics
@@ -88,7 +88,7 @@ driver.run(100)
 print(f"The potential energy of CsCl at 300 K after 100 steps is {float(atoms.get_potential_energy()):.3f} eV.")
 ```
 
-    The potential energy of CsCl at 300 K after 100 steps is -6.407 eV.
+    The potential energy of CsCl at 300 K after 100 steps is -6.420 eV.
 
 
 # Single point energy calculation
@@ -106,5 +106,46 @@ print(f"The calculated potential energy is {atoms.get_potential_energy():.3f} eV
 print(f"The calculated charges is {atoms.get_charges()}.")
 ```
 
-    The calculated potential energy is -6.407 eV.
-    The calculated charges is [ 0.8030549  -0.80305505].
+    The stress unit is now in GPa. Please set stress_unit='eV/A3' if you want to use PESCalculator for other ASE applications.
+
+
+    The calculated potential energy is -6.420 eV.
+
+
+
+    ---------------------------------------------------------------------------
+
+    PropertyNotImplementedError               Traceback (most recent call last)
+
+    Cell In[8], line 7
+          3 # set up the calculator for atoms object
+          4 atoms.set_calculator(calc)
+          5 print(f"The calculated potential energy is {atoms.get_potential_energy():.3f} eV.")
+          6 # you can also calculate charges as well
+    ----> 7 print(f"The calculated charges is {atoms.get_charges()}.")
+
+
+    File ~/repos/matgl/.venv/lib/python3.12/site-packages/ase/atoms.py:1941, in Atoms.get_charges(self)
+       1939     raise RuntimeError('Atoms object has no calculator.')
+       1940 try:
+    -> 1941     return self._calc.get_charges(self)
+       1942 except AttributeError:
+       1943     from ase.calculators.calculator import PropertyNotImplementedError
+
+
+    File ~/repos/matgl/.venv/lib/python3.12/site-packages/ase/calculators/abc.py:48, in GetPropertiesMixin.get_charges(self, atoms)
+         47 def get_charges(self, atoms=None):
+    ---> 48     return self.get_property('charges', atoms)
+
+
+    File ~/repos/matgl/.venv/lib/python3.12/site-packages/ase/calculators/calculator.py:499, in BaseCalculator.get_property(self, name, atoms, allow_calculation)
+        497 def get_property(self, name, atoms=None, allow_calculation=True):
+        498     if name not in self.implemented_properties:
+    --> 499         raise PropertyNotImplementedError(
+        500             f'{name} property not implemented'
+        501         )
+        503     if atoms is None:
+        504         atoms = self.atoms
+
+
+    PropertyNotImplementedError: charges property not implemented
