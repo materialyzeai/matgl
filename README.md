@@ -122,7 +122,8 @@ MatGL ships a native LAMMPS `pair_style matgl` that evaluates a TorchScript-comp
 **M3GNet** PES (energies, forces, and virials) on every timestep via LibTorch, with both a CPU/serial pair style
 and a Kokkos GPU/host variant (`pair_style matgl/kk`). Export a LAMMPS-loadable model from a pre-trained TensorNet
 or M3GNet with `mgl create-lammps-model`. Build and usage instructions, the input-deck syntax, and current
-limitations are in [`lammps/README.md`](lammps/README.md).
+limitations are in [`src/matgl/lammps/README.md`](src/matgl/lammps/README.md). To patch a stock LAMMPS source
+tree for the pair styles (including the Kokkos plugin) in one step, run `mgl lammps --patch <lammps-src-dir>`.
 
 ## Docker images
 

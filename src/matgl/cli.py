@@ -283,9 +283,9 @@ _LAMMPS_CMAKE_FRAGMENT_NAME = "ML-MATGL.cmake"
 def _matgl_lammps_dir() -> Path:
     """Locate matgl's bundled LAMMPS pair-style source tree.
 
-    The ``lammps/`` tree sits at the repository root (outside the importable
-    package), so it is present only in a matgl source checkout — which is the
-    realistic setting for building LAMMPS from source anyway.
+    The ``lammps/`` tree ships as package data under ``matgl/`` (see
+    ``[tool.setuptools.package-data]`` in ``pyproject.toml``), so it is present
+    in both editable and wheel installs.
 
     Returns:
         Path to the ``lammps/`` directory shipped with matgl.
@@ -293,17 +293,12 @@ def _matgl_lammps_dir() -> Path:
     Raises:
         FileNotFoundError: If the bundled sources cannot be located.
     """
-    candidates = (
-        Path(__file__).resolve().parents[2] / "lammps",  # editable / source checkout
-        Path(matgl.__file__).resolve().parent / "lammps",  # bundled package data, if ever shipped
-    )
-    for candidate in candidates:
-        if (candidate / "src" / "KOKKOS" / "pair_matgl_kokkos.cpp").is_file():
-            return candidate
+    bundled = Path(matgl.__file__).resolve().parent / "lammps"
+    if (bundled / "src" / "KOKKOS" / "pair_matgl_kokkos.cpp").is_file():
+        return bundled
     raise FileNotFoundError(
-        "Could not locate matgl's bundled LAMMPS sources. The `lammps/` tree ships only with a "
-        "matgl source checkout — clone https://github.com/materialyzeai/matgl and run "
-        "`mgl lammps --patch` from an editable install (`uv pip install -e .`)."
+        f"Could not locate matgl's bundled LAMMPS sources at {bundled}. Reinstall matgl or run "
+        "`mgl lammps --patch` from a source checkout (`uv pip install -e .`)."
     )
 
 

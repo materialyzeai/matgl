@@ -3,7 +3,7 @@
 Run this *after* exporting the model with `mgl create-lammps-model` and
 *before* running LAMMPS so you have a gold standard to diff against.
 
-    cd lammps/tests
+    cd src/matgl/lammps/tests
     uv run mgl create-lammps-model -m <model> -o model.pt --dtype float32
     uv run python python_reference.py
     <lammps>/build/lmp -in in.matgl_si

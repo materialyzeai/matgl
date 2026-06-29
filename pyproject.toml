@@ -78,7 +78,16 @@ where = ["src"]
 include = ["matgl", "matgl.*"]
 
 [tool.setuptools.package-data]
-matgl = ["py.typed"]
+matgl = [
+    "py.typed",
+    # LAMMPS pair-style sources, shipped so `mgl lammps --patch` works from a
+    # plain `pip install matgl` (not just a source checkout).
+    "lammps/README.md",
+    "lammps/cmake/*.cmake",
+    "lammps/src/ML-MATGL/*",
+    "lammps/src/KOKKOS/*",
+    "lammps/tests/*",
+]
 "matgl.utils" = ["sb_roots.npy"]
 
 
@@ -106,6 +115,9 @@ exclude = '''
 
 [tool.ruff]
 line-length = 120
+# Vendored LAMMPS pair-style sources shipped as package data — not part of the
+# importable matgl API, so they are exempt from our lint/format rules.
+extend-exclude = ["src/matgl/lammps"]
 lint.select = [
     "B", # flake8-bugbear
     "C4", # flake8-comprehensions

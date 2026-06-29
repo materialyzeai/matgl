@@ -20,14 +20,14 @@ on:
   push:
     branches: ["*"]
     paths:
-      - "lammps/**"
+      - "src/matgl/lammps/**"
       - "src/matgl/ext/_lammps.py"
       - "src/matgl/ext/lammps.py"
       - ".github/workflows/lammps-build.yml"
   pull_request:
     branches: [main]
     paths:
-      - "lammps/**"
+      - "src/matgl/lammps/**"
       - "src/matgl/ext/_lammps.py"
       - "src/matgl/ext/lammps.py"
       - ".github/workflows/lammps-build.yml"
@@ -224,15 +224,15 @@ jobs:
         env:
           LAMMPS_SRC: ${{ steps.lammps.outputs.path }}
         run: |
-          cp matgl/lammps/src/ML-MATGL/pair_matgl.cpp "${LAMMPS_SRC}/src/"
-          cp matgl/lammps/src/ML-MATGL/pair_matgl.h   "${LAMMPS_SRC}/src/"
+          cp matgl/src/matgl/lammps/src/ML-MATGL/pair_matgl.cpp "${LAMMPS_SRC}/src/"
+          cp matgl/src/matgl/lammps/src/ML-MATGL/pair_matgl.h   "${LAMMPS_SRC}/src/"
           if ! grep -q ML-MATGL.cmake "${LAMMPS_SRC}/cmake/CMakeLists.txt"; then
-              echo "include(${GITHUB_WORKSPACE}/matgl/lammps/cmake/ML-MATGL-CI.cmake)" \
+              echo "include(${GITHUB_WORKSPACE}/matgl/src/matgl/lammps/cmake/ML-MATGL-CI.cmake)" \
                   >> "${LAMMPS_SRC}/cmake/CMakeLists.txt"
           fi
           # Generate a minimal CI-only cmake fragment that just links Torch;
           # the regular ML-MATGL.cmake assumes sources live in a subdir.
-          cat > matgl/lammps/cmake/ML-MATGL-CI.cmake <<'CM'
+          cat > matgl/src/matgl/lammps/cmake/ML-MATGL-CI.cmake <<'CM'
           find_package(Torch REQUIRED)
           target_compile_features(lammps PRIVATE cxx_std_17)
           target_link_libraries(lammps PRIVATE ${TORCH_LIBRARIES})
@@ -276,8 +276,8 @@ jobs:
           LIBTORCH: ${{ steps.libtorch.outputs.path }}
         run: |
           export LD_LIBRARY_PATH="${LIBTORCH}/lib:${LD_LIBRARY_PATH:-}"
-          cp lammps_artifacts/model.pt matgl/lammps/tests/model.pt
-          cd matgl/lammps/tests
+          cp lammps_artifacts/model.pt matgl/src/matgl/lammps/tests/model.pt
+          cd matgl/src/matgl/lammps/tests
           "${GITHUB_WORKSPACE}/lammps_build/lmp" -in in.matgl_si | tee log.lammps
 
       - name: Diff LAMMPS energy against Python reference
@@ -290,7 +290,7 @@ jobs:
           import sys
 
           ref = json.load(open("../lammps_artifacts/reference.json"))
-          log = open("lammps/tests/log.lammps").read()
+          log = open("src/matgl/lammps/tests/log.lammps").read()
           # thermo_style for the test deck is "step pe fx fy fz pxx pyy pzz".
           # With ``run 0`` LAMMPS prints one numeric row; pull its second column.
           pe = None
@@ -316,7 +316,7 @@ jobs:
         with:
           name: lammps-debug
           path: |
-            matgl/lammps/tests/log.lammps
+            matgl/src/matgl/lammps/tests/log.lammps
             lammps_artifacts/
             lammps_build/CMakeFiles/CMakeOutput.log
             lammps_build/CMakeFiles/CMakeError.log
@@ -499,19 +499,19 @@ jobs:
         env:
           LAMMPS_SRC: ${{ steps.lammps.outputs.path }}
         run: |
-          cp matgl/lammps/src/ML-MATGL/pair_matgl.cpp "${LAMMPS_SRC}/src/"
-          cp matgl/lammps/src/ML-MATGL/pair_matgl.h   "${LAMMPS_SRC}/src/"
-          cp matgl/lammps/src/KOKKOS/pair_matgl_kokkos.cpp "${LAMMPS_SRC}/src/KOKKOS/"
-          cp matgl/lammps/src/KOKKOS/pair_matgl_kokkos.h   "${LAMMPS_SRC}/src/KOKKOS/"
+          cp matgl/src/matgl/lammps/src/ML-MATGL/pair_matgl.cpp "${LAMMPS_SRC}/src/"
+          cp matgl/src/matgl/lammps/src/ML-MATGL/pair_matgl.h   "${LAMMPS_SRC}/src/"
+          cp matgl/src/matgl/lammps/src/KOKKOS/pair_matgl_kokkos.cpp "${LAMMPS_SRC}/src/KOKKOS/"
+          cp matgl/src/matgl/lammps/src/KOKKOS/pair_matgl_kokkos.h   "${LAMMPS_SRC}/src/KOKKOS/"
           if ! grep -q ML-MATGL-KOKKOS-CI.cmake "${LAMMPS_SRC}/cmake/CMakeLists.txt"; then
-              echo "include(${GITHUB_WORKSPACE}/matgl/lammps/cmake/ML-MATGL-KOKKOS-CI.cmake)" \
+              echo "include(${GITHUB_WORKSPACE}/matgl/src/matgl/lammps/cmake/ML-MATGL-KOKKOS-CI.cmake)" \
                   >> "${LAMMPS_SRC}/cmake/CMakeLists.txt"
           fi
           # CI-only cmake fragment: just link Torch. The base pair_matgl.cpp
           # in src/ also needs Torch linked (same as the CPU job); the
           # Kokkos sources in src/KOKKOS/ are picked up automatically by
           # LAMMPS' own KOKKOS package glob once PKG_KOKKOS=ON.
-          cat > matgl/lammps/cmake/ML-MATGL-KOKKOS-CI.cmake <<'CM'
+          cat > matgl/src/matgl/lammps/cmake/ML-MATGL-KOKKOS-CI.cmake <<'CM'
           find_package(Torch REQUIRED)
           target_compile_features(lammps PRIVATE cxx_std_17)
           target_link_libraries(lammps PRIVATE ${TORCH_LIBRARIES})
@@ -555,8 +555,8 @@ jobs:
           LIBTORCH: ${{ steps.libtorch.outputs.path }}
         run: |
           export LD_LIBRARY_PATH="${LIBTORCH}/lib:${LD_LIBRARY_PATH:-}"
-          cp lammps_artifacts/model.pt matgl/lammps/tests/model.pt
-          cd matgl/lammps/tests
+          cp lammps_artifacts/model.pt matgl/src/matgl/lammps/tests/model.pt
+          cd matgl/src/matgl/lammps/tests
           "${GITHUB_WORKSPACE}/lammps_build/lmp" -k on g 1 -sf kk -in in.matgl_si | tee log.lammps
 
       - name: Diff LAMMPS energy against Python reference
@@ -569,7 +569,7 @@ jobs:
           import sys
 
           ref = json.load(open("../lammps_artifacts/reference.json"))
-          log = open("lammps/tests/log.lammps").read()
+          log = open("src/matgl/lammps/tests/log.lammps").read()
           # thermo_style for the test deck is "step pe fx fy fz pxx pyy pzz".
           # With ``run 0`` LAMMPS prints one numeric row; pull its second column.
           pe = None
@@ -595,7 +595,7 @@ jobs:
         with:
           name: lammps-kokkos-debug
           path: |
-            matgl/lammps/tests/log.lammps
+            matgl/src/matgl/lammps/tests/log.lammps
             lammps_artifacts/
             lammps_build/CMakeFiles/CMakeOutput.log
             lammps_build/CMakeFiles/CMakeError.log

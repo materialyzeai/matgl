@@ -4,7 +4,7 @@
 #   1. Copy or symlink lammps/src/ML-MATGL  →  <lammps>/src/ML-MATGL
 #   2. Append to <lammps>/cmake/CMakeLists.txt (anywhere after the `set(STANDARD_PACKAGES …)`
 #      block):
-#        include(/path/to/matgl/lammps/cmake/ML-MATGL.cmake)
+#        include(/path/to/matgl/src/matgl/lammps/cmake/ML-MATGL.cmake)
 #   3. Configure with:
 #        cmake -B build \
 #            -D PKG_ML-MATGL=ON \

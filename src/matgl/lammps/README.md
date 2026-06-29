@@ -14,8 +14,9 @@ This directory ships:
   CMake snippets.
 - `tests/in.matgl_si` — sample input deck for a single-point parity check.
 
-The Python side (one repo up) ships `mgl create-lammps-model`, which
-produces the `.pt` artifact these pair styles consume.
+The matgl CLI ships `mgl create-lammps-model`, which produces the `.pt`
+artifact these pair styles consume, and `mgl lammps --patch <lammps-src-dir>`,
+which drops these sources into a stock LAMMPS tree and wires up the build.
 
 > **Status.** The CPU/serial pair style is exercised in CI
 > (`.github/workflows/lammps-build.yml`). The Kokkos GPU variant builds
@@ -42,10 +43,10 @@ Drop the package into a stock LAMMPS source tree and configure:
 
 ```bash
 # 1) Copy or symlink the source files.
-ln -s /path/to/matgl/lammps/src/ML-MATGL <lammps>/src/ML-MATGL
+ln -s /path/to/matgl/src/matgl/lammps/src/ML-MATGL <lammps>/src/ML-MATGL
 
 # 2) Tell LAMMPS' CMake about the package.
-echo 'include(/path/to/matgl/lammps/cmake/ML-MATGL.cmake)' \
+echo 'include(/path/to/matgl/src/matgl/lammps/cmake/ML-MATGL.cmake)' \
     >> <lammps>/cmake/CMakeLists.txt
 
 # 3) Configure + build. Match libtorch's CXX11 ABI to LAMMPS'.
@@ -75,7 +76,7 @@ To do it by hand instead, enable Kokkos and append the matching snippet to
 LAMMPS' CMake. CUDA example for an Ampere card (A100/A30):
 
 ```bash
-echo 'include(/path/to/matgl/lammps/cmake/ML-MATGL-KOKKOS.cmake)' \
+echo 'include(/path/to/matgl/src/matgl/lammps/cmake/ML-MATGL-KOKKOS.cmake)' \
     >> <lammps>/cmake/CMakeLists.txt
 
 cmake -B build -S <lammps>/cmake \
@@ -181,7 +182,7 @@ CUDA runner.
 ## Verifying a build
 
 ```bash
-cd lammps/tests
+cd src/matgl/lammps/tests
 <lammps>/build/lmp -in in.matgl_si
 ```
 
