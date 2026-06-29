@@ -59,9 +59,20 @@ cmake --build build -j 8
 
 ### 2b. Build the Kokkos GPU variant
 
-To get the `matgl/kk` pair style, also enable Kokkos and append the
-matching snippet to LAMMPS' CMake. CUDA example for an Ampere card
-(A100/A30):
+The quickest way is `mgl lammps --patch`, which copies the CPU and Kokkos
+pair-style sources into `<lammps>/src/` and `<lammps>/src/KOKKOS/` and wires
+libtorch into the CMake build for you:
+
+```bash
+mgl lammps --patch <lammps>
+```
+
+The command is idempotent and prints the exact `cmake` invocation to run next.
+It needs a full LAMMPS checkout (the in-tree `lib/kokkos` and `src/KOKKOS`)
+and a matgl source checkout, since the `lammps/` tree ships only with the repo.
+
+To do it by hand instead, enable Kokkos and append the matching snippet to
+LAMMPS' CMake. CUDA example for an Ampere card (A100/A30):
 
 ```bash
 echo 'include(/path/to/matgl/lammps/cmake/ML-MATGL-KOKKOS.cmake)' \

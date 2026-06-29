@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -243,6 +244,134 @@ def create_lammps_model(args: argparse.Namespace) -> int:
     print("  dtype     :", args.dtype)
     species = list(potential.model.element_types)  # type:ignore[union-attr,arg-type,attr-defined]
     print("  species   :", species[: wrapper.n_species])
+    return 0
+
+
+# Source files copied into a stock LAMMPS tree, as (path under matgl's lammps/,
+# destination subdir under the LAMMPS source root). pair_matgl.{cpp,h} go into
+# src/ (top-level, always scanned for PairStyle macros); the Kokkos variant goes
+# into the standard src/KOKKOS/ package dir, which LAMMPS auto-scans when
+# PKG_KOKKOS=ON. This mirrors the proven Kokkos CI build.
+_LAMMPS_PATCH_FILES = (
+    ("src/ML-MATGL/pair_matgl.cpp", "src"),
+    ("src/ML-MATGL/pair_matgl.h", "src"),
+    ("src/KOKKOS/pair_matgl_kokkos.cpp", "src/KOKKOS"),
+    ("src/KOKKOS/pair_matgl_kokkos.h", "src/KOKKOS"),
+)
+
+# CMake fragment that puts libtorch on the link line. Dropped into the LAMMPS
+# cmake/ dir and include()d from cmake/CMakeLists.txt. The pair styles live in
+# src/ / src/KOKKOS/ (so LAMMPS' own globs compile them); this fragment only has
+# to supply the LibTorch dependency.
+_LAMMPS_TORCH_CMAKE = """\
+# Added by `mgl lammps --patch`. Links libtorch into the LAMMPS build so the
+# matgl pair styles (pair_matgl in src/, pair_matgl/kk in src/KOKKOS/) can call
+# into LibTorch. Configure with -D CMAKE_PREFIX_PATH=/path/to/libtorch and match
+# libtorch's CXX11 ABI to LAMMPS'.
+find_package(Torch REQUIRED)
+target_compile_features(lammps PRIVATE cxx_std_17)
+target_link_libraries(lammps PRIVATE ${TORCH_LIBRARIES})
+if(DEFINED TORCH_CXX_FLAGS)
+    set_property(TARGET lammps APPEND_STRING PROPERTY COMPILE_FLAGS " ${TORCH_CXX_FLAGS}")
+endif()
+message(STATUS "ML-MATGL: linked against TORCH_LIBRARIES=${TORCH_LIBRARIES}")
+"""
+
+_LAMMPS_CMAKE_FRAGMENT_NAME = "ML-MATGL.cmake"
+
+
+def _matgl_lammps_dir() -> Path:
+    """Locate matgl's bundled LAMMPS pair-style source tree.
+
+    The ``lammps/`` tree sits at the repository root (outside the importable
+    package), so it is present only in a matgl source checkout — which is the
+    realistic setting for building LAMMPS from source anyway.
+
+    Returns:
+        Path to the ``lammps/`` directory shipped with matgl.
+
+    Raises:
+        FileNotFoundError: If the bundled sources cannot be located.
+    """
+    candidates = (
+        Path(__file__).resolve().parents[2] / "lammps",  # editable / source checkout
+        Path(matgl.__file__).resolve().parent / "lammps",  # bundled package data, if ever shipped
+    )
+    for candidate in candidates:
+        if (candidate / "src" / "KOKKOS" / "pair_matgl_kokkos.cpp").is_file():
+            return candidate
+    raise FileNotFoundError(
+        "Could not locate matgl's bundled LAMMPS sources. The `lammps/` tree ships only with a "
+        "matgl source checkout — clone https://github.com/materialyzeai/matgl and run "
+        "`mgl lammps --patch` from an editable install (`uv pip install -e .`)."
+    )
+
+
+def patch_lammps(args: argparse.Namespace) -> int:
+    """Patch a stock LAMMPS source tree to build the matgl pair styles + Kokkos plugin.
+
+    Copies ``pair_matgl.{cpp,h}`` into ``<lammps>/src/`` and
+    ``pair_matgl_kokkos.{cpp,h}`` into ``<lammps>/src/KOKKOS/``, then drops a
+    libtorch-linking CMake fragment into ``<lammps>/cmake/`` and ``include()``s
+    it from ``cmake/CMakeLists.txt``. The operation is idempotent: source files
+    are overwritten and the ``include`` line is appended only if absent.
+
+    Args:
+        args: Parsed CLI arguments carrying ``patch`` (the LAMMPS source dir).
+
+    Returns:
+        ``0`` on success.
+
+    Raises:
+        FileNotFoundError: If the target is not a LAMMPS source tree or matgl's
+            bundled sources cannot be found.
+    """
+    src_dir = Path(args.patch).expanduser().resolve()
+    cmakelists = src_dir / "cmake" / "CMakeLists.txt"
+    kokkos_dir = src_dir / "src" / "KOKKOS"
+
+    if not cmakelists.is_file():
+        raise FileNotFoundError(f"{cmakelists} not found — '{src_dir}' does not look like a LAMMPS source tree.")
+    if not kokkos_dir.is_dir():
+        raise FileNotFoundError(
+            f"{kokkos_dir} not found. The Kokkos plugin needs LAMMPS' KOKKOS package; clone the "
+            "full LAMMPS source (its lib/kokkos and src/KOKKOS ship in-tree)."
+        )
+
+    matgl_lammps = _matgl_lammps_dir()
+    print(f"Patching LAMMPS source tree at {src_dir}")
+    for rel, dest_sub in _LAMMPS_PATCH_FILES:
+        source = matgl_lammps / rel
+        dest = src_dir / dest_sub / source.name
+        shutil.copyfile(source, dest)
+        print(f"  copied {source.name} -> {dest.relative_to(src_dir)}")
+
+    fragment = src_dir / "cmake" / _LAMMPS_CMAKE_FRAGMENT_NAME
+    fragment.write_text(_LAMMPS_TORCH_CMAKE)
+    print(f"  wrote {fragment.relative_to(src_dir)}")
+
+    text = cmakelists.read_text()
+    if _LAMMPS_CMAKE_FRAGMENT_NAME not in text:
+        with cmakelists.open("a") as fh:
+            fh.write(
+                "\n# Added by `mgl lammps --patch` (libtorch for matgl pair styles)\n"
+                f"include(${{CMAKE_CURRENT_SOURCE_DIR}}/{_LAMMPS_CMAKE_FRAGMENT_NAME})\n"
+            )
+        print(f"  appended include to {cmakelists.relative_to(src_dir)}")
+    else:
+        print(f"  include already present in {cmakelists.relative_to(src_dir)}")
+
+    print(
+        "\nDone. Export a model and build the Kokkos plugin, e.g.:\n\n"
+        "  mgl create-lammps-model -m materialyze/TensorNet-MatPES-r2SCAN -o model.pt --dtype float32\n\n"
+        f"  cmake -B build -S {src_dir / 'cmake'} \\\n"
+        "      -D PKG_KOKKOS=ON -D Kokkos_ENABLE_CUDA=ON -D Kokkos_ARCH_AMPERE80=ON \\\n"
+        "      -D CMAKE_PREFIX_PATH=/path/to/libtorch \\\n"
+        f"      -D CMAKE_CXX_COMPILER={src_dir / 'lib' / 'kokkos' / 'bin' / 'nvcc_wrapper'} \\\n"
+        "      -D CMAKE_BUILD_TYPE=Release\n"
+        "  cmake --build build -j 8\n\n"
+        "Then run single-GPU with: mpirun -n 1 build/lmp -k on g 1 -sf kk -in in.matgl_si\n"
+    )
     return 0
 
 
@@ -548,6 +677,21 @@ def main():
         "Only useful for debugging — not loadable from LAMMPS C++.",
     )
     p_lammps.set_defaults(func=create_lammps_model)
+
+    # LAMMPS source patching (CPU + Kokkos plugin)
+    p_lammps_patch = subparsers.add_parser(
+        "lammps",
+        help="Patch a stock LAMMPS source tree to build the matgl pair styles (incl. the Kokkos plugin).",
+    )
+    p_lammps_patch.add_argument(
+        "--patch",
+        dest="patch",
+        required=True,
+        metavar="LAMMPS_SRC_DIR",
+        help="Path to a LAMMPS source checkout to patch in place. Copies pair_matgl[/kk] sources into "
+        "src/ and src/KOKKOS/ and wires libtorch into the CMake build.",
+    )
+    p_lammps_patch.set_defaults(func=patch_lammps)
 
     args = parser.parse_args()
 

@@ -238,6 +238,57 @@ def test_main_dispatches_to_clear(monkeypatch):
     assert called["clear"].yes is True
 
 
+def _fake_lammps_tree(root):
+    """Create a minimal stock-LAMMPS-looking source tree under ``root``."""
+    (root / "cmake").mkdir(parents=True)
+    (root / "src" / "KOKKOS").mkdir(parents=True)
+    (root / "cmake" / "CMakeLists.txt").write_text("project(lammps)\n")
+    return root
+
+
+def test_matgl_lammps_dir_locates_sources():
+    """The bundled lammps/ tree resolves from a source checkout."""
+    d = cli._matgl_lammps_dir()
+    assert (d / "src" / "KOKKOS" / "pair_matgl_kokkos.cpp").is_file()
+
+
+def test_patch_lammps_copies_sources_and_wires_cmake(tmp_path, capsys):
+    lammps = _fake_lammps_tree(tmp_path / "lammps")
+    assert cli.patch_lammps(Namespace(patch=str(lammps))) == 0
+
+    assert (lammps / "src" / "pair_matgl.cpp").is_file()
+    assert (lammps / "src" / "pair_matgl.h").is_file()
+    assert (lammps / "src" / "KOKKOS" / "pair_matgl_kokkos.cpp").is_file()
+    assert (lammps / "src" / "KOKKOS" / "pair_matgl_kokkos.h").is_file()
+
+    fragment = lammps / "cmake" / "ML-MATGL.cmake"
+    assert "find_package(Torch REQUIRED)" in fragment.read_text()
+    assert "include(${CMAKE_CURRENT_SOURCE_DIR}/ML-MATGL.cmake)" in (lammps / "cmake" / "CMakeLists.txt").read_text()
+
+
+def test_patch_lammps_is_idempotent(tmp_path):
+    """Re-running does not duplicate the include line."""
+    lammps = _fake_lammps_tree(tmp_path / "lammps")
+    cli.patch_lammps(Namespace(patch=str(lammps)))
+    cli.patch_lammps(Namespace(patch=str(lammps)))
+    text = (lammps / "cmake" / "CMakeLists.txt").read_text()
+    assert text.count("include(${CMAKE_CURRENT_SOURCE_DIR}/ML-MATGL.cmake)") == 1
+
+
+def test_patch_lammps_rejects_non_lammps_dir(tmp_path):
+    with pytest.raises(FileNotFoundError, match="does not look like a LAMMPS source tree"):
+        cli.patch_lammps(Namespace(patch=str(tmp_path)))
+
+
+def test_patch_lammps_requires_kokkos_dir(tmp_path):
+    root = tmp_path / "lammps"
+    (root / "cmake").mkdir(parents=True)
+    (root / "src").mkdir(parents=True)
+    (root / "cmake" / "CMakeLists.txt").write_text("project(lammps)\n")
+    with pytest.raises(FileNotFoundError, match="KOKKOS"):
+        cli.patch_lammps(Namespace(patch=str(root)))
+
+
 def test_main_relax_route(monkeypatch, tiny_cif, tiny_structure, tmp_path):
     """End-to-end argv -> relax_structure dispatch with the heavy lifting mocked."""
     out = tmp_path / "out.cif"
