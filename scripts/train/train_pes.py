@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """Train a MatGL interatomic potential from scratch from a config file.
 
-Reads a YAML/JSON config (see ``scripts/train/_common.py`` for the dataset JSON
-format and the recognised keys), builds the requested graph model, fits
+Reads a YAML/JSON config (see ``scripts/train/_common.py`` for the dataset
+formats -- pymatgen JSON or ASE-readable files -- and the recognised keys),
+builds the requested graph model, fits
 per-element energy offsets on the training set, and trains a
-``PotentialLightningModule`` with PyTorch Lightning. The flow mirrors
-``examples/Training a QET Potential with PyTorch Lightning.ipynb`` but is driven
+``PotentialLightningModule`` with PyTorch Lightning. The flow is driven
 entirely by the config file.
 
 Usage::

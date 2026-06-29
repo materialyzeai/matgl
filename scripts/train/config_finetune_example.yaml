@@ -1,0 +1,87 @@
+# Example config for FINETUNING a pre-trained MatGL potential.
+# Run with:  python scripts/train/finetune_pes.py --config config_finetune_example.yaml
+#
+# For training a new model from scratch instead, see config_train_example.yaml.
+
+# --- Model ---------------------------------------------------------------------
+# A Hugging Face Hub name (e.g. M3GNet-MP-2021.2.8-PES) or a local model dir.
+# The element table and per-element energy offsets come from the pre-trained
+# model, so model_args / element_types are NOT used here.
+model: M3GNet-MP-2021.2.8-PES
+cutoff: 5.0
+
+# --- Datasets ------------------------------------------------------------------
+# Each .json file is a pymatgen structure dump + labels:
+#   {"structures": [<Structure dict>, ...],
+#    "labels": {"energies": [...], "forces": [...], "stresses": [...]}}
+# Any non-.json path is read with ASE (e.g. .extxyz / .traj); energy + forces are
+# required per frame and stress is picked up when present, e.g.:
+#   train: data/train.extxyz
+train: data/train.json
+val: data/val.json
+test: data/test.json
+# Alternatively, one file split on the fly (instead of train/val/test):
+# dataset: data/all.json
+# frac_list: [0.8, 0.1, 0.1]
+# shuffle: true
+# random_state: 42
+
+batch_size: 16
+num_workers: 0
+# include_line_graph: false   # set true for three-body models that need line graphs
+
+# --- Loss weights --------------------------------------------------------------
+energy_weight: 1.0
+force_weight: 1.0
+stress_weight: 0.1   # set 0.0 to ignore stress (also drops it from collation)
+# Unit of the stresses in your dataset. MatGL trains in GPa, so eV/A3 data is
+# converted to GPa on load. Omit to assume GPa (a warning is printed).
+stress_unit: GPa     # GPa or eV/A3
+
+# --- Optimizer / LR schedule ---------------------------------------------------
+# Finetuning typically uses a smaller LR than from-scratch training plus a short
+# warmup so the pre-trained weights aren't disrupted early on.
+lr: 0.0001
+optimizer: Adam            # any torch.optim class name
+# optimizer_args: {weight_decay: 0.0}
+#
+# Examples for other optimizers (uncomment one, and comment out the Adam block
+# above). optimizer_args are passed straight to the torch.optim constructor.
+#
+# optimizer: AdamW
+# optimizer_args: {weight_decay: 0.01}
+#
+# optimizer: SGD
+# optimizer_args: {momentum: 0.9, nesterov: true, weight_decay: 0.0001}
+#
+# optimizer: RMSprop
+# optimizer_args: {alpha: 0.99, momentum: 0.0}
+#
+# optimizer: Adamax
+# optimizer_args: {weight_decay: 0.0}
+
+scheduler: CosineAnnealingLR   # any torch.optim.lr_scheduler class name; default CosineAnnealingLR
+scheduler_args:
+  T_max: 50                # in EPOCHS (the scheduler is stepped once per epoch)
+warmup_epochs: 5           # linear LR warmup epochs (recommended for finetuning); not allowed with ReduceLROnPlateau
+metric_to_track: val_Total_Loss   # monitored by ReduceLROnPlateau and ModelCheckpoint
+max_epochs: 50
+
+# --- Trainer -------------------------------------------------------------------
+accelerator: cpu           # cpu / cuda / mps
+devices: 1
+
+# --- Logging / checkpoints -----------------------------------------------------
+logger: csv                # csv or wandb
+log_dir: logs
+run_name: finetuning
+# wandb_project: my-project
+# wandb_name: run-1
+
+checkpoint: true
+checkpoint_dir: checkpoints
+save_top_k: 1
+# checkpoint_every_n_epochs: 10
+# resume_from: last         # explicit .ckpt path, or "last" to resume <checkpoint_dir>/last.ckpt
+
+model_dir: ./finetuned_model

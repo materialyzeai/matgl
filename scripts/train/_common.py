@@ -2,9 +2,9 @@
 
 Both ``train_pes.py`` (train a potential from scratch) and ``finetune_pes.py``
 (continue training a pre-trained potential) read a single YAML/JSON config file and build the
-same pieces: datasets loaded from pymatgen-serialized structure JSONs, MatGL
-dataloaders, and a PyTorch Lightning trainer. Those pieces live here so the two
-entry-point scripts stay thin and consistent.
+same pieces: datasets loaded from pymatgen-serialized structure JSONs or
+ASE-readable trajectory files, MatGL dataloaders, and a PyTorch Lightning trainer.
+Those pieces live here so the two entry-point scripts stay thin and consistent.
 
 The flow mirrors ``examples/Training a QET Potential with PyTorch Lightning.ipynb``
 (converter -> ``MGLDataset`` -> ``MGLDataLoader`` -> ``PotentialLightningModule``
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import warnings
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -30,6 +31,7 @@ from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger, WandbLogger
 from monty.serialization import loadfn
 
+from matgl.apps.pes import EV_PER_ANG3_TO_GPA
 from matgl.config import DEFAULT_ELEMENTS
 from matgl.ext.pymatgen import Structure2Graph, get_element_list
 from matgl.graph.data import MGLDataLoader, MGLDataset, collate_fn_pes, split_dataset
@@ -85,7 +87,7 @@ def load_config(path: str) -> dict[str, Any]:
     return json.loads(json.dumps(config))
 
 
-def load_structures_labels(path: str) -> tuple[list[Structure], dict[str, list]]:
+def load_pymatgen_json(path: str) -> tuple[list[Structure], dict[str, list]]:
     """Load a dataset JSON of pymatgen structures and their labels.
 
     The file is expected to deserialize to a mapping of the form::
@@ -117,6 +119,73 @@ def load_structures_labels(path: str) -> tuple[list[Structure], dict[str, list]]
     return structures, labels
 
 
+def load_ase_structures_labels(path: str) -> tuple[list[Structure], dict[str, list]]:
+    """Load structures and PES labels from an ASE-readable trajectory file.
+
+    Every frame in the file (e.g. an extended-XYZ or ASE ``.traj``) is converted
+    to a pymatgen ``Structure`` and its calculator results become labels. Energy
+    and forces must be present on every frame; stress is included only when every
+    frame carries it (a mix raises, since a partial label can't be collated).
+
+    Args:
+        path: Path to any file ``ase.io.read`` understands.
+
+    Returns:
+        A ``(structures, labels)`` tuple with the same shape as
+        :func:`load_pymatgen_json` (energies as floats, forces as ``(N, 3)``
+        lists, stresses as ``3x3`` lists).
+    """
+    from ase.calculators.calculator import PropertyNotImplementedError
+    from ase.io import read
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    frames = read(path, index=":")
+    if not isinstance(frames, list):  # a single-frame file yields one Atoms object
+        frames = [frames]
+    if len(frames) == 0:
+        raise ValueError(f"Dataset file {path!r} contains no structures.")
+
+    structures: list[Structure] = []
+    energies: list[float] = []
+    forces: list[list] = []
+    stresses: list[list] = []
+    for idx, atoms in enumerate(frames):
+        structures.append(AseAtomsAdaptor.get_structure(atoms))
+        try:
+            energies.append(float(atoms.get_potential_energy()))
+            forces.append(atoms.get_forces().tolist())
+        except (PropertyNotImplementedError, RuntimeError) as exc:
+            raise ValueError(f"Frame {idx} of {path!r} is missing energy/forces labels.") from exc
+        try:
+            stresses.append(atoms.get_stress(voigt=False).tolist())
+        except (PropertyNotImplementedError, RuntimeError):
+            stresses.append(None)  # type: ignore[arg-type]
+
+    labels: dict[str, list] = {"energies": energies, "forces": forces}
+    if all(s is not None for s in stresses):
+        labels["stresses"] = stresses
+    elif any(s is not None for s in stresses):
+        raise ValueError(f"Dataset file {path!r} has stress on some frames but not others.")
+    return structures, labels
+
+
+def load_structures_labels(path: str) -> tuple[list[Structure], dict[str, list]]:
+    """Load structures + labels from a pymatgen JSON or an ASE-readable file.
+
+    A ``.json`` file is read as a pymatgen structure dump; anything else
+    (``.xyz`` / ``.extxyz`` / ``.traj`` / ...) is read with ASE.
+
+    Args:
+        path: Path to the dataset file.
+
+    Returns:
+        A ``(structures, labels)`` tuple ready to hand to :func:`build_dataset`.
+    """
+    if Path(path).suffix.lower() == ".json":
+        return load_pymatgen_json(path)
+    return load_ase_structures_labels(path)
+
+
 def resolve_element_types(config: dict[str, Any], structures: list[Structure]) -> tuple[str, ...]:
     """Resolve the element table used to build graphs.
 
@@ -137,6 +206,42 @@ def resolve_element_types(config: dict[str, Any], structures: list[Structure]) -
     if element_types == "auto":
         return tuple(get_element_list(structures))
     return tuple(element_types)
+
+
+# Factor to multiply a dataset's stresses by to reach MatGL's internal GPa unit.
+STRESS_TO_GPA = {"GPa": 1.0, "eV/A3": EV_PER_ANG3_TO_GPA, "eV/A^3": EV_PER_ANG3_TO_GPA}
+
+
+def convert_stress_labels(labels_dicts: list[dict[str, list]], config: dict[str, Any]) -> None:
+    """Scale every ``stresses`` entry to GPa in place, per ``config['stress_unit']``.
+
+    MatGL trains and predicts stress in GPa, so dataset stresses given in other
+    units must be converted first. ``config['stress_unit']`` may be ``"GPa"`` (the
+    MatGL convention) or ``"eV/A3"`` (a.k.a. ``"eV/A^3"``). When the key is absent
+    a warning is emitted and GPa is assumed. A no-op when no split carries stress.
+
+    Args:
+        labels_dicts: The label dicts of the splits to convert (modified in place).
+        config: The training config (reads ``stress_unit``).
+    """
+    if not any("stresses" in labels for labels in labels_dicts):
+        return
+    unit = config.get("stress_unit")
+    if unit is None:
+        warnings.warn(
+            "No 'stress_unit' set in config; assuming dataset stresses are in GPa (MatGL's "
+            "convention). Set 'stress_unit: eV/A3' if your stresses are in eV/Ang^3.",
+            stacklevel=2,
+        )
+        unit = "GPa"
+    if unit not in STRESS_TO_GPA:
+        raise ValueError(f"Unsupported stress_unit {unit!r}; expected one of {sorted(STRESS_TO_GPA)}.")
+    factor = STRESS_TO_GPA[unit]
+    if factor == 1.0:
+        return
+    for labels in labels_dicts:
+        if "stresses" in labels:
+            labels["stresses"] = (np.asarray(labels["stresses"], dtype=float) * factor).tolist()
 
 
 def build_dataset(
@@ -191,6 +296,8 @@ def build_datasets(
     The element table is resolved once (from the training structures) and shared
     across all splits, then returned so callers don't have to reach into dataset
     internals (split datasets are plain ``Subset`` objects with no structures).
+    Dataset stresses are converted to GPa per ``config['stress_unit']`` (see
+    :func:`convert_stress_labels`).
 
     Args:
         config: The training config.
@@ -204,6 +311,7 @@ def build_datasets(
 
     if config.get("dataset"):
         structures, labels = load_structures_labels(config["dataset"])
+        convert_stress_labels([labels], config)
         element_types = resolve_element_types(config, structures)
         dataset = build_dataset(
             structures,
@@ -225,18 +333,21 @@ def build_datasets(
             "Config must provide either 'dataset' (single file + 'frac_list') or both 'train' and 'val' file paths."
         )
 
-    train_structs, train_labels = load_structures_labels(config["train"])
-    val_structs, val_labels = load_structures_labels(config["val"])
+    splits = {
+        "train": load_structures_labels(config["train"]),
+        "val": load_structures_labels(config["val"]),
+    }
+    if config.get("test"):
+        splits["test"] = load_structures_labels(config["test"])
+    # Resolve stress units once across all splits so the warning fires at most once.
+    convert_stress_labels([labels for _, labels in splits.values()], config)
     # Element table is resolved from the training structures so train/val/test share it.
-    element_types = resolve_element_types(config, train_structs)
+    element_types = resolve_element_types(config, splits["train"][0])
     build = partial(build_dataset, cutoff=cutoff, element_types=element_types, include_line_graph=include_line_graph)
 
-    train_data = build(train_structs, train_labels)
-    val_data = build(val_structs, val_labels)
-    test_data = None
-    if config.get("test"):
-        test_structs, test_labels = load_structures_labels(config["test"])
-        test_data = build(test_structs, test_labels)
+    train_data = build(*splits["train"])
+    val_data = build(*splits["val"])
+    test_data = build(*splits["test"]) if "test" in splits else None
     return train_data, val_data, test_data, element_types
 
 

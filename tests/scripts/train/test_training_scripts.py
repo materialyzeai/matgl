@@ -57,12 +57,49 @@ def _write_dataset(path: Path, n: int) -> None:
     path.write_text(json.dumps({"structures": [s.as_dict() for s in structures], "labels": labels}))
 
 
+def _write_ase_dataset(path: Path, n: int, *, with_stress: bool = True) -> None:
+    """Write ``n`` frames to an extended-XYZ file with attached PES results."""
+    import ase.io
+    from ase.calculators.singlepoint import SinglePointCalculator
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    frames = []
+    for i, structure in enumerate(_make_structures(n)):
+        atoms = AseAtomsAdaptor.get_atoms(structure)
+        results = {
+            "energy": -1.9 * len(structure),
+            "forces": (np.random.default_rng(i).standard_normal((4, 3)) * 0.01).tolist(),
+        }
+        if with_stress:
+            results["stress"] = [0.1, 0.1, 0.1, 0.0, 0.0, 0.0]  # voigt-6
+        atoms.calc = SinglePointCalculator(atoms, **results)
+        frames.append(atoms)
+    ase.io.write(str(path), frames, format="extxyz")
+
+
 @pytest.fixture
 def dataset_files(tmp_path: Path) -> tuple[Path, Path]:
     train, val = tmp_path / "train.json", tmp_path / "val.json"
     _write_dataset(train, 6)
     _write_dataset(val, 2)
     return train, val
+
+
+@pytest.fixture
+def pretrained_dir(tmp_path: Path, dataset_files: tuple[Path, Path]) -> Path:
+    """Save a tiny ``Potential`` to a local dir for finetune tests (no network)."""
+    from matgl.apps.pes import Potential
+    from matgl.models import TensorNet
+
+    train, val = dataset_files
+    config = {"train": str(train), "val": str(val), "cutoff": 4.0, "element_types": "auto"}
+    train_data, _, _, element_types = _common.build_datasets(config)
+    model = TensorNet(element_types=element_types, is_intensive=False, units=16, nblocks=1)
+    refs = _common.compute_element_refs(train_data, element_types)
+    pot = Potential(model=model, element_refs=refs)
+    out = tmp_path / "pretrained"
+    pot.save(out)
+    return out
 
 
 def test_load_config_coerces_ruamel_scalars(tmp_path: Path) -> None:
@@ -195,3 +232,247 @@ def test_train_checkpoint_and_resume(dataset_files: tuple[Path, Path], tmp_path:
     trainer = run(resume_config)
     # Resumed from the end of epoch 0 and trained one more epoch.
     assert trainer.current_epoch == 2
+
+
+# --- ASE-readable dataset loading ---------------------------------------------
+
+
+def test_load_ase_extxyz_with_stress(tmp_path: Path) -> None:
+    """A non-.json file is read with ASE; energy/forces/stress become labels."""
+    path = tmp_path / "data.extxyz"
+    _write_ase_dataset(path, 3, with_stress=True)
+    structures, labels = _common.load_structures_labels(str(path))
+    assert len(structures) == 3
+    assert sorted(labels) == ["energies", "forces", "stresses"]
+    assert np.shape(labels["forces"][0]) == (4, 3)
+    assert np.shape(labels["stresses"][0]) == (3, 3)
+
+
+def test_load_ase_without_stress_omits_key(tmp_path: Path) -> None:
+    """Stress is only emitted when present; energy/forces still load."""
+    path = tmp_path / "data.extxyz"
+    _write_ase_dataset(path, 2, with_stress=False)
+    _, labels = _common.load_structures_labels(str(path))
+    assert sorted(labels) == ["energies", "forces"]
+
+
+def test_load_ase_partial_stress_raises(tmp_path: Path) -> None:
+    """A file with stress on only some frames is rejected (can't be collated)."""
+    import ase.io
+    from ase.calculators.singlepoint import SinglePointCalculator
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    frames = []
+    for i, structure in enumerate(_make_structures(2)):
+        atoms = AseAtomsAdaptor.get_atoms(structure)
+        results = {"energy": -7.6, "forces": [[0.0, 0.0, 0.0]] * 4}
+        if i == 0:
+            results["stress"] = [0.1, 0.1, 0.1, 0.0, 0.0, 0.0]
+        atoms.calc = SinglePointCalculator(atoms, **results)
+        frames.append(atoms)
+    path = tmp_path / "mixed.extxyz"
+    ase.io.write(str(path), frames, format="extxyz")
+    with pytest.raises(ValueError, match="stress on some frames"):
+        _common.load_structures_labels(str(path))
+
+
+def test_build_datasets_from_ase_files(tmp_path: Path) -> None:
+    """build_datasets transparently accepts ASE files for train/val."""
+    train, val = tmp_path / "train.extxyz", tmp_path / "val.extxyz"
+    _write_ase_dataset(train, 4)
+    _write_ase_dataset(val, 2)
+    config = {"train": str(train), "val": str(val), "cutoff": 4.0, "element_types": "auto"}
+    train_data, val_data, test_data, element_types = _common.build_datasets(config)
+    assert len(train_data) == 4
+    assert len(val_data) == 2
+    assert test_data is None
+    assert element_types == ("Li",)
+
+
+# --- helper-level coverage ----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "extra", "checks"),
+    [
+        ("Adam", {}, {}),
+        ("AdamW", {"weight_decay": 0.01}, {"weight_decay": 0.01}),
+        ("SGD", {"momentum": 0.9, "nesterov": True}, {"momentum": 0.9, "nesterov": True}),
+        ("RMSprop", {"alpha": 0.99}, {"alpha": 0.99}),
+        ("Adamax", {}, {}),
+    ],
+)
+def test_build_optimizer(name: str, extra: dict, checks: dict) -> None:
+    """Each named torch.optim class is built with lr + optimizer_args applied."""
+    params = [torch.nn.Parameter(torch.zeros(1))]
+    optimizer = _common.build_optimizer(params, {"optimizer": name, "lr": 0.01, "optimizer_args": extra})
+    assert type(optimizer).__name__ == name
+    assert optimizer.param_groups[0]["lr"] == 0.01
+    for key, value in checks.items():
+        assert optimizer.param_groups[0][key] == value
+
+
+def test_build_scheduler_defaults_to_cosine() -> None:
+    """With no 'scheduler' key, a CosineAnnealingLR over (max_epochs - warmup) is built."""
+    optimizer = torch.optim.Adam([torch.nn.Parameter(torch.zeros(1))], lr=0.01)
+    scheduler = _common.build_scheduler(optimizer, {"lr": 0.01, "max_epochs": 10, "warmup_epochs": 0})
+    assert isinstance(scheduler, torch.optim.lr_scheduler.CosineAnnealingLR)
+    assert scheduler.T_max == 10
+
+
+def test_build_datasets_single_file_split(tmp_path: Path) -> None:
+    """A single 'dataset' file is split by 'frac_list' into train/val/test."""
+    path = tmp_path / "all.json"
+    _write_dataset(path, 10)
+    config = {
+        "dataset": str(path),
+        "cutoff": 4.0,
+        "element_types": "auto",
+        "frac_list": [0.6, 0.2, 0.2],
+        "random_state": 1,
+    }
+    train_data, val_data, test_data, element_types = _common.build_datasets(config)
+    assert len(train_data) + len(val_data) + len(test_data) == 10
+    assert element_types == ("Li",)
+
+
+def test_build_datasets_requires_dataset_or_train_val() -> None:
+    """Omitting both 'dataset' and 'train'/'val' is a configuration error."""
+    with pytest.raises(ValueError, match="train"):
+        _common.build_datasets({"cutoff": 4.0})
+
+
+# --- stress unit handling -----------------------------------------------------
+
+
+def test_convert_stress_labels_ev_per_ang3_to_gpa() -> None:
+    """eV/A3 stresses are scaled by EV_PER_ANG3_TO_GPA; energies/forces untouched."""
+    from matgl.apps.pes import EV_PER_ANG3_TO_GPA
+
+    labels = {"energies": [-1.0], "forces": [[[0.0, 0.0, 0.0]]], "stresses": [[[1.0, 0.0, 0.0]] * 3]}
+    _common.convert_stress_labels([labels], {"stress_unit": "eV/A3"})
+    np.testing.assert_allclose(labels["stresses"][0][0][0], EV_PER_ANG3_TO_GPA)
+
+
+def test_convert_stress_labels_gpa_is_noop() -> None:
+    """An explicit GPa unit leaves the stresses unchanged and warns nothing."""
+    import warnings
+
+    labels = {"stresses": [[[5.0, 0.0, 0.0]] * 3]}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any warning would fail the test
+        _common.convert_stress_labels([labels], {"stress_unit": "GPa"})
+    assert labels["stresses"][0][0][0] == 5.0
+
+
+def test_convert_stress_labels_warns_when_unit_omitted() -> None:
+    """Omitting stress_unit while stresses are present assumes GPa with a warning."""
+    labels = {"stresses": [[[5.0, 0.0, 0.0]] * 3]}
+    with pytest.warns(UserWarning, match="GPa"):
+        _common.convert_stress_labels([labels], {})
+    assert labels["stresses"][0][0][0] == 5.0  # GPa assumed -> no scaling
+
+
+def test_convert_stress_labels_no_stress_no_warning() -> None:
+    """No warning is emitted when no split carries stress, even without a unit."""
+    import warnings
+
+    labels = {"energies": [-1.0], "forces": [[[0.0, 0.0, 0.0]]]}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _common.convert_stress_labels([labels], {})
+
+
+def test_convert_stress_labels_rejects_unknown_unit() -> None:
+    """An unrecognised stress_unit is a configuration error."""
+    labels = {"stresses": [[[1.0, 0.0, 0.0]] * 3]}
+    with pytest.raises(ValueError, match="stress_unit"):
+        _common.convert_stress_labels([labels], {"stress_unit": "bar"})
+
+
+def test_build_datasets_converts_stress_units(tmp_path: Path) -> None:
+    """build_datasets applies the eV/A3 -> GPa conversion to loaded stresses."""
+    from matgl.apps.pes import EV_PER_ANG3_TO_GPA
+
+    structures = _make_structures(4)
+    labels = {
+        "energies": [-1.9 * len(s) for s in structures],
+        "forces": [[[0.0, 0.0, 0.0]] * 4 for _ in structures],
+        "stresses": [[[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]] for _ in structures],
+    }
+    path = tmp_path / "all.json"
+    path.write_text(json.dumps({"structures": [s.as_dict() for s in structures], "labels": labels}))
+    config = {"dataset": str(path), "cutoff": 4.0, "element_types": "auto", "stress_unit": "eV/A3"}
+    train_data, _, _, _ = _common.build_datasets(config)
+    # The graph for the first sample carries the converted stress.
+    stress = train_data[0][-1]["stresses"]
+    np.testing.assert_allclose(float(np.asarray(stress).reshape(-1)[0]), EV_PER_ANG3_TO_GPA, rtol=1e-5)
+
+
+# --- end-to-end main() smoke tests --------------------------------------------
+
+
+def _base_pes_config(train: Path, val: Path, tmp_path: Path, out: Path) -> dict:
+    return {
+        "cutoff": 4.0,
+        "train": str(train),
+        "val": str(val),
+        "batch_size": 2,
+        "force_weight": 1.0,
+        "stress_weight": 0.0,
+        "lr": 1e-3,
+        "accelerator": "cpu",
+        "logger": "csv",
+        "log_dir": str(tmp_path / "logs"),
+        "checkpoint": False,
+        "max_epochs": 1,
+        "model_dir": str(out),
+    }
+
+
+def test_train_main_writes_loadable_model(dataset_files, tmp_path: Path, monkeypatch) -> None:
+    """train_pes.main runs from a config file and saves a reloadable model."""
+    import matgl
+
+    train, val = dataset_files
+    out = tmp_path / "trained"
+    config = {
+        **_base_pes_config(train, val, tmp_path, out),
+        "model": "TensorNet",
+        "model_args": {"units": 16, "nblocks": 1},
+        "element_types": "auto",
+    }
+    cfg_path = tmp_path / "train.yaml"
+    yaml.safe_dump(config, cfg_path.open("w"))
+
+    train_module = _load_script("train_pes")
+    monkeypatch.setattr(sys, "argv", ["train_pes", "--config", str(cfg_path)])
+    train_module.main()
+
+    assert (out / "model.pt").exists()
+    assert (out / "model.json").exists()
+    matgl.load_model(str(out))  # round-trips without error
+
+
+def test_finetune_main_pins_pretrained_element_types(
+    pretrained_dir, dataset_files, tmp_path: Path, monkeypatch
+) -> None:
+    """finetune_pes.main loads the local model and ignores a conflicting element_types."""
+    import matgl
+
+    train, val = dataset_files
+    out = tmp_path / "finetuned"
+    config = {
+        **_base_pes_config(train, val, tmp_path, out),
+        "model": str(pretrained_dir),
+        "element_types": ["H", "He"],  # deliberately wrong; must be overridden by the pre-trained table
+    }
+    cfg_path = tmp_path / "finetune.yaml"
+    yaml.safe_dump(config, cfg_path.open("w"))
+
+    finetune_module = _load_script("finetune_pes")
+    monkeypatch.setattr(sys, "argv", ["finetune_pes", "--config", str(cfg_path)])
+    finetune_module.main()
+
+    nnp = matgl.load_model(str(out))
+    assert nnp.model.element_types == ("Li",)

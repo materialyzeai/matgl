@@ -1,22 +1,25 @@
-# Example config for scripts/train/train_pes.py and scripts/train/finetune_pes.py.
-# Run with:  python scripts/train/train_pes.py --config config_example.yaml
+# Example config for training a MatGL potential FROM SCRATCH.
+# Run with:  python scripts/train/train_pes.py --config config_train_example.yaml
+#
+# For finetuning a pre-trained model instead, see config_finetune_example.yaml.
 
 # --- Model ---------------------------------------------------------------------
-# train_pes.py:    one of M3GNet / CHGNet / TensorNet / SO3Net / QET (built from model_args).
-# finetune_pes.py: a Hugging Face Hub name (e.g. M3GNet-MP-2021.2.8-PES) or a local model dir.
+# One of M3GNet / CHGNet / TensorNet / SO3Net / QET, built from model_args.
 model: M3GNet
 model_args:
   units: 64
 cutoff: 5.0
 # element_types: omit for matgl's DEFAULT_ELEMENTS, "auto" to derive from the
-# training structures, or give an explicit list like [Li, Fe, O]. Ignored by
-# finetune_pes.py, which takes the table from the pre-trained model.
+# training structures, or give an explicit list like [Li, Fe, O].
 element_types: auto
 
 # --- Datasets ------------------------------------------------------------------
-# Each file is a JSON of pymatgen structures + labels:
+# Each .json file is a pymatgen structure dump + labels:
 #   {"structures": [<Structure dict>, ...],
 #    "labels": {"energies": [...], "forces": [...], "stresses": [...]}}
+# Any non-.json path is read with ASE (e.g. .extxyz / .traj); energy + forces are
+# required per frame and stress is picked up when present, e.g.:
+#   train: data/train.extxyz
 train: data/train.json
 val: data/val.json
 test: data/test.json
@@ -34,15 +37,34 @@ num_workers: 0
 energy_weight: 1.0
 force_weight: 1.0
 stress_weight: 0.1   # set 0.0 to ignore stress (also drops it from collation)
+# Unit of the stresses in your dataset. MatGL trains in GPa, so eV/A3 data is
+# converted to GPa on load. Omit to assume GPa (a warning is printed).
+stress_unit: GPa     # GPa or eV/A3
 
 # --- Optimizer / LR schedule ---------------------------------------------------
 lr: 0.001
 optimizer: Adam            # any torch.optim class name
 # optimizer_args: {weight_decay: 0.0}
+#
+# Examples for other optimizers (uncomment one, and comment out the Adam block
+# above). optimizer_args are passed straight to the torch.optim constructor.
+#
+# optimizer: AdamW
+# optimizer_args: {weight_decay: 0.01}
+#
+# optimizer: SGD
+# optimizer_args: {momentum: 0.9, nesterov: true, weight_decay: 0.0001}
+#
+# optimizer: RMSprop
+# optimizer_args: {alpha: 0.99, momentum: 0.0}
+#
+# optimizer: Adamax
+# optimizer_args: {weight_decay: 0.0}
+
 scheduler: CosineAnnealingLR   # any torch.optim.lr_scheduler class name; default CosineAnnealingLR
 scheduler_args:
   T_max: 100               # in EPOCHS (the scheduler is stepped once per epoch)
-warmup_epochs: 5           # linear LR warmup epochs (0 to disable); not allowed with ReduceLROnPlateau
+warmup_epochs: 0           # linear LR warmup epochs (0 to disable); not allowed with ReduceLROnPlateau
 metric_to_track: val_Total_Loss   # monitored by ReduceLROnPlateau and ModelCheckpoint
 max_epochs: 100
 
