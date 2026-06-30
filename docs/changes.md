@@ -7,6 +7,11 @@ nav_order: 3
 # Change Log
 
 ## Unreleased
+- **Config-driven training scripts (`scripts/train/`).** New `train_pes.py` and `finetune_pes.py`,
+  driven by a single YAML/JSON config (example configs included). Support: optimizer/scheduler by name
+  (`torch.optim` / `lr_scheduler`, default `CosineAnnealingLR`), optional linear LR warmup, datasets
+  from pymatgen JSON or ASE files (`.extxyz`/`.traj`), `stress_unit` conversion to GPa, train/val/test
+  or on-the-fly split, checkpoint/resume, and CSV/W&B logging.
 - **Bug fix: LR schedulers now step once per epoch.** `MatglLightningModuleMixin` previously advanced
   the learning-rate scheduler twice per epoch — once in `on_train_epoch_end` and once via Lightning,
   because `configure_optimizers` returned the `([opt], [sched])` list form that Lightning also steps.
