@@ -60,9 +60,13 @@ optimizer: Adam            # any torch.optim class name
 # optimizer: Adamax
 # optimizer_args: {weight_decay: 0.0}
 
-scheduler: CosineAnnealingLR   # any torch.optim.lr_scheduler class name; default CosineAnnealingLR
-scheduler_args:
-  T_max: 50                # in EPOCHS (the scheduler is stepped once per epoch)
+# scheduler: any torch.optim.lr_scheduler class name (stepped once per epoch).
+# Omit it to use MatGL's default CosineAnnealingLR, parameterised by decay_steps
+# / decay_alpha below (T_max=decay_steps, eta_min=lr*decay_alpha).
+# scheduler: CosineAnnealingLR
+# scheduler_args: {T_max: 50}    # in EPOCHS, overrides decay_steps for the default
+decay_steps: 1000          # default CosineAnnealingLR T_max (epochs)
+decay_alpha: 0.01          # default CosineAnnealingLR eta_min = lr * decay_alpha
 warmup_epochs: 5           # linear LR warmup epochs (recommended for finetuning); not allowed with ReduceLROnPlateau
 metric_to_track: val_Total_Loss   # monitored by ReduceLROnPlateau and ModelCheckpoint
 max_epochs: 50

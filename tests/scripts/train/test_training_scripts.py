@@ -312,12 +312,22 @@ def test_build_optimizer(name: str, extra: dict, checks: dict) -> None:
         assert optimizer.param_groups[0][key] == value
 
 
-def test_build_scheduler_defaults_to_cosine() -> None:
-    """With no 'scheduler' key, a CosineAnnealingLR over (max_epochs - warmup) is built."""
+def test_build_scheduler_defaults_to_matgl_cosine() -> None:
+    """With no 'scheduler' key, the default matches MatGL's CosineAnnealingLR."""
     optimizer = torch.optim.Adam([torch.nn.Parameter(torch.zeros(1))], lr=0.01)
-    scheduler = _common.build_scheduler(optimizer, {"lr": 0.01, "max_epochs": 10, "warmup_epochs": 0})
+    scheduler = _common.build_scheduler(optimizer, {"lr": 0.01, "max_epochs": 10})
     assert isinstance(scheduler, torch.optim.lr_scheduler.CosineAnnealingLR)
-    assert scheduler.T_max == 10
+    # MatGL defaults: T_max=decay_steps (1000), eta_min=lr*decay_alpha (0.01).
+    assert scheduler.T_max == 1000
+    assert scheduler.eta_min == pytest.approx(0.01 * 0.01)
+
+
+def test_build_scheduler_respects_decay_overrides() -> None:
+    """decay_steps / decay_alpha override the MatGL default cosine parameters."""
+    optimizer = torch.optim.Adam([torch.nn.Parameter(torch.zeros(1))], lr=0.02)
+    scheduler = _common.build_scheduler(optimizer, {"lr": 0.02, "decay_steps": 50, "decay_alpha": 0.1})
+    assert scheduler.T_max == 50
+    assert scheduler.eta_min == pytest.approx(0.02 * 0.1)
 
 
 def test_build_datasets_single_file_split(tmp_path: Path) -> None:

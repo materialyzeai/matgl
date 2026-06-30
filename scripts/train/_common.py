@@ -440,9 +440,12 @@ def build_scheduler(
     """Build an epoch-based LR scheduler with optional linear warmup.
 
     The decay scheduler is the ``torch.optim.lr_scheduler`` class named by
-    ``config['scheduler']`` (with ``config['scheduler_args']``), falling back to
-    ``CosineAnnealingLR``. When ``config['warmup_epochs'] > 0`` a linear warmup is
-    prepended via ``SequentialLR``.
+    ``config['scheduler']`` (with ``config['scheduler_args']``). When no scheduler
+    is named it falls back to the same ``CosineAnnealingLR`` MatGL uses by default
+    (``T_max=decay_steps``, ``eta_min=lr * decay_alpha``; see
+    ``matgl.utils.training.MatglLightningModuleMixin.configure_optimizers``), with
+    the same ``decay_steps=1000`` / ``decay_alpha=0.01`` defaults. When
+    ``config['warmup_epochs'] > 0`` a linear warmup is prepended via ``SequentialLR``.
 
     Args:
         optimizer: The optimizer to schedule.
@@ -461,8 +464,8 @@ def build_scheduler(
     else:
         decay_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            T_max=config.get("decay_steps", config["max_epochs"]) - warmup_epochs,
-            eta_min=lr * config.get("decay_alpha", 0.0),
+            T_max=config.get("decay_steps", 1000),
+            eta_min=lr * config.get("decay_alpha", 0.01),
         )
 
     if warmup_epochs > 0:
