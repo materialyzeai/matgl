@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
     from pathlib import Path
 
+    from lightning.pytorch.utilities.types import OptimizerLRScheduler
     from numpy.typing import ArrayLike
     from torch.optim import Optimizer
     from torch.optim.lr_scheduler import LRScheduler
@@ -32,6 +33,11 @@ if TYPE_CHECKING:
 
 class MatglLightningModuleMixin:
     """Mix-in class implementing common functions for training."""
+
+    # Defaults for the LR-scheduler config returned by ``configure_optimizers``.
+    # Concrete modules override these via their ``__init__`` arguments.
+    lr_scheduler_interval: str = "epoch"
+    lr_scheduler_monitor: str = "val_Total_Loss"
 
     def training_step(self, batch: tuple, batch_idx: int) -> Any:
         """Training step.
@@ -54,11 +60,6 @@ class MatglLightningModuleMixin:
         )
 
         return results["Total_Loss"]
-
-    def on_train_epoch_end(self) -> None:
-        """Step scheduler every epoch."""
-        sch = self.lr_schedulers()  # type: ignore[attr-defined]
-        sch.step()
 
     def optimizer_zero_grad(
         self,
@@ -114,8 +115,14 @@ class MatglLightningModuleMixin:
         )
         return results
 
-    def configure_optimizers(self) -> tuple[list[torch.optim.Optimizer], list[torch.optim.lr_scheduler.LRScheduler]]:
-        """Configure optimizers."""
+    def configure_optimizers(self) -> OptimizerLRScheduler:
+        """Configure the optimizer and an epoch-interval LR-scheduler config.
+
+        The scheduler is handed to Lightning via the ``lr_scheduler`` config so
+        Lightning steps it exactly once per ``lr_scheduler_interval`` (default
+        ``"epoch"``). A ``ReduceLROnPlateau`` scheduler additionally receives the
+        ``lr_scheduler_monitor`` metric it needs.
+        """
         if self.optimizer is None:  # type: ignore[attr-defined]
             optimizer = torch.optim.Adam(
                 self.parameters(),  # type: ignore[attr-defined]
@@ -132,11 +139,14 @@ class MatglLightningModuleMixin:
             )
         else:
             scheduler = self.scheduler  # type: ignore[attr-defined]
-        return [
-            optimizer,
-        ], [
-            scheduler,
-        ]
+        lr_scheduler_config: dict[str, Any] = {
+            "scheduler": scheduler,
+            "interval": self.lr_scheduler_interval,
+            "frequency": 1,
+        }
+        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            lr_scheduler_config["monitor"] = self.lr_scheduler_monitor
+        return cast("OptimizerLRScheduler", {"optimizer": optimizer, "lr_scheduler": lr_scheduler_config})
 
     def on_test_model_eval(self, *args: Any, **kwargs: Any) -> None:
         """Executed on model testing.
@@ -179,6 +189,8 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         lr: float = 0.001,
         decay_steps: int = 1000,
         decay_alpha: float = 0.01,
+        lr_scheduler_interval: str = "epoch",
+        lr_scheduler_monitor: str = "val_Total_Loss",
         sync_dist: bool = False,
         **kwargs,
     ):
@@ -196,6 +208,9 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             lr: learning rate for training
             decay_steps: number of steps for decaying learning rate
             decay_alpha: parameter determines the minimum learning rate.
+            lr_scheduler_interval: how often Lightning steps the scheduler,
+                ``"epoch"`` (default) or ``"step"``.
+            lr_scheduler_monitor: metric a ``ReduceLROnPlateau`` scheduler watches.
             sync_dist: whether sync logging across all GPU workers or not
             **kwargs: Passthrough to parent init.
         """
@@ -210,6 +225,8 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         self.lr = lr
         self.decay_steps = decay_steps
         self.decay_alpha = decay_alpha
+        self.lr_scheduler_interval = lr_scheduler_interval
+        self.lr_scheduler_monitor = lr_scheduler_monitor
         if loss == "mse_loss":
             self.loss = F.mse_loss
         elif loss == "huber_loss":
@@ -323,6 +340,8 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         lr: float = 0.001,
         decay_steps: int = 1000,
         decay_alpha: float = 0.01,
+        lr_scheduler_interval: str = "epoch",
+        lr_scheduler_monitor: str = "val_Total_Loss",
         sync_dist: bool = False,
         allow_missing_labels: bool = False,
         magmom_target: Literal["absolute", "symbreak"] | None = "absolute",
@@ -348,6 +367,9 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             lr: learning rate for training
             decay_steps: number of steps for decaying learning rate
             decay_alpha: parameter determines the minimum learning rate.
+            lr_scheduler_interval: how often Lightning steps the scheduler,
+                ``"epoch"`` (default) or ``"step"``.
+            lr_scheduler_monitor: metric a ``ReduceLROnPlateau`` scheduler watches.
             sync_dist: whether sync logging across all GPU workers or not
             allow_missing_labels: Whether to allow missing labels or not.
                 These should be present in the dataset as torch.nans and will be skipped in computing the loss.
@@ -376,6 +398,8 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         self.lr = lr
         self.decay_steps = decay_steps
         self.decay_alpha = decay_alpha
+        self.lr_scheduler_interval = lr_scheduler_interval
+        self.lr_scheduler_monitor = lr_scheduler_monitor
         self.include_line_graph = include_line_graph
 
         self.model = Potential(

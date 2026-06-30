@@ -80,8 +80,9 @@ class TestModelTrainer:
         pred_BNO_energy = model.predict_structure(BaNiO3)
 
         # We are not expecting accuracy with 10 epochs. This just tests that the energy is actually < 0.
-        assert torch.allclose(pred_LFP_energy, torch.tensor([-2.8354]), atol=1e-4)
-        assert torch.allclose(pred_BNO_energy, torch.tensor([-2.6534]), atol=1e-4)
+        # NB: values updated when the LR scheduler was fixed to step once (not twice) per epoch.
+        assert torch.allclose(pred_LFP_energy, torch.tensor([-2.8343]), atol=1e-4)
+        assert torch.allclose(pred_BNO_energy, torch.tensor([-2.6521]), atol=1e-4)
         # specify customize optimizer and scheduler
         from torch.optim.lr_scheduler import CosineAnnealingLR
 
@@ -417,6 +418,73 @@ def test_potential_lightning_module_loss_selection(loss_name):
     model = TensorNet(use_warp=False)
     lit = PotentialLightningModule(model=model, loss=loss_name)
     assert callable(lit.loss)
+
+
+def test_configure_optimizers_returns_epoch_interval_config():
+    """configure_optimizers hands Lightning an epoch-interval lr_scheduler config."""
+    model = TensorNet(use_warp=False)
+    lit = PotentialLightningModule(model=model)
+    config = lit.configure_optimizers()
+    assert set(config) == {"optimizer", "lr_scheduler"}
+    assert config["lr_scheduler"]["interval"] == "epoch"
+    assert config["lr_scheduler"]["frequency"] == 1
+    # A plain (non-plateau) scheduler does not need a monitor key.
+    assert "monitor" not in config["lr_scheduler"]
+
+
+def test_configure_optimizers_plateau_gets_monitor():
+    """A ReduceLROnPlateau scheduler receives the configured monitor metric."""
+    model = TensorNet(use_warp=False)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+    lit = PotentialLightningModule(
+        model=model, optimizer=optimizer, scheduler=scheduler, lr_scheduler_monitor="val_Energy_MAE"
+    )
+    config = lit.configure_optimizers()
+    assert config["lr_scheduler"]["monitor"] == "val_Energy_MAE"
+
+
+def test_scheduler_steps_once_per_epoch(LiFePO4, BaNiO3):
+    """The LR must advance exactly once per epoch (regression: it used to step twice)."""
+    torch.manual_seed(0)
+    structures = [LiFePO4, BaNiO3]
+    labels = {"energies": [-1.0, -2.0], "forces": [np.zeros((len(s), 3)).tolist() for s in structures]}
+    element_types = get_element_list(structures)
+    converter = Structure2Graph(element_types=element_types, cutoff=5.0)
+    dataset = MGLDataset(structures=structures, converter=converter, labels=labels, save_cache=False)
+    train_loader, _ = MGLDataLoader(
+        train_data=dataset,
+        val_data=dataset,
+        collate_fn=partial(collate_fn_pes, include_stress=False),
+        batch_size=2,
+        num_workers=0,
+        generator=torch.Generator(device=device),
+    )
+
+    model = TensorNet(element_types=element_types, is_intensive=False, use_warp=False)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
+    lit = PotentialLightningModule(model=model, stress_weight=0.0, optimizer=optimizer, scheduler=scheduler)
+
+    seen: list[float] = []
+
+    class _LRTrace(pl.Callback):
+        def on_train_epoch_start(self, trainer, pl_module):
+            seen.append(round(trainer.optimizers[0].param_groups[0]["lr"], 6))
+
+    trainer = pl.Trainer(
+        max_epochs=3,
+        accelerator=device,
+        logger=False,
+        inference_mode=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        callbacks=[_LRTrace()],
+    )
+    trainer.fit(lit, train_loader)
+    # StepLR halving once per epoch: 0.01 -> 0.005 -> 0.0025 (not 0.0025 -> ... from double-stepping).
+    assert seen == [0.01, 0.005, 0.0025]
 
 
 def test_potential_lightning_loss_fn_no_num_atoms_branch():

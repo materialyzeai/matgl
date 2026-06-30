@@ -6,6 +6,19 @@ nav_order: 3
 
 # Change Log
 
+## Unreleased
+- **Bug fix: LR schedulers now step once per epoch.** `MatglLightningModuleMixin` previously advanced
+  the learning-rate scheduler twice per epoch — once in `on_train_epoch_end` and once via Lightning,
+  because `configure_optimizers` returned the `([opt], [sched])` list form that Lightning also steps.
+  `configure_optimizers` now returns an explicit `lr_scheduler` config (`interval="epoch"`,
+  `frequency=1`, plus `monitor` for `ReduceLROnPlateau`) and the manual `on_train_epoch_end` step has
+  been removed. **This does not affect any saved/deployed model** (the Lightning module is a training
+  harness and is never serialized; `matgl.load_model(...)` and inference are unchanged), but **models
+  retrained with the default `CosineAnnealingLR(T_max=decay_steps)` will differ slightly**, since the
+  schedule now spans the full `decay_steps` epochs instead of `decay_steps/2`. Halve `decay_steps` to
+  reproduce the previous dynamics. New `lr_scheduler_interval` / `lr_scheduler_monitor` arguments were
+  added to `ModelLightningModule` and `PotentialLightningModule`.
+
 ## 4.0.1
 - **Intermediate features now exposed via ``model.feature_dict``.** All ``MatGLModel`` subclasses
   (``TensorNet``, ``M3GNet``, ``CHGNet``, ``QET``, ``MEGNet``, ``SO3Net``, ``GRACE``, and the

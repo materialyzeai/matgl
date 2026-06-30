@@ -419,46 +419,6 @@ def compute_element_refs(train_data: MGLDataset, element_types: tuple[str, ...])
     return atom_ref.property_offset
 
 
-class TrainingLightningModule(PotentialLightningModule):
-    """``PotentialLightningModule`` with config-driven optimizer / scheduler + warmup.
-
-    MatGL's mixin steps the scheduler in ``on_train_epoch_end`` *and* returns it
-    from ``configure_optimizers`` (which Lightning also steps), advancing the LR
-    twice per epoch. We override both so the LR advances exactly once per epoch,
-    every scheduler quantity (``warmup_epochs``, ``StepLR.step_size``,
-    ``CosineAnnealingLR.T_max``, ``SequentialLR`` milestones) is interpreted in
-    epochs, and a ``ReduceLROnPlateau`` scheduler gets its ``monitor`` metric.
-    """
-
-    def set_optim(
-        self,
-        optimizer: torch.optim.Optimizer,
-        scheduler: torch.optim.lr_scheduler.LRScheduler,
-        monitor: str | None = None,
-    ) -> None:
-        """Attach the prebuilt optimizer / scheduler used by ``configure_optimizers``.
-
-        Args:
-            optimizer: The optimizer.
-            scheduler: The (possibly warmup-wrapped) LR scheduler.
-            monitor: Metric name for ``ReduceLROnPlateau``.
-        """
-        self._optimizer = optimizer
-        self._scheduler = scheduler
-        self._monitor = monitor
-
-    def configure_optimizers(self) -> dict[str, Any]:  # type: ignore[override]
-        """Hand Lightning the optimizer + an epoch-interval scheduler config."""
-        lr_scheduler_config: dict[str, Any] = {"scheduler": self._scheduler, "interval": "epoch", "frequency": 1}
-        if isinstance(self._scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-            lr_scheduler_config["monitor"] = self._monitor
-        return {"optimizer": self._optimizer, "lr_scheduler": lr_scheduler_config}
-
-    def on_train_epoch_end(self) -> None:
-        """No-op: Lightning steps the scheduler (configured above) once per epoch."""
-        return
-
-
 def build_optimizer(params: Any, config: dict[str, Any]) -> torch.optim.Optimizer:
     """Build the optimizer named by ``config['optimizer']`` (default ``Adam``).
 
@@ -522,8 +482,14 @@ def build_scheduler(
 
 def build_potential_module(
     model: torch.nn.Module, config: dict[str, Any], element_refs: np.ndarray | None
-) -> TrainingLightningModule:
+) -> PotentialLightningModule:
     """Wrap a graph model in a Lightning module with config-driven optim/schedule.
+
+    The config-built optimizer and (possibly warmup-wrapped) scheduler are handed
+    to MatGL's ``PotentialLightningModule``, which steps the scheduler once per
+    epoch via Lightning. Every scheduler quantity (``warmup_epochs``,
+    ``StepLR.step_size``, ``CosineAnnealingLR.T_max``, ``SequentialLR``
+    milestones) is therefore interpreted in epochs.
 
     Args:
         model: The graph network to train (e.g. an ``M3GNet``).
@@ -533,7 +499,7 @@ def build_potential_module(
     Returns:
         The configured Lightning module.
     """
-    lit_module = TrainingLightningModule(
+    lit_module = PotentialLightningModule(
         model=model,
         element_refs=element_refs,
         include_line_graph=config.get("include_line_graph", False),
@@ -543,10 +509,13 @@ def build_potential_module(
         magmom_weight=config.get("magmom_weight", 0.0),
         charge_weight=config.get("charge_weight", 0.0),
         lr=config.get("lr", 1e-3),
+        lr_scheduler_monitor=config.get("metric_to_track", "val_Total_Loss"),
     )
+    # configure_optimizers reads these back; build the optimizer from the wrapped
+    # module's parameters (the Potential wrapper, not just the bare model).
     optimizer = build_optimizer(lit_module.parameters(), config)
-    scheduler = build_scheduler(optimizer, config)
-    lit_module.set_optim(optimizer, scheduler, monitor=config.get("metric_to_track", "val_Total_Loss"))
+    lit_module.optimizer = optimizer
+    lit_module.scheduler = build_scheduler(optimizer, config)
     return lit_module
 
 
