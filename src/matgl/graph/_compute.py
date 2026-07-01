@@ -143,7 +143,8 @@ def _compute_3body_indices(
     triple_bond_indices = np.empty((n_triple, 2), dtype=matgl.int_np)
     start = 0
     cs = 0
-    for n in n_bond_per_atom:
+    for n_np in n_bond_per_atom:
+        n = int(n_np)
         if n > 0:
             r = np.arange(n)
             x, y = np.meshgrid(r, r, indexing="xy")
