@@ -1591,21 +1591,33 @@ class MGLPotentialTrainer:
     def _dataset_element_types(dataset: MGLDataset | Mapping[str, MGLDataset]) -> tuple[str, ...] | None:
         """Best-effort recovery of the ``element_types`` a dataset was built with.
 
-        Returns ``None`` when the dataset does not carry an ``element_types``
-        attribute (e.g. a hand-built dataset), in which case the mismatch guard
-        is skipped rather than raising a spurious error.
+        ``MGLDataset`` itself has no ``element_types`` attribute — the ordering
+        lives on its ``converter`` (``Structure2Graph``/``Molecule2Graph``),
+        which is what actually stamps ``graph.node_type``. The ``MGLDatasetLoader``
+        helpers additionally bolt an explicit ``element_types`` attribute onto the
+        dataset, so we prefer the converter (present for every dataset built from
+        structures) and fall back to that attribute.
+
+        Returns ``None`` when neither is available (e.g. a cache-only dataset
+        loaded without a converter), in which case the mismatch guard is skipped
+        rather than raising a spurious error.
         """
         from matgl.graph.data import MGLDataset
 
-        if isinstance(dataset, MGLDataset):
-            element_types = getattr(dataset, "element_types", None)
+        def _one(ds: object) -> tuple[str, ...] | None:
+            converter = getattr(ds, "converter", None)
+            element_types = getattr(converter, "element_types", None)
+            if element_types is None:
+                element_types = getattr(ds, "element_types", None)
             return tuple(element_types) if element_types is not None else None
+
+        if isinstance(dataset, MGLDataset):
+            return _one(dataset)
         # Canonical-splits mapping: any split's element_types stands in for all.
         for key in ("train", "valid", "test"):
             split = dataset.get(key) if hasattr(dataset, "get") else None
-            element_types = getattr(split, "element_types", None)
-            if element_types is not None:
-                return tuple(element_types)
+            if split is not None and (element_types := _one(split)) is not None:
+                return element_types
         return None
 
     def _validate_element_types(

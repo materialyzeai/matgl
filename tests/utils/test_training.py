@@ -689,19 +689,29 @@ def test_mgl_potential_trainer_rejects_element_types_mismatch(LiFePO4):
     trainer = MGLPotentialTrainer(model=model)
 
     subset = get_element_list([LiFePO4])  # only the elements in the data, re-ordered
-    mismatched = {"train": SimpleNamespace(element_types=subset), "valid": None, "test": None}
+
+    # A hand-built MGLDataset exposes element_types only through its converter
+    # (the common fine-tuning path) — the guard must read that, not just an
+    # explicit .element_types attribute.
+    def _ds(element_types):
+        return SimpleNamespace(converter=SimpleNamespace(element_types=element_types))
+
+    mismatched = {"train": _ds(subset), "valid": None, "test": None}
     with pytest.raises(ValueError, match="element_types mismatch"):
         trainer._validate_element_types(mismatched, None)
 
-    aligned = {"train": SimpleNamespace(element_types=DEFAULT_ELEMENTS)}
+    aligned = {"train": _ds(DEFAULT_ELEMENTS)}
     trainer._validate_element_types(aligned, None)  # matching ordering: no raise
+
+    # The explicit .element_types attribute (set by MGLDatasetLoader) also works.
+    trainer._validate_element_types({"train": SimpleNamespace(element_types=DEFAULT_ELEMENTS)}, None)
 
     # element_refs length is validated against model.element_types too.
     with pytest.raises(ValueError, match="element_refs length"):
         trainer._validate_element_types(aligned, np.zeros(len(subset)))
 
-    # Datasets without element_types (hand-built) skip the guard rather than raising.
-    trainer._validate_element_types({"train": SimpleNamespace()}, None)
+    # Datasets without any element_types (e.g. cache-only, no converter) skip the guard.
+    trainer._validate_element_types({"train": SimpleNamespace(converter=None)}, None)
 
 
 @pytest.mark.parametrize("distribution", ["normal", "uniform", "fake"])
