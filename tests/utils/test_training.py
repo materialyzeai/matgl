@@ -703,14 +703,11 @@ def test_mgl_potential_trainer_rejects_element_types_mismatch(LiFePO4):
     aligned = {"train": _ds(DEFAULT_ELEMENTS)}
     trainer._validate_element_types(aligned, None)  # matching ordering: no raise
 
-    # The explicit .element_types attribute (set by MGLDatasetLoader) also works.
-    trainer._validate_element_types({"train": SimpleNamespace(element_types=DEFAULT_ELEMENTS)}, None)
-
     # element_refs length is validated against model.element_types too.
     with pytest.raises(ValueError, match="element_refs length"):
         trainer._validate_element_types(aligned, np.zeros(len(subset)))
 
-    # Datasets without any element_types (e.g. cache-only, no converter) skip the guard.
+    # Datasets without a discoverable converter (e.g. cache-only) skip the guard.
     trainer._validate_element_types({"train": SimpleNamespace(converter=None)}, None)
 
 

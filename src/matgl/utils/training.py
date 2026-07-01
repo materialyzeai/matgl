@@ -1607,8 +1607,6 @@ class MGLPotentialTrainer:
         def _one(ds: object) -> tuple[str, ...] | None:
             converter = getattr(ds, "converter", None)
             element_types = getattr(converter, "element_types", None)
-            if element_types is None:
-                element_types = getattr(ds, "element_types", None)
             return tuple(element_types) if element_types is not None else None
 
         if isinstance(dataset, MGLDataset):
@@ -1635,11 +1633,7 @@ class MGLPotentialTrainer:
         shift is applied to the wrong element. This is a silent numerical bug,
         so we fail loudly instead.
         """
-        model_element_types = getattr(self.model, "element_types", None)
-        if not model_element_types:
-            return
-        model_element_types = tuple(model_element_types)
-
+        model_element_types = tuple(cast("Sequence[str]", self.model.element_types))
         dataset_element_types = self._dataset_element_types(dataset)
         if dataset_element_types is not None and dataset_element_types != model_element_types:
             raise ValueError(
