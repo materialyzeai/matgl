@@ -12,19 +12,17 @@ This notebook demonstrates how to train a Multi-Fidelity MEGNet Band Gap model f
 ```python
 from __future__ import annotations
 
-import gzip
+import contextlib
 import json
 import os
 import shutil
 import warnings
-import zipfile
 from copy import deepcopy
-from functools import partial
 
 import lightning as L
 import matplotlib.pyplot as plt
 import pandas as pd
-import requests
+from huggingface_hub import hf_hub_download
 from lightning.pytorch.loggers import CSVLogger
 from pymatgen.core import Structure
 
@@ -40,49 +38,33 @@ warnings.simplefilter("ignore")
 
 # Dataset Preparation
 
-We will download the original dataset used in the training of the Multi-Fidelity Band Gap model (MP.2019.4.1) from figshare. To make it easier, we will also cache the data.
+We will download the original dataset used in the training of the Multi-Fidelity Band Gap model (MP.2019.4.1) from the Hugging Face Hub: the structures from [`materialyze/mp.eform.2019.4.1`](https://huggingface.co/datasets/materialyze/mp.eform.2019.4.1) and the multi-fidelity band gaps from [`materialyze/bandgap.mfi.mp.2019.04.01`](https://huggingface.co/datasets/materialyze/bandgap.mfi.mp.2019.04.01). `hf_hub_download` caches the files locally, so subsequent runs reuse the cached copies.
 
 
 ```python
-def download_file(url, filename):
-    print(f"Downloading {filename} from {url} ...")
-    response = requests.get(url, allow_redirects=True)
-    if response.status_code == 200:
-        with open(filename, "wb") as f:
-            f.write(response.content)
-        print(f"Downloaded successfully: {filename}")
-    else:
-        print(f"Failed to download {filename}. Status code: {response.status_code}")
-
-
-## URLs and filenames
-files_to_download = {
-    "https://ndownloader.figshare.com/files/15108200": "pymatgen_structures.zip",
-    "https://figshare.com/ndownloader/articles/13040330/versions/1": "bandgap_data.zip",
-}
-
-## Download all files
-for url, filename in files_to_download.items():
-    download_file(url, filename)
-
-## List your zip files
-zip_files = ["pymatgen_structures.zip", "bandgap_data.zip"]
-
-for zip_path in zip_files:
-    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-        zip_ref.extractall()  # Extracts into the current folder
+# Download (and cache) the structures and multi-fidelity band gaps from the Hugging Face Hub.
+structure_path = hf_hub_download(
+    repo_id="materialyze/mp.eform.2019.4.1",
+    filename="mp.eform.2019.4.1.json",
+    repo_type="dataset",
+)
+bandgap_path = hf_hub_download(
+    repo_id="materialyze/bandgap.mfi.mp.2019.04.01",
+    filename="band_gap.json",
+    repo_type="dataset",
+)
 
 ALL_FIDELITIES = ["pbe", "gllb-sc", "hse", "scan"]
 
-## Load the dataset
-with open("mp.2019.04.01.json") as f:
+## Load the structures
+with open(structure_path) as f:
     structure_data = {i["material_id"]: i["structure"] for i in json.load(f)}
-print(f"All structures in mp.2019.04.01.json contain {len(structure_data)} structures")
+print(f"Structure dataset contains {len(structure_data)} structures")
 
 
 ##  Band gap data
-with gzip.open("band_gap_no_structs.gz", "rb") as f:
-    bandgap_data = json.loads(f.read())
+with open(bandgap_path) as f:
+    bandgap_data = json.load(f)
 
 useful_ids = set.union(*[set(bandgap_data[i].keys()) for i in ALL_FIDELITIES])  # mp ids that are used in training
 print(f"Only {len(useful_ids)} structures are used")
@@ -136,13 +118,12 @@ train_data, val_data, test_data = split_dataset(
     shuffle=True,
     random_state=42,
 )
-my_collate_fn = partial(collate_fn_graph, include_line_graph=False)
-# Initialize MGLDataLoder
+# Initialize MGLDataLoader
 train_loader, val_loader, test_loader = MGLDataLoader(
     train_data=train_data,
     val_data=val_data,
     test_data=test_data,
-    collate_fn=my_collate_fn,
+    collate_fn=collate_fn_graph,
     batch_size=64,
 )
 ```
@@ -199,10 +180,8 @@ _ = plt.legend()
 # This code just performs cleanup for this notebook.
 
 for fn in ("pyg_graph.pt", "lattice.pt", "pyg_line_graph.pt", "state_attr.pt", "labels.json"):
-    try:
+    with contextlib.suppress(FileNotFoundError):
         os.remove(fn)
-    except FileNotFoundError:
-        pass
 
 shutil.rmtree("logs")
 shutil.rmtree("MGLDataset")

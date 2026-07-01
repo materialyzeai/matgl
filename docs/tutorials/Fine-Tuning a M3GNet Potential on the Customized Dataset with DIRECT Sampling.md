@@ -12,6 +12,7 @@ This notebook demonstrates how to fine-tune a M3GNet potential combined with DIR
 ```python
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import warnings
@@ -38,11 +39,6 @@ except ImportError:
 # To suppress warnings for clearer output
 warnings.simplefilter("ignore")
 ```
-
-    MAML is not installed or the import failed.
-    Please install it by running:
-    pip install maml
-
 
 For the purposes of demonstration, we will download all Si-O compounds in the Materials Project via the MPRester. The forces and stresses are set to zero, though in a real context, these would be non-zero and obtained from DFT calculations.
 
@@ -93,12 +89,12 @@ We can setup the MGLDataset and MGLDataLoader for the selected structures.
 element_types = DEFAULT_ELEMENTS
 # Setup the graph converter for periodic systems
 converter = Structure2Graph(element_types=element_types, cutoff=5.0)
+# The three-body (line) graph is built on the fly inside M3GNet.forward using the
+# model's own threebody_cutoff, so the dataset does not need a threebody_cutoff.
 dataset = MGLDataset(
-    threebody_cutoff=4.0,
     structures=selected_structures,
     converter=converter,
     labels=selected_labels,
-    include_line_graph=True,
 )
 train_data, val_data, test_data = split_dataset(
     dataset,
@@ -107,7 +103,7 @@ train_data, val_data, test_data = split_dataset(
     random_state=42,
 )
 # if you are not intended to use stress for training, switch include_stress=False!
-my_collate_fn = partial(collate_fn_pes, include_line_graph=True, include_stress=True)
+my_collate_fn = partial(collate_fn_pes, include_stress=True)
 train_loader, val_loader, test_loader = MGLDataLoader(
     train_data=train_data,
     val_data=val_data,
@@ -129,9 +125,7 @@ model_pretrained = m3gnet_nnp.model
 # obtain element energy offset
 property_offset = m3gnet_nnp.element_refs.property_offset
 # you should test whether including the original property_offset helps improve training and validation accuracy
-lit_module_finetune = PotentialLightningModule(
-    model=model_pretrained, element_refs=property_offset, lr=1e-4, include_line_graph=True
-)
+lit_module_finetune = PotentialLightningModule(model=model_pretrained, element_refs=property_offset, lr=1e-4)
 ```
 
 
@@ -156,10 +150,8 @@ trained_model = matgl.load_model(path=model_save_path)
 # This code just performs cleanup for this notebook.
 
 for fn in ("pyg_graph.pt", "lattice.pt", "pyg_line_graph.pt", "state_attr.pt", "labels.json"):
-    try:
+    with contextlib.suppress(FileNotFoundError):
         os.remove(fn)
-    except FileNotFoundError:
-        pass
 
 shutil.rmtree("logs")
 shutil.rmtree("finetuned_model")
