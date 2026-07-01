@@ -19,6 +19,7 @@ from matgl.ext.pymatgen import Structure2Graph, get_element_list
 from matgl.graph.data import MGLDataLoader, MGLDataset, collate_fn_pes, split_dataset
 from matgl.models import QET, TensorNet
 from matgl.utils.training import (
+    MGLPotentialTrainer,
     ModelLightningModule,
     PotentialLightningModule,
     fit_element_refs,
@@ -665,6 +666,42 @@ def test_fit_element_refs_validates_inputs(LiFePO4):
         fit_element_refs([LiFePO4], [1.0], ("Li", "Fe", "P"))  # missing 'O'
     with pytest.raises(ValueError, match="non-empty"):
         fit_element_refs([LiFePO4], [1.0], ())
+
+
+def test_potential_lightning_module_rejects_element_refs_length_mismatch(LiFePO4):
+    """element_refs whose length != len(model.element_types) must raise, not silently mis-index."""
+    elements = get_element_list([LiFePO4])
+    model = TensorNet(element_types=elements, units=8, nblocks=1, num_rbf=8, is_intensive=False)
+    bad_refs = np.zeros(len(elements) + 1)
+    with pytest.raises(ValueError, match="element_refs length"):
+        PotentialLightningModule(model=model, element_refs=bad_refs)
+    # Correct length is accepted.
+    PotentialLightningModule(model=model, element_refs=np.zeros(len(elements)))
+
+
+def test_mgl_potential_trainer_rejects_element_types_mismatch(LiFePO4):
+    """Fine-tuning with a truncated dataset element_types must raise (the delta_E index bug)."""
+    from types import SimpleNamespace
+
+    from matgl.config import DEFAULT_ELEMENTS
+
+    model = TensorNet(element_types=DEFAULT_ELEMENTS, units=8, nblocks=1, num_rbf=8, is_intensive=False)
+    trainer = MGLPotentialTrainer(model=model)
+
+    subset = get_element_list([LiFePO4])  # only the elements in the data, re-ordered
+    mismatched = {"train": SimpleNamespace(element_types=subset), "valid": None, "test": None}
+    with pytest.raises(ValueError, match="element_types mismatch"):
+        trainer._validate_element_types(mismatched, None)
+
+    aligned = {"train": SimpleNamespace(element_types=DEFAULT_ELEMENTS)}
+    trainer._validate_element_types(aligned, None)  # matching ordering: no raise
+
+    # element_refs length is validated against model.element_types too.
+    with pytest.raises(ValueError, match="element_refs length"):
+        trainer._validate_element_types(aligned, np.zeros(len(subset)))
+
+    # Datasets without element_types (hand-built) skip the guard rather than raising.
+    trainer._validate_element_types({"train": SimpleNamespace()}, None)
 
 
 @pytest.mark.parametrize("distribution", ["normal", "uniform", "fake"])

@@ -24,11 +24,17 @@ if TYPE_CHECKING:
 def get_element_list(train_structures: list[Structure | Molecule]) -> tuple[str, ...]:
     """Get the tuple of elements in the training set for atomic features.
 
+    Use this only when **training from scratch**. When fine-tuning or otherwise
+    reusing a pre-trained (foundation) model, pass ``model.element_types``
+    instead — graph node indices are positions into ``element_types``, so a
+    truncated element list re-orders those indices and silently mis-maps every
+    atom to the wrong embedding row (and the wrong element_refs offset).
+
     Args:
         train_structures: pymatgen Molecule/Structure object
 
     Returns:
-        Tuple of elements covered in training set
+        Tuple of elements covered in training set, sorted by atomic number.
     """
     elements: set[str] = set()
     for s in train_structures:
@@ -47,8 +53,11 @@ class Molecule2Graph(GraphConverter):
         """Initialize the Molecule2Graph converter.
 
         Args:
-            element_types: List of elements present in dataset for graph conversion. This ensures all graphs are
-                constructed with the same dimensionality of features.
+            element_types: List of elements for graph conversion. This ensures all graphs are constructed with the
+                same dimensionality of features. The ordering is positional — ``node_type`` indices are positions
+                into this tuple, so it MUST match the ``element_types`` of any model the graphs are fed to. When
+                fine-tuning a foundation model, pass ``model.element_types`` (e.g. ``matgl.config.DEFAULT_ELEMENTS``),
+                not ``get_element_list(structures)``.
             cutoff: Cutoff radius for graph representation
         """
         self.element_types = tuple(element_types)
@@ -117,8 +126,11 @@ class Structure2Graph(GraphConverter):
         """Initialize the Structure2Graph converter.
 
         Args:
-            element_types: List of elements present in dataset for graph conversion. This ensures all graphs are
-                constructed with the same dimensionality of features.
+            element_types: List of elements for graph conversion. This ensures all graphs are constructed with the
+                same dimensionality of features. The ordering is positional — ``node_type`` indices are positions
+                into this tuple, so it MUST match the ``element_types`` of any model the graphs are fed to. When
+                fine-tuning a foundation model, pass ``model.element_types`` (e.g. ``matgl.config.DEFAULT_ELEMENTS``),
+                not ``get_element_list(structures)``.
             cutoff: Cutoff radius for graph representation
         """
         self.element_types = tuple(element_types)
