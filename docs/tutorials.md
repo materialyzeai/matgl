@@ -43,7 +43,7 @@ This series of notebooks demonstrate how to load and use the pretrained models f
 
 ## Training MatGL models
 
-1. [Training a MEGNet Formation Energy Model](tutorials%2FTraining%20a%20MEGNet%20Formation%20Energy%20Model%20with%20PyTorch%20Lightning.html)
+1. [Training a Formation Energy Model (M3GNet & MEGNet)](tutorials%2FTraining%20a%20Formation%20Energy%20Model%20with%20PyTorch%20Lightning.html)
 2. [Training a M3GNet Potential](tutorials%2FTraining%20a%20M3GNet%20Potential%20with%20PyTorch%20Lightning.html)
 
 [jupyternb]: https://github.com/materialsvirtuallab/matgl/tree/main/examples "Jupyter notebooks"
