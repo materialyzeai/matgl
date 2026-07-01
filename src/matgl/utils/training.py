@@ -802,7 +802,7 @@ HF_MATPES_REPO_ID = "materialyze/matpes"
 # rescales (kbar → GPa, /10) **and** flips the sign from VASP's
 # compressive-positive convention to matgl's compressive-negative one — i.e.
 # applying ``stress_unit="kbar"`` is exactly the README's "multiply VASP
-# stresses by -0.1" recipe in one step. MatPES JSONs ship raw VASP stress in
+# stresses by -0.1" recipe in one step. MatPES files ship raw VASP stress in
 # kbar, hence the default; pass ``stress_unit="GPa"`` to skip the conversion
 # or ``"eV/A3"`` if your file is already in eV/Å³ (magnitude only — supply the
 # sign yourself for ``eV/A3``).
@@ -1056,11 +1056,11 @@ class MGLDatasetLoader:
             repo_id="my-org/matpes-fork", token="hf_...", revision="dev"
         )
 
-    Already have a MatPES (or MatPES-shaped) JSON on disk? Skip the HF round
+    Already have a MatPES (or MatPES-shaped) file on disk? Skip the HF round
     trip and load it directly. :meth:`from_json` is a ``@staticmethod`` — it
     needs no loader state and can be called on the class itself::
 
-        ds = MGLDatasetLoader.from_json("/path/to/MatPES-r2SCAN-2025.2.json")
+        ds = MGLDatasetLoader.from_json("/path/to/MatPES-r2SCAN-2025.2.jsonl")
 
     (The instance form ``loader.from_json(...)`` works too, for callers that
     already hold a loader.)
@@ -1071,8 +1071,8 @@ class MGLDatasetLoader:
     ``loader_kwargs``.
 
     See :meth:`from_json` for the expected schema (the same one the live
-    MatPES JSONs ship in: ``structure`` + ``energy`` + ``forces`` + ``stress``
-    per record).
+    MatPES JSONL files ship in: ``structure`` + ``energy`` + ``forces`` +
+    ``stress`` per record).
 
     This class only constructs datasets; training itself is handled by
     :class:`MGLPotentialTrainer`.
@@ -1115,7 +1115,7 @@ class MGLDatasetLoader:
         include_charges: bool | ChargesSource = False,
         include_magmoms: bool | MagmomsSource = False,
     ) -> MGLDataset:
-        """Download a MatPES JSON file from HF and build an ``MGLDataset``.
+        """Download a MatPES JSONL file from HF and build an ``MGLDataset``.
 
         Args:
             version: MatPES version, e.g. ``"r2SCAN-2025.2"`` (case-insensitive).
@@ -1126,7 +1126,7 @@ class MGLDatasetLoader:
             root: ``MGLDataset`` root directory; default lets it pick.
             stress_unit: Unit of the on-disk ``stress`` field. Defaults to
                 ``"kbar"`` (raw VASP convention, compressive = positive — the
-                standard for MatPES JSONs). matgl's internal unit is **GPa**
+                standard for MatPES files). matgl's internal unit is **GPa**
                 with compressive = negative (README, "Model Training"), so the
                 default ``"kbar"`` factor is ``-0.1`` and applies the
                 "multiply VASP stress by -0.1" recipe in one step. Pass
@@ -1155,7 +1155,7 @@ class MGLDatasetLoader:
             monolithic files are 1.6-2.4 GB.
         """
         functional, tag = version.split("-")
-        filename = f"MatPES-{functional.upper()}-{tag}.json"
+        filename = f"MatPES-{functional.upper()}-{tag}.jsonl"
         local_path = _hf_download_cached_first(
             repo_id=repo_id or self.repo_id,
             filename=filename,
@@ -1189,8 +1189,8 @@ class MGLDatasetLoader:
     ) -> MGLDataset:
         """Build an ``MGLDataset`` from a local MatPES-shaped JSON file.
 
-        The file format mirrors the live MatPES JSON dataset exactly — a flat
-        JSON list of per-frame records, one record per (structure, PES data)
+        The file format mirrors the live MatPES JSONL dataset exactly — one
+        JSON record per line, one record per (structure, PES data)
         pair. Custom DFT runs and MatPES forks that respect this schema drop
         in unchanged. No HF Hub round trip happens; this is the local-disk
         sibling of :meth:`matpes_dataset`.
@@ -1222,8 +1222,9 @@ class MGLDatasetLoader:
         raw ``MGLDataset``; hand it straight to ``trainer.fit(dataset=...)``.
 
         Args:
-            path: Path to the JSON file. ``.json``, ``.json.gz``, and other
-                formats supported by ``monty.serialization.loadfn`` all work.
+            path: Path to the data file. ``.jsonl`` (the live MatPES format),
+                ``.json``, ``.json.gz``, and other formats supported by
+                ``monty.serialization.loadfn`` all work.
             cutoff: Neighbour cutoff (Å) handed to ``Structure2Graph``.
             element_types: Optional explicit ordering; auto-derived from the
                 structures when ``None``.
@@ -1231,7 +1232,7 @@ class MGLDatasetLoader:
             root: ``MGLDataset`` root directory; default lets it pick.
             stress_unit: Unit of the on-disk ``stress`` field. Defaults to
                 ``"kbar"`` (raw VASP convention, compressive = positive — the
-                standard for MatPES JSONs). matgl's internal unit is **GPa**
+                standard for MatPES files). matgl's internal unit is **GPa**
                 with compressive = negative (README, "Model Training"), so the
                 default ``"kbar"`` factor is ``-0.1`` and applies the
                 "multiply VASP stress by -0.1" recipe in one step. Pass
@@ -1281,8 +1282,8 @@ class MGLDatasetLoader:
     ) -> np.ndarray:
         """Download per-element energy offsets shipped alongside MatPES.
 
-        File schema: a flat list of ``{"chemsys": <symbol>, "energy": <eV>}``
-        records (one per element). When ``element_types`` is supplied the
+        File schema: a JSONL file of ``{"chemsys": <symbol>, "energy": <eV>}``
+        records (one per element, one per line). When ``element_types`` is supplied the
         returned vector is reordered so ``refs[i]`` is the offset for
         ``element_types[i]``; the default empty tuple returns a length-0 array.
 
@@ -1299,7 +1300,7 @@ class MGLDatasetLoader:
             ``float64``, with offsets in the supplied element order.
         """
         functional, _ = version.split("-")
-        filename = f"MatPES-{functional.upper()}-atoms.json"
+        filename = f"MatPES-{functional.upper()}-atoms.jsonl"
         local_path = _hf_download_cached_first(
             repo_id=repo_id or self.repo_id,
             filename=filename,

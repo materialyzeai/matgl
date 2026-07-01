@@ -2,7 +2,7 @@
 
 The HF download is monkeypatched in every test so nothing hits the network.
 The NaCl parity payload at ``tests/parity_data/nacl_training_set.json.gz``
-shares the per-record schema of the live MatPES JSONs and covers ``{Na, Cl}``;
+shares the per-record schema of the live MatPES JSONL files and covers ``{Na, Cl}``;
 ``MGLDatasetLoader`` expects a flat list of records, so the dict-wrapped
 fixture is unwrapped to its ``samples`` array in the per-test patches.
 """
@@ -188,7 +188,7 @@ class TestLoadMatpesDataset:
         )
         assert len(download_calls) == 1
         assert download_calls[0]["repo_type"] == "dataset"
-        assert download_calls[0]["filename"] == "MatPES-R2SCAN-2025.2.json"
+        assert download_calls[0]["filename"] == "MatPES-R2SCAN-2025.2.jsonl"
         assert len(ds) > 0
 
 
@@ -489,8 +489,9 @@ class TestFit:
 
 
 # ---------------------------------------------------------------------------
-# Sanity: MatPES JSON loadfn handles both .json and .json.gz transparently
-# (the parity fixture is .json.gz; the live MatPES files are plain .json).
+# Sanity: MatPES loadfn handles .jsonl (the live format), .json, and .json.gz
+# transparently (the parity fixture is .json.gz; the live MatPES files are
+# line-delimited .jsonl).
 # ---------------------------------------------------------------------------
 
 
@@ -507,6 +508,29 @@ def test_matpes_payload_is_loadable_without_gzip_suffix(tmp_path, monkeypatch):
         version="r2SCAN-2025.2", cutoff=4.0, save_cache=False, root=str(tmp_path / "ds")
     )
     assert set(ds.labels.keys()) == {"energies", "forces", "stresses"}
+
+
+def test_matpes_payload_is_loadable_from_jsonl(tmp_path, monkeypatch):
+    """The live MatPES format is JSONL (one record per line); load it via matpes_dataset."""
+    jsonl = tmp_path / "MatPES-R2SCAN-2025.2.jsonl"
+    with gzip.open(_NACL_PARITY) as fh:
+        samples = json.load(fh)["samples"]
+    jsonl.write_text("\n".join(json.dumps(sample) for sample in samples))
+
+    download_calls: list[dict] = []
+
+    def fake_download(**kwargs):
+        download_calls.append(kwargs)
+        return str(jsonl)
+
+    monkeypatch.setattr(training_mod, "hf_hub_download", fake_download)
+    monkeypatch.setattr(training_mod, "try_to_load_from_cache", lambda **_: None)
+    ds = MGLDatasetLoader().matpes_dataset(
+        version="r2SCAN-2025.2", cutoff=4.0, save_cache=False, root=str(tmp_path / "ds")
+    )
+    assert download_calls[0]["filename"] == "MatPES-R2SCAN-2025.2.jsonl"
+    assert set(ds.labels.keys()) == {"energies", "forces", "stresses"}
+    assert len(ds) == len(samples)
 
 
 # ---------------------------------------------------------------------------
