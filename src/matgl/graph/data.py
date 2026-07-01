@@ -120,10 +120,13 @@ def split_dataset(
     num_train = int(frac_list[0] * num_graphs)
     num_val = int(frac_list[1] * num_graphs)
 
+    # Split indices are plain integers used only for host-side slicing, so pin them to CPU.
+    # This keeps split_dataset working even when torch.set_default_device("mps"/"cuda") is
+    # active, which would otherwise make randperm expect a matching-device generator.
     indices = (
-        torch.randperm(num_graphs, generator=torch.Generator().manual_seed(random_state))
+        torch.randperm(num_graphs, generator=torch.Generator().manual_seed(random_state), device="cpu")
         if shuffle
-        else torch.arange(num_graphs)
+        else torch.arange(num_graphs, device="cpu")
     )
     train_idx = indices[:num_train].tolist()
     val_idx = indices[num_train : num_train + num_val].tolist()
