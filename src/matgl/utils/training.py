@@ -379,6 +379,25 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         self.decay_alpha = decay_alpha
         self.include_line_graph = include_line_graph
 
+        # element_refs is a positional per-element vector aligned to
+        # ``model.element_types`` (graph node indices are positions into that
+        # tuple, not atomic numbers). A length mismatch means the delta_E shift
+        # would be applied to the wrong elements, so fail loudly rather than
+        # silently mis-indexing.
+        model_element_types = getattr(model, "element_types", None)
+        if element_refs is not None and model_element_types is not None:
+            n_refs = np.asarray(element_refs).shape[-1]
+            if n_refs != len(model_element_types):
+                raise ValueError(
+                    f"element_refs length ({n_refs}) does not match "
+                    f"len(model.element_types) ({len(model_element_types)}). "
+                    "element_refs is a per-element offset vector in "
+                    "model.element_types order; fit it with "
+                    "element_types=model.element_types (e.g. via "
+                    "matgl.utils.training.fit_element_refs or "
+                    "MGLDatasetLoader.matpes_element_refs using that ordering)."
+                )
+
         self.model = Potential(
             model=model,
             element_refs=element_refs,
@@ -1120,7 +1139,11 @@ class MGLDatasetLoader:
         Args:
             version: MatPES version, e.g. ``"r2SCAN-2025.2"`` (case-insensitive).
             cutoff: Neighbour cutoff (Å) handed to ``Structure2Graph``.
-            element_types: Optional explicit ordering; auto-derived when None.
+            element_types: Optional explicit ordering; auto-derived from the
+                data (elements present, sorted by Z) when None. **Pass
+                ``model.element_types`` when the dataset will train/fine-tune a
+                pre-trained model** — the auto-derived list is a subset with a
+                different index ordering, which mis-maps every atom.
             repo_id: Per-call override of the loader's default ``repo_id``.
             save_cache: Whether ``MGLDataset`` persists its processed cache.
             root: ``MGLDataset`` root directory; default lets it pick.
@@ -1227,7 +1250,10 @@ class MGLDatasetLoader:
                 ``monty.serialization.loadfn`` all work.
             cutoff: Neighbour cutoff (Å) handed to ``Structure2Graph``.
             element_types: Optional explicit ordering; auto-derived from the
-                structures when ``None``.
+                structures (elements present, sorted by Z) when ``None``. **Pass
+                ``model.element_types`` when the dataset will train/fine-tune a
+                pre-trained model** — the auto-derived subset has a different
+                index ordering and mis-maps every atom.
             save_cache: Whether ``MGLDataset`` persists its processed cache.
             root: ``MGLDataset`` root directory; default lets it pick.
             stress_unit: Unit of the on-disk ``stress`` field. Defaults to
@@ -1561,6 +1587,78 @@ class MGLPotentialTrainer:
             **loader_kwargs,
         )
 
+    @staticmethod
+    def _dataset_element_types(dataset: MGLDataset | Mapping[str, MGLDataset]) -> tuple[str, ...] | None:
+        """Best-effort recovery of the ``element_types`` a dataset was built with.
+
+        ``MGLDataset`` itself has no ``element_types`` attribute — the ordering
+        lives on its ``converter`` (``Structure2Graph``/``Molecule2Graph``),
+        which is what actually stamps ``graph.node_type``. The ``MGLDatasetLoader``
+        helpers additionally bolt an explicit ``element_types`` attribute onto the
+        dataset, so we prefer the converter (present for every dataset built from
+        structures) and fall back to that attribute.
+
+        Returns ``None`` when neither is available (e.g. a cache-only dataset
+        loaded without a converter), in which case the mismatch guard is skipped
+        rather than raising a spurious error.
+        """
+        from matgl.graph.data import MGLDataset
+
+        def _one(ds: object) -> tuple[str, ...] | None:
+            converter = getattr(ds, "converter", None)
+            element_types = getattr(converter, "element_types", None)
+            return tuple(element_types) if element_types is not None else None
+
+        if isinstance(dataset, MGLDataset):
+            return _one(dataset)
+        # Canonical-splits mapping: any split's element_types stands in for all.
+        for key in ("train", "valid", "test"):
+            split = dataset.get(key) if hasattr(dataset, "get") else None
+            if split is not None and (element_types := _one(split)) is not None:
+                return element_types
+        return None
+
+    def _validate_element_types(
+        self,
+        dataset: MGLDataset | Mapping[str, MGLDataset],
+        atomrefs: np.ndarray | None,
+    ) -> None:
+        """Guard against the positional element-index mismatch bug.
+
+        Graph node indices (``graph.node_type``) are positions into
+        ``element_types``, not atomic numbers, and both the model embedding and
+        the ``element_refs`` (delta_E) offset are indexed by that position. So
+        the ordering used to build the dataset must match ``model.element_types``
+        exactly, or every atom is fed to the wrong embedding row and the energy
+        shift is applied to the wrong element. This is a silent numerical bug,
+        so we fail loudly instead.
+        """
+        model_element_types = tuple(cast("Sequence[str]", self.model.element_types))
+        dataset_element_types = self._dataset_element_types(dataset)
+        if dataset_element_types is not None and dataset_element_types != model_element_types:
+            raise ValueError(
+                "element_types mismatch between the dataset and the model. Graph node "
+                "indices are positional into element_types (not atomic numbers), so the "
+                "ordering used to build the dataset MUST match model.element_types exactly.\n"
+                f"  model.element_types   ({len(model_element_types)}): {model_element_types}\n"
+                f"  dataset.element_types ({len(dataset_element_types)}): {dataset_element_types}\n"
+                "When fine-tuning a foundation model, build the dataset / Structure2Graph with "
+                "element_types=model.element_types (e.g. matgl.config.DEFAULT_ELEMENTS), NOT "
+                "get_element_list(structures) — the latter only covers the elements in your data "
+                "and yields a different index ordering."
+            )
+
+        if atomrefs is not None:
+            n_refs = np.asarray(atomrefs).shape[-1]
+            if n_refs != len(model_element_types):
+                raise ValueError(
+                    f"element_refs length ({n_refs}) does not match len(model.element_types) "
+                    f"({len(model_element_types)}). element_refs is a per-element offset vector in "
+                    "model.element_types order; fit it with element_types=model.element_types "
+                    "(e.g. via fit_element_refs or MGLDatasetLoader.matpes_element_refs using that "
+                    "ordering)."
+                )
+
     def fit(
         self,
         dataset: MGLDataset | Mapping[str, MGLDataset],
@@ -1605,6 +1703,13 @@ class MGLPotentialTrainer:
             ``"magmoms"`` / ``"charges"`` labels.
         """
         pl.seed_everything(self.seed, workers=True)
+
+        # Accept an AtomRef instance (docstring promise) by extracting its
+        # per-element offset vector before any length/index validation.
+        if atomrefs is not None and hasattr(atomrefs, "property_offset"):
+            atomrefs = atomrefs.property_offset.detach().cpu().numpy()
+
+        self._validate_element_types(dataset, atomrefs)
 
         self.dataset = dataset
         self.atomrefs = atomrefs
