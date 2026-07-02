@@ -190,7 +190,7 @@ module = ["requests.*", "tabulate.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["matgl.kernels.*", "matgl.ext.jax.*", "matgl.ext._lammps"]
+module = ["matgl.kernels.*", "matgl.ext.jax.*", "matgl.ext.lammps"]
 ignore_errors = true
 # ``register_buffer`` returns ``Tensor | Module`` in mypy's view; indexing,
 # iterating, or attribute-accessing those triggers spurious errors.

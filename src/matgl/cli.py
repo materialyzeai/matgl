@@ -215,7 +215,7 @@ def create_lammps_model(args: argparse.Namespace) -> int:
     """
     # Lazy import keeps the CLI responsive when this subcommand isn't used and
     # avoids dragging the export-only deps onto the import path.
-    from matgl.ext._lammps import LAMMPSMatGLModel
+    from matgl.ext.lammps import LAMMPSMatGLModel
 
     dtype_map = {"float32": torch.float32, "float64": torch.float64}
     dtype = dtype_map[args.dtype]
