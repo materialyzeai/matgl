@@ -6,7 +6,16 @@ nav_order: 3
 
 # Change Log
 
-## Unreleased
+## 4.0.3
+- **New: LAMMPS integration for TensorNet and M3GNet potentials (#815).** `matgl.ext.lammps.LAMMPSMatGLModel`
+  exports a PyG `Potential` to a TorchScript artifact (via the new `mgl create-lammps-model` CLI subcommand),
+  consumed by a `pair_matgl` CPU pair style and a `pair_matgl/kk` Kokkos GPU pair style shipped under
+  `lammps/`. The export wrapper uses a kernel-composition pattern (`_TensorNetKernel` / `_M3GNetKernel`)
+  with the strain/autograd machinery in the outer module; M3GNet required pure-tensor, script-safe ports of
+  the three-body indexer and basis (`create_line_graph_torch`, `_m3gnet_three_body_basis_torch`). Includes
+  drop-in CMake snippets, build instructions, parity tests, and CI jobs. Single-GPU only for Kokkos
+  (multi-rank Kokkos + libtorch is unreliable). Fixes a ghost-row folding bug that caused a ~30-42 eV energy
+  gap vs the ASE calculator.
 - **Fix: `SoftExponential` activation autograd correctness and NaN safety (#788).** `forward` now selects
   its `alpha < 0` / `alpha > 0` / `alpha ≈ 0` branches with `torch.where` instead of a Python `if` on the
   learnable `alpha` parameter. The old `if self.alpha < 0.0` forced a host-device sync and dropped the
@@ -26,6 +35,19 @@ nav_order: 3
   (~19× at `n_passes=20` on M3GNet, GPU). Numerically equivalent to the naive loop; engaged only when
   a probe proves the head is the model's terminal op, otherwise falls back automatically (e.g. CHGNet,
   which pools after dropout).
+- **Fix: training checkpoints loadable under `torch.load(weights_only=True)` (#802).** `ModelLightningModule`
+  / `PotentialLightningModule` pickled optimizer/scheduler objects (and a numpy `element_refs` array) into
+  the checkpoint hyperparameters, so resuming via `Trainer.fit(ckpt_path=...)` broke under torch ≥ 2.6's
+  `weights_only=True` default. Optimizer/scheduler are now excluded from `save_hyperparameters` (their state
+  is already in `optimizer_states` / `lr_schedulers`) and `element_refs` is stored as a plain list.
+- **Fix: silent mismatch between dataset and model element lists (#819).** Added a guard that reads
+  `element_types` from the dataset's converter (the actual source that stamps `graph.node_type`) and
+  validates it against `model.element_types`, catching a common fine-tuning misconfiguration that
+  previously failed silently.
+- **Fix: load MatPES datasets from JSONL on Hugging Face.** `MGLDatasetLoader` now downloads the
+  line-delimited `.jsonl` files (dataset and per-element atomrefs) that `materialyze/matpes` moved to;
+  monty's `loadfn` parses them transparently.
+- **New: stress warning added to `JAXPESCalculator`.**
 
 ## 4.0.2
 - **Bug fix: charges restored for charge-predicting potentials (QET) in the ASE calculators.**
