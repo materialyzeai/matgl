@@ -72,6 +72,9 @@ alchmtk = [
 jax = [
   "jax>=0.4.30",
 ]
+mlflow = [
+  "mlflow>=2.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

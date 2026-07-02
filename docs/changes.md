@@ -6,6 +6,13 @@ nav_order: 3
 
 # Change Log
 
+## Unreleased
+- **New: optional MLflow experiment tracking for training.** MLflow is available as an optional dependency
+  (`pip install "matgl[mlflow]"`); nothing imports it at module load. `matgl.utils.training.mlflow_logger()`
+  builds a configured Lightning `MLFlowLogger`, and `MGLPotentialTrainer` gains an `mlflow=` kwarg
+  (`True` for defaults, a dict of `mlflow_logger` kwargs, or a pre-built logger) as a first-class shortcut for
+  `trainer_kwargs={"logger": ...}`.
+
 ## 4.0.3
 - **New: LAMMPS integration for TensorNet and M3GNet potentials (#815).** `matgl.ext.lammps.LAMMPSMatGLModel`
   exports a PyG `Potential` to a TorchScript artifact (via the new `mgl create-lammps-model` CLI subcommand),

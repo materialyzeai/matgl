@@ -1340,6 +1340,79 @@ class MGLDatasetLoader:
         return np.asarray([refs[sym] for sym in element_types], dtype="float64")
 
 
+def mlflow_logger(
+    experiment_name: str = "matgl",
+    *,
+    run_name: str | None = None,
+    tracking_uri: str | None = None,
+    tags: Mapping[str, Any] | None = None,
+    save_dir: str = "./mlruns",
+    log_model: bool | Literal["all"] = False,
+    **kwargs: Any,
+) -> Any:
+    """Build a Lightning ``MLFlowLogger`` for MatGL training runs.
+
+    MLflow is an **optional** dependency — install it with ``pip install
+    matgl[mlflow]`` (or ``uv add "matgl[mlflow]"``). Nothing in matgl imports
+    mlflow at module load; the import happens only when this factory is called,
+    so users without the extra pay no cost and see no error.
+
+    The returned logger plugs straight into
+    :class:`MGLPotentialTrainer` (via ``trainer_kwargs={"logger": ...}`` or the
+    ``mlflow=`` convenience kwarg) or any bare ``pl.Trainer``. The metric names
+    it records are the ones :class:`PotentialLightningModule` /
+    :class:`ModelLightningModule` log — ``train_*`` / ``val_*`` / ``test_*``
+    prefixed ``Total_Loss``, ``Energy_MAE``, ``Force_MAE``, etc.
+
+    Args:
+        experiment_name: MLflow experiment to log under. Defaults to
+            ``"matgl"`` (Lightning's own default is ``"lightning_logs"``).
+        run_name: Optional human-readable name for this run.
+        tracking_uri: MLflow tracking server URI (e.g.
+            ``"http://localhost:5000"`` or a ``sqlite:///mlflow.db`` path).
+            ``None`` uses ``save_dir`` for local file-based tracking.
+        tags: Optional ``{key: value}`` tags stamped on the run.
+        save_dir: Local directory for file-based tracking when ``tracking_uri``
+            is ``None``. Ignored once ``tracking_uri`` is set.
+        log_model: Whether to log model checkpoints as MLflow artifacts.
+            ``True`` logs the best/last checkpoint at train end, ``"all"`` logs
+            every checkpoint, ``False`` (default) logs none. Requires a
+            ``ModelCheckpoint`` callback to have anything to upload.
+        **kwargs: Extra keyword arguments forwarded verbatim to
+            ``lightning.pytorch.loggers.MLFlowLogger`` (e.g. ``prefix``,
+            ``run_id``, ``artifact_location``).
+
+    Returns:
+        A configured ``lightning.pytorch.loggers.MLFlowLogger`` instance.
+
+    Raises:
+        ImportError: If the optional ``mlflow`` package is not installed.
+
+    Example:
+        >>> logger = mlflow_logger(experiment_name="matpes-tensornet")
+        >>> trainer = MGLPotentialTrainer(model, mlflow=logger)  # or trainer_kwargs
+    """
+    from lightning.pytorch.loggers import MLFlowLogger
+
+    try:
+        import mlflow  # noqa: F401
+    except ImportError as exc:
+        raise ImportError(
+            "MLflow logging requires the optional `mlflow` dependency, which is not installed. "
+            'Install it with `pip install "matgl[mlflow]"` or `uv add "matgl[mlflow]"`.'
+        ) from exc
+
+    return MLFlowLogger(
+        experiment_name=experiment_name,
+        run_name=run_name,
+        tracking_uri=tracking_uri,
+        tags=dict(tags) if tags is not None else None,
+        save_dir=save_dir,
+        log_model=log_model,
+        **kwargs,
+    )
+
+
 class MGLPotentialTrainer:
     """Configure-once / fit-when-asked trainer for matgl ``Potential`` training.
 
@@ -1393,6 +1466,24 @@ class MGLPotentialTrainer:
     Swap ``CSVLogger`` for ``TensorBoardLogger`` / ``WandbLogger`` /
     ``MLFlowLogger`` as needed (or pass a list for multi-sink logging).
 
+    **MLflow (optional).** MLflow is an optional dependency (``pip install
+    "matgl[mlflow]"``). For a first-class path, pass ``mlflow=`` to the
+    constructor instead of hand-building a logger — ``mlflow=True`` attaches a
+    default :func:`mlflow_logger`, and a dict is forwarded as its kwargs::
+
+        trainer = MGLPotentialTrainer(
+            model,
+            accelerator="gpu",
+            mlflow={"experiment_name": "matpes-tensornet", "log_model": True},
+        )
+
+    Equivalently, build the logger yourself and pass it through either
+    ``mlflow=`` or ``trainer_kwargs["logger"]``::
+
+        from matgl.utils.training import mlflow_logger
+
+        trainer = MGLPotentialTrainer(model, mlflow=mlflow_logger(run_name="run-1"))
+
     For per-epoch dumping of every prediction / label / error in stable
     sample order, matgl ships :class:`matgl.utils.callbacks.PredictionLogger`
     (call :func:`matgl.utils.callbacks.add_sample_indices` on the split(s)
@@ -1445,6 +1536,8 @@ class MGLPotentialTrainer:
         accelerator: str = "auto",
         devices: int | str = "auto",
         seed: int = 42,
+        # Experiment tracking.
+        mlflow: bool | dict | Any = None,
         # Pass-through escape hatches.
         trainer_kwargs: dict | None = None,
         loader_kwargs: dict | None = None,
@@ -1493,6 +1586,16 @@ class MGLPotentialTrainer:
             devices: ``pl.Trainer`` device count or selector (e.g. ``1``,
                 ``"auto"``, ``[0, 1]``).
             seed: Forwarded to ``pl.seed_everything(workers=True)`` at fit time.
+            mlflow: Optional first-class MLflow logging (requires the optional
+                ``mlflow`` extra — ``pip install "matgl[mlflow]"``).
+                ``None``/``False`` (default) disables it; ``True`` attaches a
+                default :func:`mlflow_logger`; a ``dict`` is forwarded as
+                :func:`mlflow_logger` kwargs (e.g.
+                ``{"experiment_name": "matpes", "log_model": True}``); an
+                already-built ``MLFlowLogger`` (or any Lightning logger) is used
+                as-is. The logger is instantiated lazily inside :meth:`fit`.
+                Passing both ``mlflow`` and ``trainer_kwargs["logger"]`` is an
+                error — choose one.
             trainer_kwargs: Extra ``pl.Trainer`` kwargs forwarded verbatim;
                 this is the entry point for Lightning ``callbacks`` and
                 ``logger``. See the *Logging / callbacks* recipe in the class
@@ -1529,6 +1632,8 @@ class MGLPotentialTrainer:
         self.accelerator = accelerator
         self.devices = devices
         self.seed = seed
+
+        self.mlflow = mlflow
 
         self.trainer_kwargs = dict(trainer_kwargs or {})
         self.loader_kwargs = dict(loader_kwargs or {})
@@ -1659,6 +1764,33 @@ class MGLPotentialTrainer:
                     "ordering)."
                 )
 
+    def _resolve_trainer_kwargs(self) -> dict:
+        """Return ``trainer_kwargs`` with the optional MLflow logger injected.
+
+        ``self.mlflow`` is turned into a Lightning logger and placed under the
+        ``"logger"`` key. Anything other than a bool/dict is assumed to already
+        be a (pre-built) logger and is used as-is. Setting both ``mlflow`` and
+        ``trainer_kwargs["logger"]`` is ambiguous, so it raises.
+        """
+        trainer_kwargs = dict(self.trainer_kwargs)
+        if self.mlflow in (None, False):
+            return trainer_kwargs
+
+        if "logger" in trainer_kwargs:
+            raise ValueError(
+                "Pass either `mlflow=` or `trainer_kwargs['logger']`, not both. "
+                "The `mlflow` kwarg is a shortcut for `trainer_kwargs['logger']=mlflow_logger(...)`."
+            )
+
+        if self.mlflow is True:
+            trainer_kwargs["logger"] = mlflow_logger()
+        elif isinstance(self.mlflow, dict):
+            trainer_kwargs["logger"] = mlflow_logger(**self.mlflow)
+        else:
+            # Assume a pre-built Lightning logger (MLFlowLogger or otherwise).
+            trainer_kwargs["logger"] = self.mlflow
+        return trainer_kwargs
+
     def fit(
         self,
         dataset: MGLDataset | Mapping[str, MGLDataset],
@@ -1738,7 +1870,7 @@ class MGLPotentialTrainer:
             accelerator=self.accelerator,
             devices=self.devices,
             inference_mode=False,
-            **self.trainer_kwargs,
+            **self._resolve_trainer_kwargs(),
         )
         self.trainer.fit(
             model=self.lit_module,

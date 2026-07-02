@@ -12,13 +12,14 @@ from __future__ import annotations
 import gzip
 import json
 import pathlib
+import sys
 
 import numpy as np
 import pytest
 
 from matgl.models import TensorNet
 from matgl.utils import training as training_mod
-from matgl.utils.training import MGLDatasetLoader, MGLPotentialTrainer
+from matgl.utils.training import MGLDatasetLoader, MGLPotentialTrainer, mlflow_logger
 
 _NACL_PARITY = pathlib.Path(__file__).parent.parent / "parity_data" / "nacl_training_set.json.gz"
 
@@ -58,6 +59,97 @@ def _patch_hf_atomrefs_download(monkeypatch, tmp_path: pathlib.Path, payload) ->
 def _atomrefs_record(symbol: str, energy: float) -> dict:
     """Single-atom MatPES atomrefs record (``chemsys`` / ``energy`` schema)."""
     return {"chemsys": symbol, "energy": energy}
+
+
+def _make_tiny_model(element_types=("Na", "Cl")):
+    return TensorNet(
+        element_types=tuple(element_types),
+        cutoff=4.0,
+        is_intensive=False,
+        use_warp=False,
+        units=8,
+        ntargets=1,
+        num_layers=1,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Optional MLflow logging (mlflow_logger factory + MGLPotentialTrainer wiring).
+# ---------------------------------------------------------------------------
+
+mlflow = pytest.importorskip("mlflow")
+
+
+def _sqlite_uri(tmp_path: pathlib.Path) -> str:
+    """A per-test sqlite tracking URI (mlflow>=3 rejects the file store by default)."""
+    return f"sqlite:///{tmp_path / 'mlflow.db'}"
+
+
+class TestMLflowLoggerFactory:
+    def test_returns_configured_mlflow_logger(self, tmp_path):
+        """The factory returns Lightning's MLFlowLogger with our config applied."""
+        from lightning.pytorch.loggers import MLFlowLogger
+
+        logger = mlflow_logger(
+            experiment_name="unit-test",
+            run_name="run-1",
+            tracking_uri=_sqlite_uri(tmp_path),
+            tags={"stage": "smoke"},
+        )
+        assert isinstance(logger, MLFlowLogger)
+        assert logger._experiment_name == "unit-test"
+        assert logger._run_name == "run-1"
+
+    def test_missing_mlflow_raises_helpful_importerror(self, tmp_path, monkeypatch):
+        """When mlflow is not importable, the factory points at the optional extra."""
+        monkeypatch.setitem(sys.modules, "mlflow", None)
+        with pytest.raises(ImportError, match=r"matgl\[mlflow\]"):
+            mlflow_logger(tracking_uri=_sqlite_uri(tmp_path))
+
+
+class TestTrainerMLflowWiring:
+    def test_mlflow_none_leaves_logger_unset(self):
+        trainer = MGLPotentialTrainer(_make_tiny_model())
+        assert trainer.mlflow is None
+        assert "logger" not in trainer._resolve_trainer_kwargs()
+
+    def test_mlflow_true_injects_default_logger(self, tmp_path, monkeypatch):
+        from lightning.pytorch.loggers import MLFlowLogger
+
+        # mlflow=True uses the default file-store save_dir; keep it inside
+        # tmp_path and opt out of mlflow>=3's file-store maintenance error.
+        monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
+        monkeypatch.chdir(tmp_path)
+        trainer = MGLPotentialTrainer(_make_tiny_model(), mlflow=True)
+        resolved = trainer._resolve_trainer_kwargs()
+        assert isinstance(resolved["logger"], MLFlowLogger)
+        # Original trainer_kwargs is not mutated.
+        assert "logger" not in trainer.trainer_kwargs
+
+    def test_mlflow_dict_forwarded_to_factory(self, tmp_path):
+        from lightning.pytorch.loggers import MLFlowLogger
+
+        trainer = MGLPotentialTrainer(
+            _make_tiny_model(),
+            mlflow={"experiment_name": "from-dict", "tracking_uri": _sqlite_uri(tmp_path)},
+        )
+        logger = trainer._resolve_trainer_kwargs()["logger"]
+        assert isinstance(logger, MLFlowLogger)
+        assert logger._experiment_name == "from-dict"
+
+    def test_prebuilt_logger_used_as_is(self, tmp_path):
+        logger = mlflow_logger(experiment_name="prebuilt", tracking_uri=_sqlite_uri(tmp_path))
+        trainer = MGLPotentialTrainer(_make_tiny_model(), mlflow=logger)
+        assert trainer._resolve_trainer_kwargs()["logger"] is logger
+
+    def test_mlflow_and_trainer_kwargs_logger_collision_raises(self):
+        trainer = MGLPotentialTrainer(
+            _make_tiny_model(),
+            mlflow=True,
+            trainer_kwargs={"logger": False},
+        )
+        with pytest.raises(ValueError, match="not both"):
+            trainer._resolve_trainer_kwargs()
 
 
 # ---------------------------------------------------------------------------
