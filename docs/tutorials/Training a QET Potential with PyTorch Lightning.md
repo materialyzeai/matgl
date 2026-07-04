@@ -12,6 +12,7 @@ This notebook demonstrates how to fit a QET potential using PyTorch Lightning wi
 ```python
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import warnings
@@ -127,13 +128,24 @@ In the previous cells, we demonstrated the process of training an QET from scrat
 
 
 ```python
-# download a pre-trained M3GNet
+# download a pre-trained QET
 qet_nnp = matgl.load_model("QET-PES-MatPES-PBE-2025.2")
 model_pretrained = qet_nnp.model
-# obtain element energy offset
+# IMPORTANT: graph node indices are positions into ``element_types``, not atomic numbers, so the
+# ordering used to build the dataset MUST match the pre-trained model's ``element_types`` exactly.
+# The dataset above was built with DEFAULT_ELEMENTS; confirm the pre-trained model agrees. When
+# fine-tuning any foundation model, always build your Structure2Graph with
+# element_types=model_pretrained.element_types (do NOT use get_element_list(structures), which only
+# covers the elements in your data and yields a different index ordering).
+assert tuple(model_pretrained.element_types) == tuple(element_types), (
+    "element_types mismatch: rebuild the dataset with element_types=model_pretrained.element_types"
+)
+# obtain element energy offset (a per-element vector in model_pretrained.element_types order)
 property_offset = qet_nnp.element_refs.property_offset
 # you should test whether including the original property_offset helps improve training and validation accuracy
-lit_module_finetune = PotentialLightningModule(model=model, stress_weight=0.01, charge_weight=0.001)
+lit_module_finetune = PotentialLightningModule(
+    model=model_pretrained, element_refs=property_offset, lr=1e-4, stress_weight=0.01, charge_weight=0.001
+)
 ```
 
 
@@ -158,10 +170,8 @@ trained_model = matgl.load_model(path=model_save_path)
 # This code just performs cleanup for this notebook.
 
 for fn in ("pyg_graph.pt", "lattice.pt", "pyg_line_graph.pt", "state_attr.pt", "labels.json"):
-    try:
+    with contextlib.suppress(FileNotFoundError):
         os.remove(fn)
-    except FileNotFoundError:
-        pass
 
 shutil.rmtree("logs")
 shutil.rmtree("trained_model")

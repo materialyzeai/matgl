@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import glob
 import os
+import subprocess  # noqa: F401  # used inside the %timeit magic line below
 from datetime import timedelta
 
 import pandas as pd
@@ -89,7 +90,7 @@ pair_style    gnnp {HOME_DIR}/.local/share/lammps/src/ML-GNNP
 
 read_data     ./dat.lammps
 replicate     {x} 1 1
-pair_coeff    * *  matgl M3GNet-MP-2021.2.8-DIRECT-PES  Mg O  # MatGL will be called
+pair_coeff    * *  matgl M3GNet-PES-MatPES-PBE-2025.2  Mg O  # MatGL will be called
 
 dump          myDump all custom 10 xyz.lammpstrj id element x y z
 dump_modify   myDump sort id element Mg O
@@ -117,68 +118,6 @@ run           100
                 walltime = timedelta(hours=int(hours), minutes=int(minutes), seconds=int(seconds)).total_seconds()
     run_stats.append((x * 8, r.average / 100, walltime / 100))
 ```
-
-    /bin/sh: lscpu: command not found
-    /Users/shyue/repos/matgl/matgl/apps/pes.py:59: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
-      self.data_mean = torch.tensor(data_mean) if data_mean is not None else torch.zeros(1)
-    /Users/shyue/repos/matgl/matgl/apps/pes.py:60: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
-      self.data_std = torch.tensor(data_std) if data_std is not None else torch.ones(1)
-
-
-    5.74 s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
-
-
-    /bin/sh: lscpu: command not found
-    /Users/shyue/repos/matgl/matgl/apps/pes.py:59: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
-      self.data_mean = torch.tensor(data_mean) if data_mean is not None else torch.zeros(1)
-    /Users/shyue/repos/matgl/matgl/apps/pes.py:60: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
-      self.data_std = torch.tensor(data_std) if data_std is not None else torch.ones(1)
-
-
-    8.25 s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
-
-
-    /bin/sh: lscpu: command not found
-    /Users/shyue/repos/matgl/matgl/apps/pes.py:59: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
-      self.data_mean = torch.tensor(data_mean) if data_mean is not None else torch.zeros(1)
-    /Users/shyue/repos/matgl/matgl/apps/pes.py:60: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
-      self.data_std = torch.tensor(data_std) if data_std is not None else torch.ones(1)
-
-
-    14.8 s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
-
-
-    /bin/sh: lscpu: command not found
-    /Users/shyue/repos/matgl/matgl/apps/pes.py:59: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
-      self.data_mean = torch.tensor(data_mean) if data_mean is not None else torch.zeros(1)
-    /Users/shyue/repos/matgl/matgl/apps/pes.py:60: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
-      self.data_std = torch.tensor(data_std) if data_std is not None else torch.ones(1)
-
-
-    36.5 s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
-
-
-    /bin/sh: lscpu: command not found
-    /Users/shyue/repos/matgl/matgl/apps/pes.py:59: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
-      self.data_mean = torch.tensor(data_mean) if data_mean is not None else torch.zeros(1)
-    /Users/shyue/repos/matgl/matgl/apps/pes.py:60: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
-      self.data_std = torch.tensor(data_std) if data_std is not None else torch.ones(1)
-
-
-    1min 6s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
-
-
-    /bin/sh: lscpu: command not found
-
-
-    1min 54s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
-
-
-    /bin/sh: lscpu: command not found
-
-
-    4min 17s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
-
 
 
 ```python

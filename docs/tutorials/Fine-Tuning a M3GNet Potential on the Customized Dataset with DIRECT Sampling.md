@@ -45,7 +45,7 @@ For the purposes of demonstration, we will download all Si-O compounds in the Ma
 
 ```python
 # Obtain your API key here: https://next-gen.materialsproject.org/api
-mpr = MPRester(api_key="YOUR_API_KEY")
+mpr = MPRester()
 entries = mpr.get_entries_in_chemsys(["Si", "O"])
 structures = [e.structure for e in entries]
 energies = [e.energy for e in entries]
@@ -119,10 +119,19 @@ In the following cells, we demonstrate the fine-tuning of our pretrained model o
 
 
 ```python
-# download a pre-trained M3GNet
-m3gnet_nnp = matgl.load_model("M3GNet-MP-2021.2.8-PES")
+# download a pre-trained M3GNet foundation potential from Hugging Face
+m3gnet_nnp = matgl.load_model("M3GNet-PES-MatPES-PBE-2025.2")
 model_pretrained = m3gnet_nnp.model
-# obtain element energy offset
+# IMPORTANT: graph node indices are positions into ``element_types``, not atomic numbers, so the
+# ordering used to build the dataset MUST match the pre-trained model's ``element_types`` exactly.
+# The dataset above was built with DEFAULT_ELEMENTS; confirm the pre-trained model agrees. When
+# fine-tuning any foundation model, always build your Structure2Graph with
+# element_types=model_pretrained.element_types (do NOT use get_element_list(structures), which only
+# covers the elements in your data and yields a different index ordering).
+assert tuple(model_pretrained.element_types) == tuple(element_types), (
+    "element_types mismatch: rebuild the dataset with element_types=model_pretrained.element_types"
+)
+# obtain element energy offset (a per-element vector in model_pretrained.element_types order)
 property_offset = m3gnet_nnp.element_refs.property_offset
 # you should test whether including the original property_offset helps improve training and validation accuracy
 lit_module_finetune = PotentialLightningModule(model=model_pretrained, element_refs=property_offset, lr=1e-4)

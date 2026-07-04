@@ -12,6 +12,7 @@ This notebook demonstrates how to fit a M3GNet potential using PyTorch Lightning
 ```python
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import warnings
@@ -62,11 +63,12 @@ We will first setup the M3GNet model and the LightningModule.
 ```python
 element_types = DEFAULT_ELEMENTS
 converter = Structure2Graph(element_types=element_types, cutoff=5.0)
+# M3GNet builds its three-body (line) graph on the fly inside forward() using the model's own
+# threebody_cutoff, so the dataset does not pre-compute or pass a line graph.
 dataset = MGLDataset(
     structures=structures,
     converter=converter,
     labels=labels,
-    include_line_graph=True,
 )
 train_data, val_data, test_data = split_dataset(
     dataset,
@@ -75,7 +77,7 @@ train_data, val_data, test_data = split_dataset(
     random_state=42,
 )
 # if you are not intended to use stress for training, switch include_stress=False!
-my_collate_fn = partial(collate_fn_pes, include_line_graph=True, include_stress=True)
+my_collate_fn = partial(collate_fn_pes, include_stress=True)
 train_loader, val_loader, test_loader = MGLDataLoader(
     train_data=train_data,
     val_data=val_data,
@@ -89,13 +91,8 @@ model = M3GNet(
     is_intensive=False,
 )
 # if you are not intended to use stress for training, set stress_weight=0.0!
-lit_module = PotentialLightningModule(model=model, include_line_graph=True, stress_weight=0.01)
+lit_module = PotentialLightningModule(model=model, stress_weight=0.01)
 ```
-
-    Processing...
-    100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████| 407/407 [00:00<00:00, 4134.46it/s]
-    Done!
-
 
 Finally, we will initialize the Pytorch Lightning trainer and run the fitting. Here, the max_epochs is set to 2 just for demonstration purposes. In a real fitting, this would be a much larger number. Also, the `accelerator="cpu"` was set just to ensure compatibility with M1 Macs. In a real world use case, please remove the kwarg or set it to cuda for GPU based training.
 
@@ -487,15 +484,22 @@ In the previous cells, we demonstrated the process of training an M3GNet from sc
 
 
 ```python
-# download a pre-trained M3GNet
-m3gnet_nnp = matgl.load_model("M3GNet-MP-2021.2.8-PES")
+# download a pre-trained M3GNet foundation potential from Hugging Face
+m3gnet_nnp = matgl.load_model("M3GNet-PES-MatPES-PBE-2025.2")
 model_pretrained = m3gnet_nnp.model
-# obtain element energy offset
+# IMPORTANT: graph node indices are positions into ``element_types``, not atomic numbers, so the
+# ordering used to build the dataset MUST match the pre-trained model's ``element_types`` exactly.
+# The dataset above was built with DEFAULT_ELEMENTS; confirm the pre-trained model agrees. When
+# fine-tuning any foundation model, always build your Structure2Graph with
+# element_types=model_pretrained.element_types (do NOT use get_element_list(structures), which only
+# covers the elements in your data and yields a different index ordering).
+assert tuple(model_pretrained.element_types) == tuple(element_types), (
+    "element_types mismatch: rebuild the dataset with element_types=model_pretrained.element_types"
+)
+# obtain element energy offset (a per-element vector in model_pretrained.element_types order)
 property_offset = m3gnet_nnp.element_refs.property_offset
 # you should test whether including the original property_offset helps improve training and validation accuracy
-lit_module_finetune = PotentialLightningModule(
-    model=model_pretrained, element_refs=property_offset, lr=1e-4, include_line_graph=True
-)
+lit_module_finetune = PotentialLightningModule(model=model_pretrained, element_refs=property_offset, lr=1e-4)
 ```
 
 
@@ -520,10 +524,8 @@ trained_model = matgl.load_model(path=model_save_path)
 # This code just performs cleanup for this notebook.
 
 for fn in ("pyg_graph.pt", "lattice.pt", "pyg_line_graph.pt", "state_attr.pt", "labels.json"):
-    try:
+    with contextlib.suppress(FileNotFoundError):
         os.remove(fn)
-    except FileNotFoundError:
-        pass
 
 shutil.rmtree("logs")
 shutil.rmtree("trained_model")

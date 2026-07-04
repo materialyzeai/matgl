@@ -30,13 +30,13 @@ warnings.simplefilter("ignore")
 
 # Loading the pre-trained M3GNet PES model
 
-We will first load the M3GNet PES model, which is trained on the MP-2021.2.8 dataset. This can be done with a single line of code. Here we only use M3GNet for demonstration and users can choose other available models.
+We will first load an M3GNet PES model trained on the MatPES-PBE dataset. This can be done with a single line of code. Here we only use M3GNet for demonstration and users can choose other available models.
 
 
 ```python
-# You can load any pretrained potentials stored in the 'pretrained_models' directory
-# To see available models, use get_available_pretrained_models()
-pot = matgl.load_model("M3GNet-MP-2021.2.8-PES")
+# Load a pre-trained universal M3GNet potential from Hugging Face.
+# To see available models, use matgl.get_available_pretrained_models().
+pot = matgl.load_model("M3GNet-PES-MatPES-PBE-2025.2")
 ```
 
 # Structure Relaxation

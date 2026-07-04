@@ -104,7 +104,15 @@ element_types = DEFAULT_ELEMENTS
 cry_graph = Structure2Graph(element_types, cutoff=5.0)
 # Define labels for bandgap values
 labels = {"bandgap": targets}
-dataset = MGLDataset(structures=structures, graph_labels=graph_attrs, labels=labels, converter=cry_graph)
+# Use a dedicated cache root so this dataset never collides with other MEGNet
+# examples (e.g. the eform notebook) that default to root="MGLDataset".
+dataset = MGLDataset(
+    structures=structures,
+    graph_labels=graph_attrs,
+    labels=labels,
+    converter=cry_graph,
+    root="MGLDataset_bandgap",
+)
 ```
 
 We will then split the dataset into training, validation and test data.
@@ -138,11 +146,9 @@ In the next step, we setup the model and the ModelLightningModule. Here, we have
 model = MEGNet(
     element_types=element_types,
     cutoff=5.0,
-    is_intensive=True,
     dim_state_embedding=64,
     ntypes_state=4,
-    readout_type="set2set",
-    include_states=True,
+    include_state=True,
 )
 
 # setup the MEGNetTrainer
@@ -184,5 +190,5 @@ for fn in ("pyg_graph.pt", "lattice.pt", "pyg_line_graph.pt", "state_attr.pt", "
         os.remove(fn)
 
 shutil.rmtree("logs")
-shutil.rmtree("MGLDataset")
+shutil.rmtree("MGLDataset_bandgap")
 ```
