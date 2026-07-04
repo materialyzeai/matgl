@@ -29,19 +29,21 @@ logger = logging.getLogger(__name__)
 # Bump this when the on-disk format changes in a backwards-incompatible way so
 # old caches are invalidated automatically (a stricter version of the cutoff
 # fingerprint below).
-_CACHE_FORMAT_VERSION = 1
+_CACHE_FORMAT_VERSION = 2
 
 
 def _compute_cache_fingerprint(
     converter: GraphConverter | None,
     include_line_graph: bool,
     include_ref_charge: bool,
+    graph_labels: list | None = None,
 ) -> dict[str, object]:
     """Build a small, JSON-serializable fingerprint of the active dataset config.
 
     Stored alongside processed graphs so that ``has_cache`` can detect a
     config drift (changed cutoff, different element list, swapped converter
-    class) and trigger reprocessing rather than silently returning stale data.
+    class, or a change in the ``graph_labels`` that back the state attributes)
+    and trigger reprocessing rather than silently returning stale data.
     """
     if converter is None:
         converter_class = None
@@ -55,11 +57,20 @@ def _compute_cache_fingerprint(
             element_hash = None
         else:
             element_hash = hashlib.sha1("|".join(map(str, element_types)).encode("utf-8")).hexdigest()[:16]
+    # ``graph_labels`` drives the state attributes (e.g. multi-fidelity ids). A
+    # cache built with different (or no) graph_labels must not be silently
+    # reused, so fold a hash of them into the fingerprint.
+    if graph_labels is None:
+        graph_labels_hash: str | None = None
+    else:
+        payload = json.dumps(graph_labels, sort_keys=True, default=str).encode("utf-8")
+        graph_labels_hash = hashlib.sha1(payload).hexdigest()[:16]
     return {
         "format_version": _CACHE_FORMAT_VERSION,
         "converter_class": converter_class,
         "cutoff": cutoff,
         "element_hash": element_hash,
+        "graph_labels_hash": graph_labels_hash,
         "include_line_graph": include_line_graph,
         "include_ref_charge": include_ref_charge,
     }
@@ -384,7 +395,9 @@ class MGLDataset(Dataset):
         if self.converter is None:
             return True
 
-        expected = _compute_cache_fingerprint(self.converter, self.include_line_graph, self.include_ref_charge)
+        expected = _compute_cache_fingerprint(
+            self.converter, self.include_line_graph, self.include_ref_charge, self.graph_labels
+        )
         fingerprint_path = root / self.filename_fingerprint
         if not fingerprint_path.exists():
             logger.warning(
@@ -467,7 +480,9 @@ class MGLDataset(Dataset):
 
         # Write the fingerprint last so a partial cache (e.g. crash mid-save)
         # is detected as stale on the next run.
-        fingerprint = _compute_cache_fingerprint(self.converter, self.include_line_graph, self.include_ref_charge)
+        fingerprint = _compute_cache_fingerprint(
+            self.converter, self.include_line_graph, self.include_ref_charge, self.graph_labels
+        )
         (root / self.filename_fingerprint).write_text(json.dumps(fingerprint, indent=2, sort_keys=True))
 
     def load(self) -> None:

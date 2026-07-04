@@ -121,6 +121,41 @@ def test_mgl_property_dataset_with_graph_label(LiFePO4, BaNiO3):
     assert state2.detach().numpy() == graph_label[1]
 
 
+def test_graph_labels_change_invalidates_cache(LiFePO4, BaNiO3):
+    """A cache built without graph_labels must not be silently reused when they
+    are later supplied (regression: fidelity/state labels were being dropped).
+    """
+    structures = [LiFePO4, BaNiO3]
+    element_types = get_element_list(structures)
+    cry_graph = Structure2Graph(element_types=element_types, cutoff=4.0)
+    root = "MGLDataset_graph_labels"
+    try:
+        # First build with no graph_labels -> converter-default (float) state.
+        no_label = MGLDataset(
+            structures=structures,
+            converter=cry_graph,
+            labels={"Eform_per_atom": [1.0, -2.0]},
+            root=root,
+        )
+        assert no_label.state_attr.dtype.is_floating_point
+
+        # Rebuild with graph_labels present: the stale cache must be rejected so
+        # the integer fidelity ids actually take effect.
+        with_label = MGLDataset(
+            structures=structures,
+            converter=cry_graph,
+            labels={"Eform_per_atom": [1.0, -2.0]},
+            graph_labels=[0, 1],
+            root=root,
+        )
+        _, _, state0, _ = with_label[0]
+        _, _, state1, _ = with_label[1]
+        assert state0.detach().numpy() == 0
+        assert state1.detach().numpy() == 1
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_megnet_dataloader(LiFePO4, BaNiO3):
     structures = [LiFePO4] * 10 + [BaNiO3] * 10
     label = np.zeros(20).tolist()
