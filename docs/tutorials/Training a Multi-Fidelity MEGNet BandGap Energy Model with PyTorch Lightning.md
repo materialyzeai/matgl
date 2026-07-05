@@ -18,11 +18,13 @@ import os
 import shutil
 import warnings
 from copy import deepcopy
+from pathlib import Path
 
 import lightning as L
 import matplotlib.pyplot as plt
 import pandas as pd
 from huggingface_hub import hf_hub_download
+from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
 from pymatgen.core import Structure
 
@@ -164,7 +166,19 @@ We have also initialized the Pytorch Lightning Trainer with a `CSVLogger`, which
 
 ```python
 logger = CSVLogger("logs", name="MEGNet_training")
-trainer = L.Trainer(max_epochs=20, accelerator="cpu", logger=logger)
+# Track the best epoch (lowest val_MAE) so we can export those weights after training.
+checkpoint_callback = ModelCheckpoint(
+    monitor="val_MAE",
+    mode="min",
+    save_top_k=1,
+    filename="best-{epoch:04d}-{val_MAE:.4f}",
+)
+trainer = L.Trainer(
+    max_epochs=20,
+    accelerator="cpu",
+    logger=logger,
+    callbacks=[checkpoint_callback],
+)
 trainer.fit(model=lit_module, train_dataloaders=train_loader, val_dataloaders=val_loader)
 ```
 
@@ -181,6 +195,23 @@ metrics["val_MAE"].dropna().plot()
 _ = plt.legend()
 ```
 
+# Saving the trained model
+
+`trainer.fit` only writes Lightning checkpoints under `logs/`. We reload the best checkpoint (lowest `val_MAE`) selected by `ModelCheckpoint`, then call `model.save()` on the underlying MatGL model (not the `ModelLightningModule`). This writes `model.pt` + `model.json`, which can later be reloaded with `matgl.load_model(<dir>)`.
+
+
+```python
+best_ckpt = checkpoint_callback.best_model_path
+print(f"Best checkpoint: {best_ckpt} (val_MAE={checkpoint_callback.best_model_score})")
+# Load the best weights back into a ModelLightningModule before exporting the portable model.
+best_module = ModelLightningModule.load_from_checkpoint(best_ckpt, model=model)
+
+model_save_path = Path("trained_models/MEGNet_bandgap")
+model_save_path.mkdir(parents=True, exist_ok=True)
+best_module.model.save(str(model_save_path))
+print(f"Saved best model to {model_save_path.resolve()}")
+```
+
 
 ```python
 # This code just performs cleanup for this notebook.
@@ -191,4 +222,5 @@ for fn in ("pyg_graph.pt", "lattice.pt", "pyg_line_graph.pt", "state_attr.pt", "
 
 shutil.rmtree("logs")
 shutil.rmtree("MGLDataset_bandgap")
+shutil.rmtree("trained_models", ignore_errors=True)
 ```
