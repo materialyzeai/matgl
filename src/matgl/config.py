@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import logging
 import shutil
 from pathlib import Path
@@ -21,16 +20,6 @@ DEFAULT_ELEMENTS = tuple(el.symbol for el in Element if el.symbol not in ["Po", 
 # Default location of the cache for matgl, e.g., for storing downloaded models.
 MATGL_CACHE = Path.home() / ".cache" / "matgl"
 MATGL_CACHE.mkdir(parents=True, exist_ok=True)
-
-
-def _ensure_pyg_installed() -> None:
-    try:
-        importlib.util.find_spec("torch_geometric")  # type: ignore[attr-defined]
-    except ImportError as err:
-        raise RuntimeError("Please install torch_geometric to use matgl.") from err
-
-
-_ensure_pyg_installed()
 
 
 def clear_cache(confirm: bool = True) -> None:
