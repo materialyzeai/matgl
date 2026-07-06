@@ -10,8 +10,8 @@ import torch
 from torch import nn
 
 import matgl
-from matgl.config import COULOMB_CONSTANT
 from matgl.graph._compute import compute_pair_vector_and_distance
+from matgl.utils.constants import COULOMB_CONSTANT
 from matgl.utils.cutoff import polynomial_cutoff
 from matgl.utils.maths import scatter_add
 

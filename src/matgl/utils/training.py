@@ -17,6 +17,7 @@ from torch import nn
 
 from matgl.apps.pes import Potential
 from matgl.config import MATGL_CACHE
+from matgl.utils.constants import EV_PER_ANG3_TO_GPA
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -829,7 +830,7 @@ StressUnit = Literal["kbar", "GPa", "eV/A3"]
 _STRESS_UNIT_TO_GPA: dict[str, float] = {
     "GPa": 1.0,
     "kbar": -0.1,
-    "eV/A3": 160.21766208,
+    "eV/A3": EV_PER_ANG3_TO_GPA,
 }
 
 

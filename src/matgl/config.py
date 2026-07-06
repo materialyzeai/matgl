@@ -1,4 +1,8 @@
-"""Global configuration variables for matgl."""
+"""Global configuration variables for matgl.
+
+Physical and numerical constants (e.g. ``COULOMB_CONSTANT``,
+``EV_PER_ANG3_TO_GPA``) live in :mod:`matgl.utils.constants`.
+"""
 
 from __future__ import annotations
 
@@ -9,9 +13,6 @@ from pathlib import Path
 from pymatgen.core.periodic_table import Element
 
 logger = logging.getLogger(__name__)
-
-# Coulomb conversion
-COULOMB_CONSTANT = 14.399645478425668
 
 # Default set of elements supported by universal matgl models. Excludes radioactive and most artificial elements.
 DEFAULT_ELEMENTS = tuple(el.symbol for el in Element if el.symbol not in ["Po", "At", "Rn", "Fr", "Ra"] and el.Z < 95)

@@ -18,14 +18,11 @@ from torch_geometric.data import Batch, Data
 import matgl
 from matgl.layers._atom_ref import AtomRef
 from matgl.layers._zbl import NuclearRepulsion
+from matgl.utils.constants import EV_PER_ANG3_TO_GPA
 from matgl.utils.io import IOMixIn
 
 if TYPE_CHECKING:
     import numpy as np
-
-# 1 eV/Å³ = 160.21766208 GPa. Stress is autograd of energy w.r.t. strain (eV)
-# divided by volume (Å³), giving eV/Å³; multiply by this constant for GPa.
-EV_PER_ANG3_TO_GPA = 160.21766208
 
 
 class Potential(nn.Module, IOMixIn):

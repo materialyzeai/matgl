@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import torch
 
 import matgl
-from matgl.config import COULOMB_CONSTANT
 from matgl.layers import ElectrostaticPotential
+from matgl.utils.constants import COULOMB_CONSTANT
 from matgl.utils.cutoff import polynomial_cutoff
 
 
