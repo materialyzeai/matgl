@@ -1393,31 +1393,6 @@ class MGLPotentialTrainer:
 
     Swap ``CSVLogger`` for ``TensorBoardLogger`` / ``WandbLogger`` /
     ``MLFlowLogger`` as needed (or pass a list for multi-sink logging).
-
-    For per-epoch dumping of every prediction / label / error in stable
-    sample order, matgl ships :class:`matgl.utils.callbacks.PredictionLogger`
-    (call :func:`matgl.utils.callbacks.add_sample_indices` on the split(s)
-    you want logged before ``fit``). For ad-hoc instrumentation, drop a
-    custom ``pl.Callback`` subclass into ``callbacks``;
-    :meth:`PotentialLightningModule.training_step` /
-    :meth:`~PotentialLightningModule.validation_step` return
-    ``{"loss", "preds", "labels", "indices", "num_atoms"}`` as ``outputs``::
-
-        import lightning.pytorch as pl
-
-        class LogForceRMS(pl.Callback):
-            def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-                force_pred, force_label = outputs["preds"][1], outputs["labels"][1]
-                pl_module.log(
-                    "train_force_rms",
-                    (force_pred - force_label).pow(2).mean().sqrt(),
-                    on_step=True, on_epoch=False,
-                )
-
-        trainer = MGLPotentialTrainer(
-            model, trainer_kwargs={"callbacks": [LogForceRMS()]}
-        )
-
     """
 
     def __init__(
