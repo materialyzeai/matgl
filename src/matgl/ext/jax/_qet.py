@@ -18,7 +18,7 @@ from math import sqrt
 import jax
 import jax.numpy as jnp
 
-from matgl.config import COULOMB_CONSTANT
+from matgl.utils.constants import COULOMB_CONSTANT
 
 from ._math import layer_norm, polynomial_cutoff, scatter_add
 from ._tensornet import forward_features, gated_mlp, mlp, pair_vector_and_distance
