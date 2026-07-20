@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 import torch
@@ -171,3 +173,25 @@ class TestPotential:
         e_plus, _, _ = ff(g_plus, lat_plus, state)
         fd = (e_plus - e_minus) / (2 * 0.01)
         assert np.allclose(fd.detach().numpy(), grad_dl_zero[0][0][0].detach().numpy(), atol=1e-05)
+
+    @pytest.mark.parametrize(
+        "element_refs",
+        [np.array([1.5, -2.0]), [1.5, -2.0], (1.5, -2.0)],
+        ids=["ndarray", "list", "tuple"],
+    )
+    def test_element_refs_stored_as_json_clean_list(self, model_tensornet, element_refs):
+        """element_refs must be normalized to a plain list so model.pt/model.json are numpy-free."""
+        ff = Potential(model=model_tensornet, element_refs=element_refs)
+        stored = ff._init_args["element_refs"]
+        assert isinstance(stored, list)
+        # Must be JSON-serializable (i.e. no numpy scalars leaking through).
+        assert json.loads(json.dumps(stored)) == [1.5, -2.0]
+        # The tensor buffer is still built correctly.
+        assert torch.allclose(ff.element_refs.property_offset, torch.tensor([1.5, -2.0], dtype=matgl.float_th))
+
+    def test_element_refs_roundtrip(self, model_tensornet, tmp_path):
+        """A Potential with numpy element_refs round-trips through save/load without numpy allowlisting."""
+        ff = Potential(model=model_tensornet, element_refs=np.array([0.25, -0.5]))
+        ff.save(tmp_path)
+        loaded = Potential.load(tmp_path)
+        assert torch.allclose(loaded.element_refs.property_offset, ff.element_refs.property_offset)

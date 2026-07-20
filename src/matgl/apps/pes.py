@@ -22,6 +22,8 @@ from matgl.utils.constants import EV_PER_ANG3_TO_GPA
 from matgl.utils.io import IOMixIn
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import numpy as np
 
 
@@ -73,7 +75,7 @@ class Potential(nn.Module, IOMixIn):
         model: nn.Module,
         data_mean: torch.Tensor | float = 0.0,
         data_std: torch.Tensor | float = 1.0,
-        element_refs: torch.Tensor | np.ndarray | None = None,
+        element_refs: torch.Tensor | np.ndarray | Sequence[float] | None = None,
         calc_forces: bool = True,
         calc_stresses: bool = True,
         calc_hessian: bool = False,
@@ -112,6 +114,13 @@ class Potential(nn.Module, IOMixIn):
                 Defaults to ``"reduce-overhead"``.
         """
         super().__init__()
+        # Normalize a numpy ``element_refs`` to a plain list *before* ``save_args`` captures
+        # locals(). This keeps ``model.pt``/``model.json`` free of numpy arrays so checkpoints
+        # round-trip under ``torch.load(weights_only=True)`` without relying on numpy's
+        # array-reconstruction machinery being allowlisted. Tensors are left untouched (they
+        # are allowlisted by default); only the non-tensor path is coerced.
+        if element_refs is not None and not isinstance(element_refs, torch.Tensor):
+            element_refs = element_refs.tolist() if hasattr(element_refs, "tolist") else list(element_refs)
         self.save_args(locals())
         # torch.compile cannot handle the Hessian path because AOTAutograd has no
         # support for double-backward through compiled functions. Silently fall
