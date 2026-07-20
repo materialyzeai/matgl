@@ -602,6 +602,7 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         # labels and preds are (energy, force, stress, (optional) site_wise)
         if num_atoms is None:
             num_atoms = torch.ones_like(preds[0])
+        valid_num_atoms = num_atoms
         if self.allow_missing_labels:
             valid_labels, valid_preds = [], []
             for index, label in enumerate(labels):
@@ -615,7 +616,6 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
                 valid_preds.append(pred[valid_value_indices])
         else:
             valid_labels, valid_preds = list(labels), list(preds)
-            valid_num_atoms = num_atoms
 
         # Per-atom energies are reused three times (loss, MAE, RMSE) — hoist
         # the divisions out of the metric calls so each tensor is materialised
