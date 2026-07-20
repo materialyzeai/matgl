@@ -13,8 +13,10 @@ import warnings
 from pathlib import Path
 from typing import cast
 
+import numpy as np
 import torch
 from huggingface_hub import HfApi, create_repo, hf_hub_download
+from numpy._core.multiarray import _reconstruct as _np_reconstruct
 
 from matgl.config import MATGL_CACHE
 
@@ -22,6 +24,29 @@ logger = logging.getLogger(__name__)
 
 # Files that comprise a serialized matgl model on disk and on Hugging Face Hub.
 _MODEL_FILES = ("model.pt", "state.pt", "model.json")
+
+
+"""Allowlist the non-tensor types matgl legitimately pickles into ``model.pt``.
+
+``model.pt`` stores a model's ``_init_args`` (its constructor kwargs). These are
+mostly primitives, but some are numpy arrays (e.g. ``Potential.element_refs``), so
+the restricted unpickler used by ``torch.load(weights_only=True)`` needs the numpy
+array-reconstruction machinery on its allowlist. We deliberately allowlist only the
+small, well-understood numpy types below rather than falling back to
+``weights_only=False``: an unexpected global then surfaces as a loud error to review
+instead of a silent arbitrary-code-execution path.
+"""
+torch.serialization.add_safe_globals(
+    [
+        np.ndarray,
+        np.dtype,
+        _np_reconstruct,  # numpy array pickles reference multiarray._reconstruct
+        np.dtypes.Float32DType,
+        np.dtypes.Float64DType,
+        np.dtypes.Int32DType,
+        np.dtypes.Int64DType,
+    ]
+)
 
 
 def _resolve_module(modname: str) -> str:
@@ -169,8 +194,11 @@ class IOMixIn:
         _check_ver(cls, model_data)
 
         map_location = torch.device("cpu") if not torch.cuda.is_available() else None
-        state = torch.load(fpaths["state.pt"], map_location=map_location, weights_only=False)
-        d = torch.load(fpaths["model.pt"], map_location=map_location, weights_only=False)
+        # state.pt is a pure tensor state_dict; model.pt holds constructor kwargs that
+        # may include numpy arrays (allowlisted in _register_safe_globals). Both load
+        # under the restricted unpickler so untrusted checkpoints cannot execute code.
+        state = torch.load(fpaths["state.pt"], map_location=map_location, weights_only=True)
+        d = torch.load(fpaths["model.pt"], map_location=map_location, weights_only=True)
 
         # Deserialize any args that are IOMixIn subclasses.
         for k, v in d.items():

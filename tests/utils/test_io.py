@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 import torch
 
@@ -39,6 +40,52 @@ class ModelWithParams(torch.nn.Module, IOMixIn):
         super().__init__()
         self.lin = torch.nn.Linear(5, 3)
         self.save_args(locals())
+
+
+class ModelWithNumpyArg(torch.nn.Module, IOMixIn):
+    """IOMixIn model whose ``_init_args`` carry a numpy array (like ``Potential.element_refs``)."""
+
+    __version__ = 1
+
+    def __init__(self, refs, **kwargs):
+        super().__init__()
+        self.save_args(locals(), kwargs)
+        self.refs = refs
+
+
+def test_load_uses_weights_only(tmp_path):
+    """Both model.pt and state.pt must load under the restricted unpickler.
+
+    Guards the security posture: a straight revert to ``weights_only=False`` (arbitrary
+    code execution on untrusted checkpoints) would flip these captured kwargs to False.
+    """
+    ModelWithParams().save(tmp_path)
+
+    captured: list[bool] = []
+    real_load = torch.load
+
+    def spy(*args, **kwargs):
+        captured.append(kwargs.get("weights_only"))
+        return real_load(*args, **kwargs)
+
+    with patch.object(matgl_io.torch, "load", side_effect=spy):
+        ModelWithParams.load(tmp_path)
+
+    assert captured, "torch.load was never called"
+    assert all(flag is True for flag in captured)
+
+
+def test_load_roundtrips_numpy_init_arg(tmp_path):
+    """A model with a numpy-array constructor arg round-trips under ``weights_only=True``.
+
+    This only succeeds because ``_register_safe_globals`` allowlists numpy's array
+    reconstruction machinery; dropping that registration raises ``UnpicklingError``.
+    """
+    refs = np.arange(89, dtype="float64")
+    ModelWithNumpyArg(refs).save(tmp_path)
+
+    loaded = ModelWithNumpyArg.load(tmp_path)
+    np.testing.assert_array_equal(loaded._init_args["refs"], refs)
 
 
 def test_iomixin_num_parameters():
