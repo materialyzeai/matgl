@@ -68,6 +68,10 @@ ops = [
 ]
 alchmtk = [
   "nvalchemi-toolkit",
+  # nvalchemi-toolkit 0.1.0's NeighborListHook calls neighbor_list(method=None) under
+  # torch.compile, which nvalchemiops >=0.4.0 rejects as a host-only helper. Cap until a
+  # compatible nvalchemi-toolkit ships. See ext/_alchmtk.py (passes method= explicitly).
+  "nvalchemi-toolkit-ops<0.4.0",
 ]
 jax = [
   "jax>=0.4.30",
