@@ -172,13 +172,15 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
 
   // Fill Z + mask from atom type.
   const auto type_to_z = d_type_to_z_;
+  const auto d_atomic_numbers = d_atomic_numbers_;
+  const auto d_local_or_ghost = d_local_or_ghost_;
   Kokkos::parallel_for(
       "matgl_kk:fill_atoms",
       Kokkos::RangePolicy<DeviceType>(0, nall),
       KOKKOS_LAMBDA(const int i) {
         const int t = type(i);
-        d_atomic_numbers_(i) = type_to_z(t);
-        d_local_or_ghost_(i) = (i < nlocal);
+        d_atomic_numbers(i) = type_to_z(t);
+        d_local_or_ghost(i) = (i < nlocal);
       });
 
   // local_row_of_(j) = the owned row representing the same physical atom as
@@ -204,6 +206,7 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
   //    so initialize numneigh_short_ for ghost atoms to zero).
   Kokkos::deep_copy(d_numneigh_short_, 0);
   const double r_max_sq = r_max_squared_;
+  const auto d_numneigh_short = d_numneigh_short_;
 
   Kokkos::parallel_for(
       "matgl_kk:count_neigh",
@@ -223,16 +226,17 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
           const double rsq = dx * dx + dy * dy + dz * dz;
           if (rsq <= r_max_sq) ++nshort;
         }
-        d_numneigh_short_(i) = nshort;
+        d_numneigh_short(i) = nshort;
       });
 
   // 3) Exclusive prefix-sum into d_first_edge_ (length nall+1).
+  const auto d_first_edge = d_first_edge_;
   Kokkos::parallel_scan(
       "matgl_kk:scan_edges",
       Kokkos::RangePolicy<DeviceType>(0, nall + 1),
       KOKKOS_LAMBDA(const int i, int &update, const bool final) {
-        const int v = (i < nall) ? d_numneigh_short_(i) : 0;
-        if (final) d_first_edge_(i) = update;
+        const int v = (i < nall) ? d_numneigh_short(i) : 0;
+        if (final) d_first_edge(i) = update;
         update += v;
       });
 
@@ -255,6 +259,8 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
   //    need one consistent row per physical atom (periodicity goes through
   //    unit_shifts, not through ghost-row duplication; see pair_matgl.cpp).
   const auto d_local_row_of = d_local_row_of_;
+  const auto d_edge_index = d_edge_index_;
+  const auto d_unit_shifts = d_unit_shifts_;
   const double *const h_inv_host = domain->h_inv;
   const double hinv0 = h_inv_host[0], hinv1 = h_inv_host[1], hinv2 = h_inv_host[2];
   const double hinv3 = h_inv_host[3], hinv4 = h_inv_host[4], hinv5 = h_inv_host[5];
@@ -267,7 +273,7 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
         const double yi = x(i, 1);
         const double zi = x(i, 2);
         const int jnum = d_numneigh(i);
-        int e = d_first_edge_(i);
+        int e = d_first_edge(i);
         for (int jj = 0; jj < jnum; ++jj) {
           const int j = d_neighbors(i, jj) & NEIGHMASK;
           const double dx = x(j, 0) - xi;
@@ -288,11 +294,11 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
           const double ly = hinv1 * ddy + hinv3 * ddz;
           const double lx = hinv0 * ddx + hinv5 * ddy + hinv4 * ddz;
 
-          d_edge_index_(0, e) = i;
-          d_edge_index_(1, e) = j_local;
-          d_unit_shifts_(e, 0) = static_cast<int64_t>(Kokkos::round(lx));
-          d_unit_shifts_(e, 1) = static_cast<int64_t>(Kokkos::round(ly));
-          d_unit_shifts_(e, 2) = static_cast<int64_t>(Kokkos::round(lz));
+          d_edge_index(0, e) = i;
+          d_edge_index(1, e) = j_local;
+          d_unit_shifts(e, 0) = static_cast<int64_t>(Kokkos::round(lx));
+          d_unit_shifts(e, 1) = static_cast<int64_t>(Kokkos::round(ly));
+          d_unit_shifts(e, 2) = static_cast<int64_t>(Kokkos::round(lz));
           ++e;
         }
       });
