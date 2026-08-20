@@ -169,9 +169,9 @@ jobs:
           import torch
           from pymatgen.core import Lattice, Structure
           from pymatgen.optimization.neighbors import find_points_in_spheres
-          from matgl.apps._pes_pyg import Potential
-          from matgl.ext._lammps import LAMMPSMatGLModel
-          from matgl.models._tensornet_pyg import TensorNet
+          from matgl.apps.pes import Potential
+          from matgl.ext.lammps import LAMMPSMatGLModel
+          from matgl.models._tensornet import TensorNet
 
           torch.manual_seed(0)
           m = TensorNet(
@@ -443,9 +443,9 @@ jobs:
           import torch
           from pymatgen.core import Lattice, Structure
           from pymatgen.optimization.neighbors import find_points_in_spheres
-          from matgl.apps._pes_pyg import Potential
-          from matgl.ext._lammps import LAMMPSMatGLModel
-          from matgl.models._tensornet_pyg import TensorNet
+          from matgl.apps.pes import Potential
+          from matgl.ext.lammps import LAMMPSMatGLModel
+          from matgl.models._tensornet import TensorNet
 
           torch.manual_seed(0)
           m = TensorNet(
