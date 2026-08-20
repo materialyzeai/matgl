@@ -130,8 +130,7 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
   atomKK->sync(execution_space, datamask_read);
   atomKK->modified(execution_space, datamask_modify);
 
-  using AT_ = typename AT::t_x_array;  // (nall, 3) double on the device
-  AT_ x = atomKK->k_x.template view<DeviceType>();
+  auto x = atomKK->k_x.template view<DeviceType>();
   auto f = atomKK->k_f.template view<DeviceType>();
   auto type = atomKK->k_type.template view<DeviceType>();
 
