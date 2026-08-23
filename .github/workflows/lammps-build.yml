@@ -310,13 +310,28 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: Validate pressure sign by finite differences
+        shell: bash
+        env:
+          LIBTORCH: ${{ steps.libtorch.outputs.path }}
+        run: |
+          export LD_LIBRARY_PATH="${LIBTORCH}/lib:${LD_LIBRARY_PATH:-}"
+          cp lammps_artifacts/model.pt matgl/lammps/tests/model.pt
+          cd matgl/lammps/tests
+          LMP="${GITHUB_WORKSPACE}/lammps_build/lmp"
+          "${LMP}" -var scale 0.99 -log log.strain-minus.lammps -in in.matgl_finite_strain
+          "${LMP}" -var scale 1.00 -log log.strain-zero.lammps  -in in.matgl_finite_strain
+          "${LMP}" -var scale 1.01 -log log.strain-plus.lammps  -in in.matgl_finite_strain
+          python3 check_finite_difference_pressure.py \
+            log.strain-minus.lammps log.strain-zero.lammps log.strain-plus.lammps
+
       - name: Upload artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: lammps-debug
           path: |
-            matgl/lammps/tests/log.lammps
+            matgl/lammps/tests/log*.lammps
             lammps_artifacts/
             lammps_build/CMakeFiles/CMakeOutput.log
             lammps_build/CMakeFiles/CMakeError.log
@@ -557,7 +572,9 @@ jobs:
           export LD_LIBRARY_PATH="${LIBTORCH}/lib:${LD_LIBRARY_PATH:-}"
           cp lammps_artifacts/model.pt matgl/lammps/tests/model.pt
           cd matgl/lammps/tests
-          "${GITHUB_WORKSPACE}/lammps_build/lmp" -k on g 1 -sf kk -in in.matgl_si | tee log.lammps
+          "${GITHUB_WORKSPACE}/lammps_build/lmp" \
+            -k on g 1 -sf kk -pk kokkos neigh half newton on \
+            -in in.matgl_si | tee log.lammps
 
       - name: Diff LAMMPS energy against Python reference
         shell: bash
@@ -589,13 +606,31 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: Validate Kokkos pressure sign by finite differences
+        shell: bash
+        env:
+          LIBTORCH: ${{ steps.libtorch.outputs.path }}
+        run: |
+          export LD_LIBRARY_PATH="${LIBTORCH}/lib:${LD_LIBRARY_PATH:-}"
+          cp lammps_artifacts/model.pt matgl/lammps/tests/model.pt
+          cd matgl/lammps/tests
+          LMP="${GITHUB_WORKSPACE}/lammps_build/lmp"
+          "${LMP}" -k on g 1 -sf kk -pk kokkos neigh half newton on \
+            -var scale 0.99 -log log.strain-minus.lammps -in in.matgl_finite_strain
+          "${LMP}" -k on g 1 -sf kk -pk kokkos neigh half newton on \
+            -var scale 1.00 -log log.strain-zero.lammps -in in.matgl_finite_strain
+          "${LMP}" -k on g 1 -sf kk -pk kokkos neigh half newton on \
+            -var scale 1.01 -log log.strain-plus.lammps -in in.matgl_finite_strain
+          python3 check_finite_difference_pressure.py \
+            log.strain-minus.lammps log.strain-zero.lammps log.strain-plus.lammps
+
       - name: Upload artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: lammps-kokkos-debug
           path: |
-            matgl/lammps/tests/log.lammps
+            matgl/lammps/tests/log*.lammps
             lammps_artifacts/
             lammps_build/CMakeFiles/CMakeOutput.log
             lammps_build/CMakeFiles/CMakeError.log
