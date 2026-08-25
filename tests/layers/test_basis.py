@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 import torch
@@ -15,6 +17,7 @@ from matgl.layers._basis import (
     spherical_bessel_smooth,
 )
 from matgl.layers._three_body import combine_sbf_shf
+from matgl.utils.maths import _get_lambda_func
 
 
 def test_gaussian():
@@ -147,3 +150,44 @@ def test_fourier_expansion(learnable):
         assert fe.frequencies.requires_grad
     else:
         assert not fe.frequencies.requires_grad
+
+
+@pytest.fixture
+def restore_dtype():
+    old = torch.get_default_dtype()
+    yield
+    torch.set_default_dtype(old)
+
+
+def test_smooth_sbf_matches_closed_form(restore_dtype):
+    """The n=0 basis function is sqrt(2)(2 sin(pi r/5) + sin(2 pi r/5))/(5 r)."""
+    torch.set_default_dtype(torch.float32)
+    sbf = SphericalBesselFunction(max_l=3, max_n=3, cutoff=5.0, smooth=True)
+    r = torch.linspace(0.3, 5.0, 257, dtype=torch.float64)
+    want = math.sqrt(2.0) * (2 * torch.sin(math.pi * r / 5) + torch.sin(2 * math.pi * r / 5)) / (5 * r)
+    got = sbf(r)[:, 0]
+    # `want` has an exact zero at r == cutoff, so the tolerance is normalised to
+    # the amplitude of the basis function rather than applied pointwise.
+    scale = want.abs().max()
+    assert (got - want).abs().max() <= 1e-12 * scale
+
+
+def test_smooth_sbf_independent_of_default_dtype(restore_dtype):
+    """The basis must not change with the ambient default dtype."""
+    r = torch.linspace(0.3, 5.0, 257, dtype=torch.float64)
+    out = {}
+    for dtype in (torch.float32, torch.float64):
+        torch.set_default_dtype(dtype)
+        out[dtype] = SphericalBesselFunction(3, 3, 5.0, smooth=True)(r)
+    assert torch.equal(out[torch.float32], out[torch.float64])
+
+
+def test_smooth_sbf_lambda_cache_is_reused(restore_dtype):
+    """Identical modules must share the cached symbolic functions."""
+    torch.set_default_dtype(torch.float32)
+    _get_lambda_func.cache_clear()
+    for _ in range(4):
+        SphericalBesselFunction(3, 3, 5.0, smooth=True)
+    info = _get_lambda_func.cache_info()
+    assert info.currsize == 1, f"cache did not coalesce: {info}"
+    assert info.hits == 3, f"cache never hit: {info}"
