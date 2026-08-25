@@ -502,17 +502,17 @@ void PairMATGL::compute(int eflag, int vflag)
     f[i][2] += fa[i][2];
   }
 
-  // 6) Virial — the model returns a 3x3 tensor with the LAMMPS sign
-  //    convention (V_ij = sum r_i F_j). LAMMPS stores 6 Voigt components
-  //    in `virial`: xx, yy, zz, xy, xz, yz.
+  // 6) Virial — the model returns dE/dstrain. LAMMPS uses
+  //    W = sum_i r_i (x) f_i = -dE/dstrain. Store the six Voigt components
+  //    in the order xx, yy, zz, xy, xz, yz.
   if (vflag_global) {
     auto vir_t = out.at("virials").toTensor().to(torch::kFloat64);
     auto va = vir_t.accessor<double, 2>();
-    virial[0] += va[0][0];
-    virial[1] += va[1][1];
-    virial[2] += va[2][2];
-    virial[3] += 0.5 * (va[0][1] + va[1][0]);
-    virial[4] += 0.5 * (va[0][2] + va[2][0]);
-    virial[5] += 0.5 * (va[1][2] + va[2][1]);
+    virial[0] -= va[0][0];
+    virial[1] -= va[1][1];
+    virial[2] -= va[2][2];
+    virial[3] -= 0.5 * (va[0][1] + va[1][0]);
+    virial[4] -= 0.5 * (va[0][2] + va[2][0]);
+    virial[5] -= 0.5 * (va[1][2] + va[2][1]);
   }
 }

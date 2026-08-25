@@ -35,7 +35,6 @@ flag.
 
 from __future__ import annotations
 
-from functools import lru_cache
 from math import pi, sqrt
 
 import sympy
@@ -112,7 +111,7 @@ class SphericalBesselFunction(nn.Module):
         self.register_buffer("cutoff", torch.tensor(cutoff))
         self.smooth = smooth
         if smooth:
-            self.funcs = self._calculate_smooth_symbolic_funcs()
+            self.funcs = self._calculate_smooth_symbolic_funcs(cutoff)
         else:
             self.funcs = self._calculate_symbolic_funcs()
             # Pre-compute non-smooth basis constants once. ``roots_slice`` holds
@@ -129,7 +128,6 @@ class SphericalBesselFunction(nn.Module):
             self.register_buffer("roots_slice", roots_slice, persistent=False)
             self.register_buffer("inv_norm", inv_norm, persistent=False)
 
-    @lru_cache(maxsize=128)
     def _calculate_symbolic_funcs(self) -> list:
         """Generate spherical basis functions based on Rayleigh formula.
 
@@ -140,9 +138,14 @@ class SphericalBesselFunction(nn.Module):
         funcs = [sympy.expand_func(sympy.functions.special.bessel.jn(i, x)) for i in range(self.max_l + 1)]
         return [sympy.lambdify(x, func, torch) for func in funcs]
 
-    @lru_cache(maxsize=128)
-    def _calculate_smooth_symbolic_funcs(self) -> list:
-        return _get_lambda_func(max_n=self.max_n, cutoff=self.cutoff)
+    def _calculate_smooth_symbolic_funcs(self, cutoff: float) -> list:
+        # Use the Python float passed to ``__init__`` rather than the
+        # ``self.cutoff`` buffer: the buffer's dtype follows the ambient
+        # default, so feeding it into the symbolic builder makes ``cutoff**1.5``
+        # a float32 op, rounding the basis prefactor once and scaling every
+        # generated coefficient by 1 + 2.6e-8. The non-smooth branch already
+        # guards this with ``float(cutoff)``.
+        return _get_lambda_func(max_n=self.max_n, cutoff=float(cutoff))
 
     def forward(self, r: torch.Tensor) -> torch.Tensor:
         """Compute the spherical Bessel function values.
