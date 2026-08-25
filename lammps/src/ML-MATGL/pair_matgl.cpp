@@ -311,26 +311,32 @@ void PairMATGL::compute(int eflag, int vflag)
   double *const *const f = atom->f;
   const int *const type = atom->type;
 
-  // 1) Allocate Cartesian / atomic-number / mask buffers sized to nall.
+  // 1) Allocate Cartesian / atomic-number / mask buffers sized to NLOCAL.
+  //    Every edge below is folded onto a local row, so a ghost row would be an
+  //    isolated node: no incoming message, masked out of the energy sum, and
+  //    an exactly zero force. Sizing these to nall made the model compute
+  //    embeddings, norms and readout for all of them anyway -- 3.0x the node
+  //    work on a 32 A cell (1,248 local + 2,502 ghost), 1.8x at 64 A, 1.5x at
+  //    96 A. Single-rank is enforced above, so no ghost row needs to survive.
   auto opts_real = torch::TensorOptions().dtype(dtype_);
   auto opts_long = torch::TensorOptions().dtype(torch::kInt64);
   auto opts_bool = torch::TensorOptions().dtype(torch::kBool);
 
-  torch::Tensor positions = torch::empty({nall, 3}, opts_real);
-  torch::Tensor atomic_numbers = torch::empty({nall}, opts_long);
-  torch::Tensor local_or_ghost = torch::empty({nall}, opts_bool);
+  torch::Tensor positions = torch::empty({nlocal, 3}, opts_real);
+  torch::Tensor atomic_numbers = torch::empty({nlocal}, opts_long);
+  torch::Tensor local_or_ghost = torch::empty({nlocal}, opts_bool);
 
   // Fill them. Promote to the model's dtype on the fly.
   if (dtype_ == torch::kFloat64) {
     auto pos_a = positions.accessor<double, 2>();
-    for (int i = 0; i < nall; ++i) {
+    for (int i = 0; i < nlocal; ++i) {
       pos_a[i][0] = x[i][0];
       pos_a[i][1] = x[i][1];
       pos_a[i][2] = x[i][2];
     }
   } else {
     auto pos_a = positions.accessor<float, 2>();
-    for (int i = 0; i < nall; ++i) {
+    for (int i = 0; i < nlocal; ++i) {
       pos_a[i][0] = static_cast<float>(x[i][0]);
       pos_a[i][1] = static_cast<float>(x[i][1]);
       pos_a[i][2] = static_cast<float>(x[i][2]);
@@ -339,9 +345,9 @@ void PairMATGL::compute(int eflag, int vflag)
   {
     auto z_a = atomic_numbers.accessor<int64_t, 1>();
     auto m_a = local_or_ghost.accessor<bool, 1>();
-    for (int i = 0; i < nall; ++i) {
+    for (int i = 0; i < nlocal; ++i) {
       z_a[i] = type_to_z_[type[i]];
-      m_a[i] = (i < nlocal);
+      m_a[i] = true;   // every row is owned now
     }
   }
 
@@ -490,7 +496,7 @@ void PairMATGL::compute(int eflag, int vflag)
 
   torch::Tensor forces_t = out.at("forces").toTensor().to(torch::kFloat64);
   auto fa = forces_t.accessor<double, 2>();
-  for (int i = 0; i < nall; ++i) {
+  for (int i = 0; i < nlocal; ++i) {   // ghost rows carried zero force
     f[i][0] += fa[i][0];
     f[i][1] += fa[i][1];
     f[i][2] += fa[i][2];

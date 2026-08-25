@@ -175,11 +175,11 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
   const auto type_to_z = d_type_to_z_;
   Kokkos::parallel_for(
       "matgl_kk:fill_atoms",
-      Kokkos::RangePolicy<DeviceType>(0, nall),
+      Kokkos::RangePolicy<DeviceType>(0, nlocal),
       KOKKOS_LAMBDA(const int i) {
         const int t = type(i);
         d_atomic_numbers_(i) = type_to_z(t);
-        d_local_or_ghost_(i) = (i < nlocal);
+        d_local_or_ghost_(i) = true;   // only owned rows are built now
       });
 
   // local_row_of_(j) = the owned row representing the same physical atom as
@@ -306,8 +306,12 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
 
   // x is (nall,3) double already on `DeviceType`. We make a libtorch view
   // through from_blob and cast to the model's dtype if needed.
+  // Local atoms occupy rows [0, nlocal) of LAMMPS' x, so narrowing to
+  // nlocal keeps this a zero-copy view while dropping the isolated ghost
+  // rows the model would otherwise embed (see pair_matgl.cpp for why they
+  // are isolated).
   torch::Tensor positions_d = torch::from_blob(
-      x.data(), {nall, 3}, torch::TensorOptions().dtype(torch::kFloat64).device(torch_device_));
+      x.data(), {nlocal, 3}, torch::TensorOptions().dtype(torch::kFloat64).device(torch_device_));
   torch::Tensor positions = (dtype_ == torch::kFloat64)
                                 ? positions_d.clone()
                                 : positions_d.to(dtype_);
@@ -320,9 +324,9 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
   unit_shifts = unit_shifts.narrow(0, 0, total_edges);
 
   torch::Tensor atomic_numbers = blob_from_view(d_atomic_numbers_, torch_long_opts);
-  atomic_numbers = atomic_numbers.narrow(0, 0, nall);
+  atomic_numbers = atomic_numbers.narrow(0, 0, nlocal);
   torch::Tensor local_or_ghost = blob_from_view(d_local_or_ghost_, torch_bool_opts);
-  local_or_ghost = local_or_ghost.narrow(0, 0, nall);
+  local_or_ghost = local_or_ghost.narrow(0, 0, nlocal);
 
   // 6) Cell.
   torch::Tensor cell = torch::zeros({3, 3}, torch_real_opts);
@@ -377,11 +381,11 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
   // into LAMMPS' f.
   using UnmanagedF = Kokkos::View<double **, Kokkos::LayoutRight, DeviceType,
                                   Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-  UnmanagedF d_force_in(forces_t.data_ptr<double>(), nall, 3);
+  UnmanagedF d_force_in(forces_t.data_ptr<double>(), nlocal, 3);
 
   Kokkos::parallel_for(
       "matgl_kk:add_forces",
-      Kokkos::RangePolicy<DeviceType>(0, nall),
+      Kokkos::RangePolicy<DeviceType>(0, nlocal),   // ghosts carried zero
       KOKKOS_LAMBDA(const int i) {
         f(i, 0) += d_force_in(i, 0);
         f(i, 1) += d_force_in(i, 1);
