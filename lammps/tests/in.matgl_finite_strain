@@ -1,0 +1,40 @@
+# in.matgl_finite_strain
+#
+# Single-point energy and pressure for a uniformly scaled version of the
+# four-atom Mo-S fixture in in.matgl_si.  The scale must be supplied on the
+# command line, for example:
+#
+#   lmp -var scale 0.99 -in in.matgl_finite_strain
+#
+# Running at 1-epsilon, 1, and 1+epsilon lets
+# check_finite_difference_pressure.py validate the pressure/virial sign from
+# the energy derivative without using the model-reported stress as reference.
+
+units           metal
+atom_style      atomic
+boundary        p p p
+
+atom_modify     map yes
+newton          on
+
+lattice         custom ${scale} a1 4.5 0.0 0.0 a2 0.0 4.5 0.0 a3 0.0 0.0 4.5 &
+                origin 0 0 0 &
+                basis 0.00 0.00 0.00 &
+                basis 0.50 0.50 0.50 &
+                basis 0.50 0.00 0.25 &
+                basis 0.00 0.50 0.75
+region          box prism 0 1 0 1 0 1 0 0 0 units lattice
+create_box      2 box
+create_atoms    1 box basis 1 1 basis 2 2 basis 3 1 basis 4 2
+
+mass            1 95.95
+mass            2 32.06
+
+pair_style      matgl
+pair_coeff      * * model.pt Mo S
+
+thermo_style    custom step pe press pxx pyy pzz vol
+thermo_modify   format float %.15g
+thermo          1
+
+run             0
