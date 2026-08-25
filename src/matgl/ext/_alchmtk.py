@@ -217,7 +217,11 @@ def _compute_distances(
     """Compute the distances between the source and destination atoms."""
     vectors = positions[dst_id] - positions[src_id]
     if cell is not None and unit_shifts is not None:
-        vectors += unit_shifts @ cell
+        # unit_shifts arrives as an integer tensor from the neighbor-list
+        # kernel; integer x float matmul raises "expected mat1 and mat2 to
+        # have the same dtype", so every periodic call with
+        # compute_distances=True (the default) crashed here.
+        vectors += unit_shifts.to(positions.dtype) @ cell
     return torch.linalg.norm(vectors, dim=1)
 
 
