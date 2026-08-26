@@ -20,9 +20,16 @@ import matgl
 # (matgl.graph._compute_pyg, matgl.ext._lammps) predate that layout; the first
 # no longer exists, so the import raised ModuleNotFoundError and made the
 # "point pair_coeff at a checkpoint directory" path unusable.
-# _compute exports create_line_graph_torch directly,
-# so the in-memory shim that used to sit here is no longer needed either.
-from matgl.ext.lammps import export_lammps_model
+# The except branch keeps the script usable on the older layout, where
+# matgl.ext._lammps needs create_line_graph_torch shimmed in first.
+try:
+    from matgl.ext.lammps import export_lammps_model
+except ModuleNotFoundError:
+    import matgl.graph._compute_pyg as _cpyg
+
+    if not hasattr(_cpyg, "create_line_graph_torch"):
+        _cpyg.create_line_graph_torch = _cpyg.create_line_graph
+    from matgl.ext._lammps import export_lammps_model
 
 checkpoint_dir, out_path = sys.argv[1], sys.argv[2]
 potential = matgl.load_model(checkpoint_dir)

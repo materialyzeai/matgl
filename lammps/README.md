@@ -78,6 +78,19 @@ cmake -B build -S <lammps>/cmake \
 cmake --build build -j 8
 ```
 
+Steps 1–3 as a copy-paste block (GNU sed; the `set(STANDARD_PACKAGES`
+opener has kept this exact form across recent LAMMPS releases, and the
+list is not order-sensitive):
+
+```bash
+MATGL=/path/to/matgl
+LMP=/path/to/lammps
+ln -s "$MATGL/lammps/src/ML-MATGL" "$LMP/src/ML-MATGL"
+sed -i '/^set(STANDARD_PACKAGES$/a\  ML-MATGL' "$LMP/cmake/CMakeLists.txt"
+echo "include($MATGL/lammps/cmake/ML-MATGL.cmake)" >> "$LMP/cmake/CMakeLists.txt"
+grep -c ML-MATGL "$LMP/cmake/CMakeLists.txt"   # expect 2: package list + include
+```
+
 Check the registration before running anything:
 
 ```bash
