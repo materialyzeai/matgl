@@ -15,16 +15,21 @@ import torch
 
 import matgl
 
-# matgl/src/matgl/ext/_lammps.py imports create_line_graph_torch, which is
-# only used by the M3GNet export path and is absent from the current
-# _compute_pyg.py. Irrelevant to TensorNet exports; shim it in-memory only
-# (no matgl repo file changes) so the import below succeeds.
-import matgl.graph._compute_pyg as _cpyg
+# Module layout as of matgl 4.0.3: the helpers live in matgl.graph._compute
+# and the exporter in matgl.ext.lammps. The previous names
+# (matgl.graph._compute_pyg, matgl.ext._lammps) predate that layout; the first
+# no longer exists, so the import raised ModuleNotFoundError and made the
+# "point pair_coeff at a checkpoint directory" path unusable.
+# The except branch keeps the script usable on the older layout, where
+# matgl.ext._lammps needs create_line_graph_torch shimmed in first.
+try:
+    from matgl.ext.lammps import export_lammps_model
+except ModuleNotFoundError:
+    import matgl.graph._compute_pyg as _cpyg
 
-if not hasattr(_cpyg, "create_line_graph_torch"):
-    _cpyg.create_line_graph_torch = _cpyg.create_line_graph
-
-from matgl.ext._lammps import export_lammps_model
+    if not hasattr(_cpyg, "create_line_graph_torch"):
+        _cpyg.create_line_graph_torch = _cpyg.create_line_graph
+    from matgl.ext._lammps import export_lammps_model
 
 checkpoint_dir, out_path = sys.argv[1], sys.argv[2]
 potential = matgl.load_model(checkpoint_dir)

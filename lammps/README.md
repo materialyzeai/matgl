@@ -38,23 +38,64 @@ of which you'll need for `pair_coeff`.
 
 ### 2. Build LAMMPS with the package
 
-Drop the package into a stock LAMMPS source tree and configure:
+LAMMPS builds its style tables by scanning package directories and then
+generating `style_pair.h`, and the generation happens roughly two thirds of
+the way through `cmake/CMakeLists.txt` (`GenerateStyleHeaders(...)`, line 794
+in `stable_22Jul2025_update5`). **Appending an `include()` to the END of that
+file is therefore too late**: the sources compile and libtorch links, but the
+style never reaches `style_pair.h` and LAMMPS rejects it at run time with
+
+```
+ERROR: Unrecognized pair style 'matgl' (src/force.cpp:275)
+```
+
+Register it the way LAMMPS registers its own packages instead:
 
 ```bash
-# 1) Copy or symlink the source files.
+# 1) Copy or symlink the source files into the LAMMPS src tree.
 ln -s /path/to/matgl/lammps/src/ML-MATGL <lammps>/src/ML-MATGL
 
-# 2) Tell LAMMPS' CMake about the package.
+# 2) Add ML-MATGL to the package list, so LAMMPS' own per-package loop does
+#    RegisterStyles + target_sources + include dir at the right point.
+#    In <lammps>/cmake/CMakeLists.txt, inside set(STANDARD_PACKAGES ...):
+#        ML-IAP
+#      + ML-MATGL
+#        ML-PACE
+#    (`-D PKG_ML-MATGL=ON` then works like any other package flag.)
+
+# 3) Link libtorch. This snippet only does find_package(Torch) and the link;
+#    it must NOT also add the sources, or every file compiles twice under two
+#    paths and the link fails on duplicate symbols.
 echo 'include(/path/to/matgl/lammps/cmake/ML-MATGL.cmake)' \
     >> <lammps>/cmake/CMakeLists.txt
 
-# 3) Configure + build. Match libtorch's CXX11 ABI to LAMMPS'.
+# 4) Configure + build. Match libtorch's CXX11 ABI to LAMMPS'.
 cmake -B build -S <lammps>/cmake \
     -D PKG_ML-MATGL=ON \
     -D CMAKE_PREFIX_PATH=/path/to/libtorch \
     -D CMAKE_BUILD_TYPE=Release \
     -D BUILD_MPI=ON
 cmake --build build -j 8
+```
+
+Steps 1–3 as a copy-paste block (GNU sed; the `set(STANDARD_PACKAGES`
+opener has kept this exact form across recent LAMMPS releases, and the
+list is not order-sensitive):
+
+```bash
+MATGL=/path/to/matgl
+LMP=/path/to/lammps
+ln -s "$MATGL/lammps/src/ML-MATGL" "$LMP/src/ML-MATGL"
+sed -i '/^set(STANDARD_PACKAGES$/a\  ML-MATGL' "$LMP/cmake/CMakeLists.txt"
+echo "include($MATGL/lammps/cmake/ML-MATGL.cmake)" >> "$LMP/cmake/CMakeLists.txt"
+grep -c ML-MATGL "$LMP/cmake/CMakeLists.txt"   # expect 2: package list + include
+```
+
+Check the registration before running anything:
+
+```bash
+grep matgl build/styles/style_pair.h     # expect pair_matgl.h (and _kokkos.h)
+build/lmp -h | tr ' ' '\n' | grep '^matgl'
 ```
 
 ### 2b. Build the Kokkos GPU variant
@@ -64,6 +105,12 @@ matching snippet to LAMMPS' CMake. CUDA example for an Ampere card
 (A100/A30):
 
 ```bash
+# Put the Kokkos sources where the KOKKOS package looks for them: its
+# RegisterStylesExt(${KOKKOS_PKG_SOURCES_DIR} kokkos ...) scans
+# <lammps>/src/KOKKOS for *_kokkos.h style headers and picks up matgl/kk
+# automatically. A separate directory is not scanned.
+cp /path/to/matgl/lammps/src/KOKKOS/pair_matgl_kokkos.* <lammps>/src/KOKKOS/
+
 echo 'include(/path/to/matgl/lammps/cmake/ML-MATGL-KOKKOS.cmake)' \
     >> <lammps>/cmake/CMakeLists.txt
 
@@ -81,8 +128,20 @@ cmake --build build -j 8
 Run with:
 
 ```bash
-mpirun -n 1 build/lmp -k on g 1 -sf kk -in in.matgl_si
+mpirun -n 1 build/lmp -k on g 1 -sf kk -pk kokkos neigh half -in in.matgl_si
 ```
+
+**`neigh half` is required, not optional.** `pair_matgl` needs `newton on`
+(it folds periodic edges back onto local rows and needs ghost contributions),
+and LAMMPS refuses `newton on` together with the Kokkos default `neigh full`:
+
+```
+ERROR: Must use 'newton off' with KOKKOS package option 'neigh full'
+(src/KOKKOS/kokkos.cpp:693)
+```
+
+Equivalently, put `package kokkos neigh half` in the input deck before
+`atom_style`.
 
 `-sf kk` makes LAMMPS prefer Kokkos pair styles, so `pair_style matgl`
 in your input deck dispatches to `matgl/kk` automatically. If you'd
@@ -94,10 +153,30 @@ this explicit.
 
 Tested with:
 
-- LibTorch 2.2.x – 2.5.x (CXX11 ABI, CPU build).
+- LibTorch 2.2.x – 2.7.x (CXX11 ABI). **The Kokkos variant needs a CUDA
+  build of libtorch**, not a CPU-only one: `pair_matgl_kokkos.cpp` selects
+  `torch::Device(torch::kCUDA, gpu)` and wraps Kokkos device buffers as
+  tensors without a copy, so a CPU-only libtorch silently runs the model on
+  the host. The CPU build is what the CI job uses for the serial style.
 - LAMMPS develop branch (Aug 2024 or newer for the `add_request` /
-  `REQ_GHOST` neighbor-list API).
+  `REQ_GHOST` neighbor-list API); verified on `stable_22Jul2025_update5`.
 - C++17, MPI optional.
+
+#### Troubleshooting: CUDA 12.9 and newer toolkits
+
+libtorch's bundled Caffe2 CMake config predates two changes and each aborts
+the generate step. Both are fixed by a small file injected before
+`find_package(Torch)`, e.g. via
+`-D CMAKE_PROJECT_lammps_INCLUDE=/path/to/fixups.cmake`:
+
+- CUDA 12.9 removed the nvToolsExt shared library, so `FindCUDAToolkit` no
+  longer defines `CUDA::nvToolsExt` while `Caffe2/public/cuda.cmake` still
+  links it into `torch::nvtoolsext`. Declare it as a header-only interface
+  target (the nvtx3 headers are still shipped):
+  `add_library(CUDA::nvToolsExt INTERFACE IMPORTED GLOBAL)`.
+- On a machine without MKL, Caffe2 leaves the literal
+  `MKL_INCLUDE_DIR-NOTFOUND` inside torch's `INTERFACE_INCLUDE_DIRECTORIES`.
+  Point `MKL_INCLUDE_DIR` at any existing directory.
 
 ## LAMMPS input syntax
 
