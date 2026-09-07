@@ -104,12 +104,33 @@ cmake --build build -j 8
 Run with:
 
 ```bash
-mpirun -n 1 build/lmp -k on g 1 -sf kk -in in.matgl_si
+mpirun -n 1 build/lmp -k on g 1 -sf kk -pk kokkos newton on neigh half -in in.matgl_si
 ```
 
 `-sf kk` makes LAMMPS prefer Kokkos pair styles, so `pair_style matgl`
 in your input deck dispatches to `matgl/kk` automatically. If you'd
 rather force it explicitly, write `pair_style matgl/kk` instead.
+
+`-pk kokkos newton on neigh half` is required. On a GPU the KOKKOS package
+defaults to `newton off` and `neigh full`; `pair_matgl` needs `newton on`
+(ghost-atom forces are reverse-communicated), and LAMMPS refuses
+`newton on` while the package is set to `neigh full`. So without the `-pk`
+flags you get either
+
+```
+ERROR: pair_style matgl requires `newton on`
+```
+
+or, once you add `newton on` to the input,
+
+```
+ERROR: Must use 'newton off' with KOKKOS package option 'neigh full'
+```
+
+`neigh half` only changes the package default; `pair_matgl` still requests
+and receives its own full neighbor list with ghosts. Equivalently, put
+`package kokkos newton on neigh half` as the first line of the input deck,
+before `newton on`.
 
 **Single-GPU only.** Multi-rank Kokkos with libtorch is unreliable
 (MACE issues #1294 and #322); the package emits a CMake message making
