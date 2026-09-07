@@ -191,3 +191,23 @@ def test_smooth_sbf_lambda_cache_is_reused(restore_dtype):
     info = _get_lambda_func.cache_info()
     assert info.currsize == 1, f"cache did not coalesce: {info}"
     assert info.hits == 3, f"cache never hit: {info}"
+
+
+@pytest.mark.parametrize("scripted", [False, True])
+def test_smooth_sbf_functional_follows_input_device_and_dtype(scripted):
+    """The functional form must build its constants on ``r``'s device and dtype.
+
+    This is the code path the TorchScript LAMMPS export runs on the GPU. The
+    ``meta`` device stands in for a GPU: any constant silently created on the
+    CPU makes the arithmetic raise a device-mismatch error, so this guards the
+    fix without needing CUDA in CI.
+    """
+    fn = torch.jit.script(spherical_bessel_smooth) if scripted else spherical_bessel_smooth
+    r = torch.linspace(0.3, 5.0, 17)
+
+    out = fn(r.to("meta"), 5.0, 3)
+    assert out.device.type == "meta"
+    assert out.shape == (17, 3)
+
+    assert fn(r.double(), 5.0, 3).dtype == torch.float64
+    assert fn(r, 5.0, 3).dtype == torch.float32
