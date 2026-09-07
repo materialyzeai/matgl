@@ -181,6 +181,25 @@ The cached `lammps_model.pt` is only regenerated when `model.json` or
 example to pick up a fix in the exported kernels), delete `lammps_model.pt`
 by hand so the next run re-exports it.
 
+### TorchScript fusion and NVRTC
+
+The pair style disables TorchScript's TensorExpr fuser when it is
+constructed. Left on, the profiling executor compiles fused element-wise
+CUDA kernels at run time through NVRTC, which needs `libnvrtc-builtins`
+from the exact CUDA minor version libtorch was built against. On HPC module
+stacks that library is frequently missing or a different version, and the
+run dies on the second forward with
+
+```
+RuntimeError: nvrtc: error: failed to open libnvrtc-builtins.so.13.0.
+```
+
+The fused kernels buy little for these models. To re-enable them set
+`MATGL_TORCH_FUSER=1` in the environment (and make sure the matching
+`libnvrtc-builtins` is on `LD_LIBRARY_PATH`). With an older binary that
+predates this switch, `PYTORCH_TENSOREXPR=0` in the environment has the
+same effect.
+
 ### Optional pair_style flags
 
 ```lammps

@@ -39,6 +39,8 @@
 #include "tokenizer.h"
 #include "update.h"
 
+#include <torch/csrc/jit/passes/tensorexpr_fuser.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -96,6 +98,17 @@ PairMATGL::PairMATGL(LAMMPS *lmp) : Pair(lmp)
   centroidstressflag = CENTROID_NOTAVAIL;
   no_virial_fdotr_compute = 1;  // we set the virial directly from the model
   unit_convert_flag = 0;
+
+  // TorchScript's profiling executor fuses element-wise ops into kernels it
+  // compiles at run time; on CUDA that goes through NVRTC and needs the
+  // libnvrtc-builtins from the exact CUDA minor version libtorch was built
+  // against, which HPC module stacks often don't provide (on Perlmutter the
+  // second forward failed with "failed to open libnvrtc-builtins.so.13.0").
+  // The fused kernels gain little for a GNN dominated by matmul/scatter, so
+  // keep the fuser off unless explicitly requested. PYTORCH_TENSOREXPR=0 is
+  // libtorch's own equivalent switch.
+  if (const char *env = std::getenv("MATGL_TORCH_FUSER"); !(env && std::strcmp(env, "1") == 0))
+    torch::jit::setTensorExprFuserEnabled(false);
 }
 
 /* ---------------------------------------------------------------------- */
