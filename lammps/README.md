@@ -12,6 +12,8 @@ This directory ships:
   (`pair_style matgl/kk`).
 - `cmake/ML-MATGL.cmake` and `cmake/ML-MATGL-KOKKOS.cmake` — drop-in
   CMake snippets.
+- `src/ML-MATGL/patch_lammps.py` — wires those snippets into a stock LAMMPS
+  tree's `cmake/CMakeLists.txt` (run once before `cmake`).
 - `tests/in.matgl_si` — sample input deck for a single-point parity check.
 
 The Python side (one repo up) ships `mgl create-lammps-model`, which
@@ -41,23 +43,9 @@ of which you'll need for `pair_coeff`.
 Drop the package into a stock LAMMPS source tree and configure:
 
 ```bash
-# 1) Tell LAMMPS' CMake about the package. The snippet compiles the sources
-#    straight out of this repo, so nothing needs copying into <lammps>/src.
-#    Edit <lammps>/cmake/CMakeLists.txt and insert the include line right
-#    after the accelerator-package loop, i.e. after
-#
-#        foreach(PKG_WITH_INCL CORESHELL DPD-BASIC ... KOKKOS OPT INTEL GPU)
-#          ...
-#        endforeach()
-#
-#    and BEFORE `GenerateStyleHeaders(${LAMMPS_STYLE_HEADERS_DIR})`:
-#
-#        include(/path/to/matgl/lammps/cmake/ML-MATGL.cmake)
-#
-#    Do not append it to the end of the file: the snippet registers the pair
-#    style with LAMMPS' style factory, and that has to happen before the
-#    style headers are generated or you get "Unrecognized pair style matgl"
-#    at run time even though the sources compiled and linked fine.
+# 1) Tell LAMMPS' CMake about the package. Edits <lammps>/cmake/CMakeLists.txt
+#    once; the LAMMPS tree must be unmodified (the script refuses otherwise).
+python3 /path/to/matgl/lammps/src/ML-MATGL/patch_lammps.py /path/to/lammps /path/to/matgl
 
 # 2) Configure + build. Match libtorch's CXX11 ABI to LAMMPS'.
 cmake -B build -S <lammps>/cmake \
@@ -67,6 +55,24 @@ cmake -B build -S <lammps>/cmake \
     -D BUILD_MPI=ON
 cmake --build build -j 8
 ```
+
+`patch_lammps.py` inserts
+
+```cmake
+include(/path/to/matgl/lammps/cmake/ML-MATGL.cmake)
+include(/path/to/matgl/lammps/cmake/ML-MATGL-KOKKOS.cmake)
+```
+
+into `<lammps>/cmake/CMakeLists.txt` right after the accelerator-package
+loop (`foreach(PKG_WITH_INCL ... KOKKOS OPT INTEL GPU) ... endforeach()`)
+and therefore before `GenerateStyleHeaders(...)`. Placement matters: the
+snippets call `RegisterStyles()`, which must run before LAMMPS generates
+`style_pair.h`, or you get "Unrecognized pair style matgl" at run time even
+though everything compiled and linked. If you would rather edit the file
+by hand, put the two lines there yourself and do **not** append them at
+the end of the file. The snippets compile the sources straight out of this
+repo, so nothing is copied into `<lammps>/src`. The Kokkos snippet is a
+no-op unless `PKG_KOKKOS=ON`, so it is always included.
 
 Optional configure-time knobs:
 
@@ -78,17 +84,12 @@ Optional configure-time knobs:
 
 ### 2b. Build the Kokkos GPU variant
 
-To get the `matgl/kk` pair style, also enable Kokkos and add the
-matching snippet to LAMMPS' CMake. CUDA example for an Ampere card
-(A100/A30):
+To get the `matgl/kk` pair style, also enable Kokkos at configure time.
+CUDA example for an Ampere card (A100/A30):
 
 ```bash
-# Add this directly below the ML-MATGL.cmake include in
-# <lammps>/cmake/CMakeLists.txt (same placement rule: before
-# GenerateStyleHeaders, not at the end of the file):
-#
-#     include(/path/to/matgl/lammps/cmake/ML-MATGL-KOKKOS.cmake)
-
+# patch_lammps.py (step 2 above) already added the ML-MATGL-KOKKOS.cmake
+# include; only the configure flags change.
 cmake -B build -S <lammps>/cmake \
     -D PKG_ML-MATGL=ON \
     -D PKG_KOKKOS=ON \
