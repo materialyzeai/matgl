@@ -41,14 +41,25 @@ of which you'll need for `pair_coeff`.
 Drop the package into a stock LAMMPS source tree and configure:
 
 ```bash
-# 1) Copy or symlink the source files.
-ln -s /path/to/matgl/lammps/src/ML-MATGL <lammps>/src/ML-MATGL
+# 1) Tell LAMMPS' CMake about the package. The snippet compiles the sources
+#    straight out of this repo, so nothing needs copying into <lammps>/src.
+#    Edit <lammps>/cmake/CMakeLists.txt and insert the include line right
+#    after the accelerator-package loop, i.e. after
+#
+#        foreach(PKG_WITH_INCL CORESHELL DPD-BASIC ... KOKKOS OPT INTEL GPU)
+#          ...
+#        endforeach()
+#
+#    and BEFORE `GenerateStyleHeaders(${LAMMPS_STYLE_HEADERS_DIR})`:
+#
+#        include(/path/to/matgl/lammps/cmake/ML-MATGL.cmake)
+#
+#    Do not append it to the end of the file: the snippet registers the pair
+#    style with LAMMPS' style factory, and that has to happen before the
+#    style headers are generated or you get "Unrecognized pair style matgl"
+#    at run time even though the sources compiled and linked fine.
 
-# 2) Tell LAMMPS' CMake about the package.
-echo 'include(/path/to/matgl/lammps/cmake/ML-MATGL.cmake)' \
-    >> <lammps>/cmake/CMakeLists.txt
-
-# 3) Configure + build. Match libtorch's CXX11 ABI to LAMMPS'.
+# 2) Configure + build. Match libtorch's CXX11 ABI to LAMMPS'.
 cmake -B build -S <lammps>/cmake \
     -D PKG_ML-MATGL=ON \
     -D CMAKE_PREFIX_PATH=/path/to/libtorch \
@@ -57,15 +68,26 @@ cmake -B build -S <lammps>/cmake \
 cmake --build build -j 8
 ```
 
+Optional configure-time knobs:
+
+- `-D ML_MATGL_DIR=<path>` — where `pair_matgl.cpp` lives (defaults to
+  `../src/ML-MATGL` relative to the snippet).
+- `-D MATGL_PYTHON_EXECUTABLE=<path>` — interpreter used to export a raw
+  matgl checkpoint on first use (see "Checkpoint auto-export" below).
+  Defaults to `python3`, i.e. whatever is on `$PATH` when LAMMPS runs.
+
 ### 2b. Build the Kokkos GPU variant
 
-To get the `matgl/kk` pair style, also enable Kokkos and append the
+To get the `matgl/kk` pair style, also enable Kokkos and add the
 matching snippet to LAMMPS' CMake. CUDA example for an Ampere card
 (A100/A30):
 
 ```bash
-echo 'include(/path/to/matgl/lammps/cmake/ML-MATGL-KOKKOS.cmake)' \
-    >> <lammps>/cmake/CMakeLists.txt
+# Add this directly below the ML-MATGL.cmake include in
+# <lammps>/cmake/CMakeLists.txt (same placement rule: before
+# GenerateStyleHeaders, not at the end of the file):
+#
+#     include(/path/to/matgl/lammps/cmake/ML-MATGL-KOKKOS.cmake)
 
 cmake -B build -S <lammps>/cmake \
     -D PKG_ML-MATGL=ON \
@@ -115,6 +137,22 @@ pair_coeff      * * tensornet_matpes_r2scan.pt Si C O
 LAMMPS atom-type order: type 1 = first symbol, type 2 = second, …
 
 The cutoff (`r_max`) is read from the model — you don't pass it.
+
+### Checkpoint auto-export
+
+`pair_coeff` also accepts a directory holding a raw matgl checkpoint
+(`model.json` + `state.pt`) instead of an exported `.pt`. On first use the
+pair style shells out to `src/ML-MATGL/export_matgl_checkpoint.py` to
+produce `lammps_model.pt` next to the checkpoint and caches it there. That
+script needs a Python environment with `matgl` importable. Which interpreter
+is used is resolved in this order:
+
+1. `MATGL_PYTHON` environment variable at run time, if set.
+2. `-D MATGL_PYTHON_EXECUTABLE=...` given at configure time.
+3. `python3` from `$PATH`.
+
+The script path defaults to the one baked in at configure time and can be
+overridden at run time with the `MATGL_EXPORT_SCRIPT` environment variable.
 
 ### Optional pair_style flags
 
