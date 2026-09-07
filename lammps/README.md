@@ -176,6 +176,11 @@ is used is resolved in this order:
 The script path defaults to the one baked in at configure time and can be
 overridden at run time with the `MATGL_EXPORT_SCRIPT` environment variable.
 
+The cached `lammps_model.pt` is only regenerated when `model.json` or
+`state.pt` is newer than it. After updating the matgl package itself (for
+example to pick up a fix in the exported kernels), delete `lammps_model.pt`
+by hand so the next run re-exports it.
+
 ### Optional pair_style flags
 
 ```lammps
