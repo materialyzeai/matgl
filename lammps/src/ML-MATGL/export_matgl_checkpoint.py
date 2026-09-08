@@ -21,6 +21,16 @@ from matgl.ext.lammps import export_lammps_model
 
 if len(sys.argv) != 3:
     sys.exit(__doc__)
+
+try:
+    from matgl.ext.lammps import export_lammps_model
+except ModuleNotFoundError:
+    import matgl.graph._compute_pyg as _cpyg
+
+    if not hasattr(_cpyg, "create_line_graph_torch"):
+        _cpyg.create_line_graph_torch = _cpyg.create_line_graph
+    from matgl.ext._lammps import export_lammps_model
+
 checkpoint_dir, out_path = sys.argv[1], sys.argv[2]
 
 potential = matgl.load_model(checkpoint_dir)

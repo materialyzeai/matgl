@@ -70,8 +70,19 @@ def main() -> int:
     for row in forces:
         print(f"  {row[0]:.10e}  {row[1]:.10e}  {row[2]:.10e}")
     if isinstance(stress, np.ndarray) and stress.size == 6:
-        print("stress_GPa (Voigt: xx yy zz yz xz xy) =")
+        # Two sign conventions are in play and they are opposite, so print
+        # both. ASE/pymatgen report sigma = (1/V) dE/depsilon (positive in
+        # tension); LAMMPS' thermo Pxx.. is a PRESSURE, P = -sigma. Printing
+        # only the first and setting it beside LAMMPS' output invites the
+        # reader to "confirm" a sign-flipped virial.
+        print("stress_GPa (ASE convention, sigma = dE/deps / V; "
+              "Voigt: xx yy zz yz xz xy) =")
         print("  " + "  ".join(f"{s:.6e}" for s in stress))
+        print("pressure_bar (LAMMPS convention, P = -sigma; compare with the "
+              "Pxx Pyy Pzz Pyz Pxz Pxy thermo columns) =")
+        GPA_TO_BAR = 1.0e4
+        print("  " + "  ".join(f"{-s * GPA_TO_BAR:.6e}" for s in stress))
+        print(f"mean_pressure_bar = {-stress[:3].mean() * GPA_TO_BAR:.6e}")
     return 0
 
 
