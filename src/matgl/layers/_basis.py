@@ -374,11 +374,7 @@ def spherical_bessel_smooth(r: Tensor, cutoff: float = 5.0, max_n: int = 10) -> 
         * (_sinc(r * (n + 1) * pi_local / cutoff) + _sinc(r * (n + 2) * pi_local / cutoff))
     )
     en = n**2 * (n + 2) ** 2 / (4 * (n + 1) ** 4 + 1)
-<<<<<<< HEAD
     dn = [torch.ones_like(en[0, 0])]
-=======
-    dn = [torch.tensor(1.0, device=r.device)]
->>>>>>> materialyzeai/main
     for i in range(1, max_n):
         dn_value = 1 - en[0, i] / dn[-1]
         dn.append(dn_value)

@@ -17,11 +17,14 @@ import sys
 import torch
 
 import matgl
-from matgl.ext.lammps import export_lammps_model
 
 if len(sys.argv) != 3:
     sys.exit(__doc__)
 
+# matgl.ext.lammps is the current home of export_lammps_model; fall back to the
+# pre-rename layout (matgl.ext._lammps, with the create_line_graph_torch alias
+# it needs shimmed in) so this script also works against an older matgl
+# install on whatever interpreter MATGL_PYTHON points at.
 try:
     from matgl.ext.lammps import export_lammps_model
 except ModuleNotFoundError:

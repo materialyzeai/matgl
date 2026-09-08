@@ -40,7 +40,7 @@ of which you'll need for `pair_coeff`.
 
 ### 2. Build LAMMPS with the package
 
-Register the MatGL pair styke the way LAMMPS registers its own packages:
+Register the MatGL pair style the way LAMMPS registers its own packages:
 
 ```bash
 # 1) Tell LAMMPS' CMake about the package. Edits <lammps>/cmake/CMakeLists.txt

@@ -1,4 +1,4 @@
-# ML-MATGL Kokkos variant -- documentation / warning fragment.
+# ML-MATGL Kokkos variant — drop-in CMake snippet.
 #
 # Layered on top of ML-MATGL.cmake: include() this *after* the base snippet,
 # and set PKG_ML-MATGL=ON and PKG_KOKKOS=ON together.
@@ -9,7 +9,14 @@
 # It calls RegisterStyles(); appended at the end of the file it runs too late
 # and `pair_style matgl/kk` is never registered.
 #
-#   cp /path/to/matgl/lammps/src/KOKKOS/pair_matgl_kokkos.* <lammps>/src/KOKKOS/
+# Usage (from a stock LAMMPS source tree):
+#   cmake -B build \
+#       -D PKG_ML-MATGL=ON -D PKG_KOKKOS=ON \
+#       -D Kokkos_ENABLE_CUDA=ON \
+#       -D Kokkos_ARCH_AMPERE80=ON \
+#       -D CMAKE_PREFIX_PATH=/path/to/libtorch \
+#       -D CMAKE_CXX_COMPILER=$LAMMPS/lib/kokkos/bin/nvcc_wrapper \
+#       <other flags>
 #
 # The `pair_matgl/kk` style is registered via the standard LAMMPS Kokkos
 # pair-style macro so users invoke it with `pair_style matgl/kk` or by

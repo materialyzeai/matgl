@@ -34,6 +34,18 @@ if(NOT PKG_ML-MATGL)
     return()
 endif()
 
+# Locate the source directory.
+if(NOT DEFINED ML_MATGL_DIR)
+    get_filename_component(ML_MATGL_DIR
+        "${CMAKE_CURRENT_LIST_DIR}/../src/ML-MATGL" ABSOLUTE)
+endif()
+
+if(NOT EXISTS "${ML_MATGL_DIR}/pair_matgl.cpp")
+    message(FATAL_ERROR
+        "ML-MATGL source not found at ${ML_MATGL_DIR}. "
+        "Set -DML_MATGL_DIR=<path/to/lammps/src/ML-MATGL>.")
+endif()
+
 # Pull in libtorch.
 find_package(Torch REQUIRED)
 if(NOT TORCH_LIBRARIES)
@@ -42,7 +54,6 @@ if(NOT TORCH_LIBRARIES)
         "Did you set CMAKE_PREFIX_PATH to a libtorch install?")
 endif()
 
-<<<<<<< HEAD
 # Compose the source list.
 file(GLOB ML_MATGL_SOURCES "${ML_MATGL_DIR}/*.cpp")
 
@@ -65,8 +76,6 @@ target_compile_definitions(lammps PRIVATE
 # <lammps>/cmake/CMakeLists.txt; the `lammps` target already exists by then.
 target_sources(lammps PRIVATE ${ML_MATGL_SOURCES})
 target_include_directories(lammps PRIVATE ${ML_MATGL_DIR})
-=======
->>>>>>> materialyzeai/main
 target_compile_features(lammps PRIVATE cxx_std_17)
 target_link_libraries(lammps PRIVATE ${TORCH_LIBRARIES})
 
@@ -79,10 +88,6 @@ if(DEFINED TORCH_CXX_FLAGS)
     set_property(TARGET lammps APPEND_STRING PROPERTY COMPILE_FLAGS " ${TORCH_CXX_FLAGS}")
 endif()
 
-<<<<<<< HEAD
 message(STATUS "ML-MATGL: enabled, sources from ${ML_MATGL_DIR}")
 message(STATUS "ML-MATGL: checkpoint export uses ${MATGL_PYTHON_EXECUTABLE} (override with MATGL_PYTHON at run time)")
 message(STATUS "ML-MATGL: linking against TORCH_LIBRARIES=${TORCH_LIBRARIES}")
-=======
-message(STATUS "ML-MATGL: libtorch linked, TORCH_LIBRARIES=${TORCH_LIBRARIES}")
->>>>>>> materialyzeai/main
