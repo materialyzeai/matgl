@@ -49,7 +49,7 @@ dependencies = [
     "ase",
     "torch",
     "torchdata",
-    "lightning>=2.6.6,<2.7",
+    "lightning>=2.6.6",
     "pydantic",
     "boto3",
     "numpy",
