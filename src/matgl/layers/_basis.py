@@ -361,7 +361,7 @@ def spherical_bessel_smooth(r: Tensor, cutoff: float = 5.0, max_n: int = 10) -> 
     # in TorchScript's annotation context).
     pi_local = 3.141592653589793
     sqrt2 = 1.4142135623730951
-    n = torch.arange(max_n, device=r.device).type(dtype=matgl.float_th)[None, :]
+    n = torch.arange(max_n, dtype=r.dtype, device=r.device)[None, :]
     r = r[:, None]
     fnr = (
         (-1) ** n
