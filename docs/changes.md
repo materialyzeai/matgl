@@ -6,6 +6,15 @@ nav_order: 3
 
 # Change Log
 
+## 4.0.4
+- **Fix: CHGNet three-body geometry autograd detachment (#834).** Continuous line-graph geometry features
+  (`lg_bond_vec` and `lg_bond_dist`) were previously sliced under `torch.no_grad()`, causing three-body angular
+  contributions to forces and stresses to be detached from autograd. Discrete graph topology is now isolated
+  in `torch.no_grad()` while coordinate slicing preserves gradient tracking (@wakamiya0315, @bowen-bd).
+- **Fix: Multi-GPU DDP training metric device mismatch and cache race condition.** Fixed an issue where dummy
+  metric tensors in `PotentialLightningModule.loss_fn` were constructed on CPU, causing NCCL `sync_dist=True` to
+  crash, and guarded dataset cache directory cleanup in `MGLDataset` against multi-rank race conditions.
+
 ## 4.0.3
 - **New: LAMMPS integration for TensorNet and M3GNet potentials (#815).** `matgl.ext.lammps.LAMMPSMatGLModel`
   exports a PyG `Potential` to a TorchScript artifact (via the new `mgl create-lammps-model` CLI subcommand),
