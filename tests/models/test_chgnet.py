@@ -657,3 +657,27 @@ def test_matpes_model_parity_pyg(matpes_pyg_potential, struct_name):
     assert torch.allclose(magmom.detach(), exp_magmom, atol=atol), (
         f"[{functional}/{struct_name}] magmom mismatch (max diff {(magmom.detach() - exp_magmom).abs().max():.2e})"
     )
+
+
+@pytest.mark.parametrize("functional", ["r2SCAN", "PBE"])
+def test_matpes_1m_pretrained_inference(functional):
+    """Verify newly released 1M CHGNet models load from Hub and execute forward pass."""
+    model_name = f"BowenD-UCB/CHGNet-PES-MatPES-{functional}-1M-2026.9"
+    try:
+        pot = matgl.load_model(model_name)
+    except Exception as e:
+        pytest.skip(f"1M {functional} model '{model_name}' could not be loaded: {e}")
+    pot.eval()
+
+    struct = _PARITY_STRUCTURES["mos"]
+    natoms = len(struct)
+    conv = Structure2Graph(element_types=pot.model.element_types, cutoff=pot.model.cutoff)
+    g, lat, _ = conv.get_graph(struct)
+    g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
+    g.pos = g.frac_coords @ lat[0]
+
+    out = pot(g=g, lat=lat)
+    energy, forces = out[0], out[1]
+    assert energy.numel() == 1
+    assert forces.shape == (natoms, 3)
+
