@@ -39,10 +39,27 @@
 #include "tokenizer.h"
 #include "update.h"
 
+#include <torch/csrc/jit/passes/tensorexpr_fuser.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
+
+// Interpreter + script used to export a raw matgl checkpoint to TorchScript
+// on first use. Both are normally injected by cmake/ML-MATGL.cmake
+// (MATGL_PYTHON_EXECUTABLE defaults to "python3"; MATGL_EXPORT_SCRIPT points
+// at the export_matgl_checkpoint.py shipped next to this file). The fallbacks
+// below only matter if this file is compiled outside that CMake snippet. At
+// run time the MATGL_PYTHON and MATGL_EXPORT_SCRIPT environment variables
+// override either without a rebuild.
+#ifndef MATGL_PYTHON_EXECUTABLE
+#define MATGL_PYTHON_EXECUTABLE "python3"
+#endif
+#ifndef MATGL_EXPORT_SCRIPT
+#define MATGL_EXPORT_SCRIPT ""
+#endif
 
 using namespace LAMMPS_NS;
 
@@ -81,6 +98,17 @@ PairMATGL::PairMATGL(LAMMPS *lmp) : Pair(lmp)
   centroidstressflag = CENTROID_NOTAVAIL;
   no_virial_fdotr_compute = 1;  // we set the virial directly from the model
   unit_convert_flag = 0;
+
+  // TorchScript's profiling executor fuses element-wise ops into kernels it
+  // compiles at run time; on CUDA that goes through NVRTC and needs the
+  // libnvrtc-builtins from the exact CUDA minor version libtorch was built
+  // against, which HPC module stacks often don't provide (on Perlmutter the
+  // second forward failed with "failed to open libnvrtc-builtins.so.13.0").
+  // The fused kernels gain little for a GNN dominated by matmul/scatter, so
+  // keep the fuser off unless explicitly requested. PYTORCH_TENSOREXPR=0 is
+  // libtorch's own equivalent switch.
+  if (const char *env = std::getenv("MATGL_TORCH_FUSER"); !(env && std::strcmp(env, "1") == 0))
+    torch::jit::setTensorExprFuserEnabled(false);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -154,11 +182,21 @@ void PairMATGL::coeff(int narg, char **arg)
                          "pair_matgl: exporting matgl checkpoint '{}' to LAMMPS "
                          "TorchScript format (one-time, cached as '{}')...\n",
                          dir.string(), cached.string());
-          static const std::string kPython = "/global/cfs/cdirs/m4845/repos/matgl/.venv/bin/python";
-          static const std::string kExportScript =
-              "/global/cfs/cdirs/m4845/repos/lammps/src/ML-MATGL/export_matgl_checkpoint.py";
-          std::string cmd = kPython + " '" + kExportScript + "' '" + dir.string() + "' '" +
-                             cached.string() + "'";
+          std::string python_exe = MATGL_PYTHON_EXECUTABLE;
+          std::string export_script = MATGL_EXPORT_SCRIPT;
+          if (const char *env = std::getenv("MATGL_PYTHON"); env && *env) python_exe = env;
+          if (const char *env = std::getenv("MATGL_EXPORT_SCRIPT"); env && *env) export_script = env;
+          if (export_script.empty())
+            error->one(FLERR,
+                       "pair_matgl: no checkpoint export script configured; build with "
+                       "cmake/ML-MATGL.cmake or set the MATGL_EXPORT_SCRIPT environment variable");
+          if (!fs::exists(export_script))
+            error->one(FLERR,
+                       "pair_matgl: checkpoint export script '{}' not found (override with the "
+                       "MATGL_EXPORT_SCRIPT environment variable)",
+                       export_script);
+          std::string cmd = "'" + python_exe + "' '" + export_script + "' '" + dir.string() +
+                             "' '" + cached.string() + "'";
           int rc = std::system(cmd.c_str());
           if (rc != 0)
             error->one(FLERR, "pair_matgl: export of matgl checkpoint '{}' failed (command '{}' exited {})",

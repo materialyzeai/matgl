@@ -12,6 +12,8 @@ This directory ships:
   (`pair_style matgl/kk`).
 - `cmake/ML-MATGL.cmake` and `cmake/ML-MATGL-KOKKOS.cmake` — drop-in
   CMake snippets.
+- `src/ML-MATGL/patch_lammps.py` — wires those snippets into a stock LAMMPS
+  tree's `cmake/CMakeLists.txt` (run once before `cmake`).
 - `tests/in.matgl_si` — sample input deck for a single-point parity check.
 
 The Python side (one repo up) ships `mgl create-lammps-model`, which
@@ -38,38 +40,14 @@ of which you'll need for `pair_coeff`.
 
 ### 2. Build LAMMPS with the package
 
-LAMMPS builds its style tables by scanning package directories and then
-generating `style_pair.h`, and the generation happens roughly two thirds of
-the way through `cmake/CMakeLists.txt` (`GenerateStyleHeaders(...)`, line 794
-in `stable_22Jul2025_update5`). **Appending an `include()` to the END of that
-file is therefore too late**: the sources compile and libtorch links, but the
-style never reaches `style_pair.h` and LAMMPS rejects it at run time with
-
-```
-ERROR: Unrecognized pair style 'matgl' (src/force.cpp:275)
-```
-
-Register it the way LAMMPS registers its own packages instead:
+Register the MatGL pair style the way LAMMPS registers its own packages:
 
 ```bash
-# 1) Copy or symlink the source files into the LAMMPS src tree.
-ln -s /path/to/matgl/lammps/src/ML-MATGL <lammps>/src/ML-MATGL
+# 1) Tell LAMMPS' CMake about the package. Edits <lammps>/cmake/CMakeLists.txt
+#    once; the LAMMPS tree must be unmodified (the script refuses otherwise).
+python3 /path/to/matgl/lammps/src/ML-MATGL/patch_lammps.py /path/to/lammps /path/to/matgl
 
-# 2) Add ML-MATGL to the package list, so LAMMPS' own per-package loop does
-#    RegisterStyles + target_sources + include dir at the right point.
-#    In <lammps>/cmake/CMakeLists.txt, inside set(STANDARD_PACKAGES ...):
-#        ML-IAP
-#      + ML-MATGL
-#        ML-PACE
-#    (`-D PKG_ML-MATGL=ON` then works like any other package flag.)
-
-# 3) Link libtorch. This snippet only does find_package(Torch) and the link;
-#    it must NOT also add the sources, or every file compiles twice under two
-#    paths and the link fails on duplicate symbols.
-echo 'include(/path/to/matgl/lammps/cmake/ML-MATGL.cmake)' \
-    >> <lammps>/cmake/CMakeLists.txt
-
-# 4) Configure + build. Match libtorch's CXX11 ABI to LAMMPS'.
+# 2) Configure + build. Match libtorch's CXX11 ABI to LAMMPS'.
 cmake -B build -S <lammps>/cmake \
     -D PKG_ML-MATGL=ON \
     -D CMAKE_PREFIX_PATH=/path/to/libtorch \
@@ -78,42 +56,40 @@ cmake -B build -S <lammps>/cmake \
 cmake --build build -j 8
 ```
 
-Steps 1–3 as a copy-paste block (GNU sed; the `set(STANDARD_PACKAGES`
-opener has kept this exact form across recent LAMMPS releases, and the
-list is not order-sensitive):
+`patch_lammps.py` inserts
 
-```bash
-MATGL=/path/to/matgl
-LMP=/path/to/lammps
-ln -s "$MATGL/lammps/src/ML-MATGL" "$LMP/src/ML-MATGL"
-sed -i '/^set(STANDARD_PACKAGES$/a\  ML-MATGL' "$LMP/cmake/CMakeLists.txt"
-echo "include($MATGL/lammps/cmake/ML-MATGL.cmake)" >> "$LMP/cmake/CMakeLists.txt"
-grep -c ML-MATGL "$LMP/cmake/CMakeLists.txt"   # expect 2: package list + include
+```cmake
+include(/path/to/matgl/lammps/cmake/ML-MATGL.cmake)
+include(/path/to/matgl/lammps/cmake/ML-MATGL-KOKKOS.cmake)
 ```
 
-Check the registration before running anything:
+into `<lammps>/cmake/CMakeLists.txt` right after the accelerator-package
+loop (`foreach(PKG_WITH_INCL ... KOKKOS OPT INTEL GPU) ... endforeach()`)
+and therefore before `GenerateStyleHeaders(...)`. Placement matters: the
+snippets call `RegisterStyles()`, which must run before LAMMPS generates
+`style_pair.h`, or you get "Unrecognized pair style matgl" at run time even
+though everything compiled and linked. If you would rather edit the file
+by hand, put the two lines there yourself and do **not** append them at
+the end of the file. The snippets compile the sources straight out of this
+repo, so nothing is copied into `<lammps>/src`. The Kokkos snippet is a
+no-op unless `PKG_KOKKOS=ON`, so it is always included.
 
-```bash
-grep matgl build/styles/style_pair.h     # expect pair_matgl.h (and _kokkos.h)
-build/lmp -h | tr ' ' '\n' | grep '^matgl'
-```
+Optional configure-time knobs:
+
+- `-D ML_MATGL_DIR=<path>` — where `pair_matgl.cpp` lives (defaults to
+  `../src/ML-MATGL` relative to the snippet).
+- `-D MATGL_PYTHON_EXECUTABLE=<path>` — interpreter used to export a raw
+  matgl checkpoint on first use (see "Checkpoint auto-export" below).
+  Defaults to `python3`, i.e. whatever is on `$PATH` when LAMMPS runs.
 
 ### 2b. Build the Kokkos GPU variant
 
-To get the `matgl/kk` pair style, also enable Kokkos and append the
-matching snippet to LAMMPS' CMake. CUDA example for an Ampere card
-(A100/A30):
+To get the `matgl/kk` pair style, also enable Kokkos at configure time.
+CUDA example for an Ampere card (A100/A30):
 
 ```bash
-# Put the Kokkos sources where the KOKKOS package looks for them: its
-# RegisterStylesExt(${KOKKOS_PKG_SOURCES_DIR} kokkos ...) scans
-# <lammps>/src/KOKKOS for *_kokkos.h style headers and picks up matgl/kk
-# automatically. A separate directory is not scanned.
-cp /path/to/matgl/lammps/src/KOKKOS/pair_matgl_kokkos.* <lammps>/src/KOKKOS/
-
-echo 'include(/path/to/matgl/lammps/cmake/ML-MATGL-KOKKOS.cmake)' \
-    >> <lammps>/cmake/CMakeLists.txt
-
+# patch_lammps.py (step 2 above) already added the ML-MATGL-KOKKOS.cmake
+# include; only the configure flags change.
 cmake -B build -S <lammps>/cmake \
     -D PKG_ML-MATGL=ON \
     -D PKG_KOKKOS=ON \
@@ -128,19 +104,15 @@ cmake --build build -j 8
 Run with:
 
 ```bash
-mpirun -n 1 build/lmp -k on g 1 -sf kk -pk kokkos neigh half -in in.matgl_si
+mpirun -n 1 build/lmp -k on g 1 -sf kk -pk kokkos newton on neigh half -in in.matgl_si
 ```
 
-**`neigh half` is required, not optional.** `pair_matgl` needs `newton on`
-(it folds periodic edges back onto local rows and needs ghost contributions),
-and LAMMPS refuses `newton on` together with the Kokkos default `neigh full`:
+**`-pk kokkos newton on neigh half` is required, not optional.** `pair_matgl` 
+needs `newton on` (it folds periodic edges back onto local rows and needs ghost 
+contributions), and LAMMPS refuses `newton on` together with the Kokkos default 
+`neigh full`.
 
-```
-ERROR: Must use 'newton off' with KOKKOS package option 'neigh full'
-(src/KOKKOS/kokkos.cpp:693)
-```
-
-Equivalently, put `package kokkos neigh half` in the input deck before
+Equivalently, put `package kokkos newton on neigh half` in the input deck before
 `atom_style`.
 
 `-sf kk` makes LAMMPS prefer Kokkos pair styles, so `pair_style matgl`
@@ -194,6 +166,46 @@ pair_coeff      * * tensornet_matpes_r2scan.pt Si C O
 LAMMPS atom-type order: type 1 = first symbol, type 2 = second, …
 
 The cutoff (`r_max`) is read from the model — you don't pass it.
+
+### Checkpoint auto-export
+
+`pair_coeff` also accepts a directory holding a raw matgl checkpoint
+(`model.json` + `state.pt`) instead of an exported `.pt`. On first use the
+pair style shells out to `src/ML-MATGL/export_matgl_checkpoint.py` to
+produce `lammps_model.pt` next to the checkpoint and caches it there. That
+script needs a Python environment with `matgl` importable. Which interpreter
+is used is resolved in this order:
+
+1. `MATGL_PYTHON` environment variable at run time, if set.
+2. `-D MATGL_PYTHON_EXECUTABLE=...` given at configure time.
+3. `python3` from `$PATH`.
+
+The script path defaults to the one baked in at configure time and can be
+overridden at run time with the `MATGL_EXPORT_SCRIPT` environment variable.
+
+The cached `lammps_model.pt` is only regenerated when `model.json` or
+`state.pt` is newer than it. After updating the matgl package itself (for
+example to pick up a fix in the exported kernels), delete `lammps_model.pt`
+by hand so the next run re-exports it.
+
+### TorchScript fusion and NVRTC
+
+The pair style disables TorchScript's TensorExpr fuser when it is
+constructed. Left on, the profiling executor compiles fused element-wise
+CUDA kernels at run time through NVRTC, which needs `libnvrtc-builtins`
+from the exact CUDA minor version libtorch was built against. On HPC module
+stacks that library is frequently missing or a different version, and the
+run dies on the second forward with
+
+```
+RuntimeError: nvrtc: error: failed to open libnvrtc-builtins.so.13.0.
+```
+
+The fused kernels buy little for these models. To re-enable them set
+`MATGL_TORCH_FUSER=1` in the environment (and make sure the matching
+`libnvrtc-builtins` is on `LD_LIBRARY_PATH`). With an older binary that
+predates this switch, `PYTORCH_TENSOREXPR=0` in the environment has the
+same effect.
 
 ### Optional pair_style flags
 
