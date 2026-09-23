@@ -136,3 +136,40 @@ class TestSeparateNodeEdgeKeys:
         assert set(node_keys) == {"node_attr", "edge_attr"}
         assert edge_keys == []
         assert "edge_index" in other_keys
+
+
+class TestCreateDirectedLineGraph:
+    """Unit tests for create_directed_line_graph autograd correctness (#834)."""
+
+    def test_line_graph_preserves_autograd_gradients(self):
+        """Continuous geometry features must retain autograd connection to pos."""
+        from matgl.graph._compute import create_directed_line_graph
+
+        pos = torch.tensor([[0.0, 0.0, 0.0], [1.5, 0.0, 0.0], [0.0, 1.5, 0.0]], requires_grad=True)
+        edge_index = torch.tensor([[0, 0, 1, 2], [1, 2, 0, 0]], dtype=torch.long)
+        pbc_offshift = torch.zeros((4, 3))
+        pbc_offset = torch.zeros((4, 3), dtype=torch.long)
+
+        bond_vec, bond_dist = compute_pair_vector_and_distance(pos, edge_index, pbc_offshift)
+        lg_edge_index, lg_bond_vec, lg_bond_dist, lg_pbc_offset, lg_src_bond_sign = create_directed_line_graph(
+            edge_index, pbc_offset, bond_vec, bond_dist, threebody_cutoff=3.0
+        )
+
+        # 1. Verify continuous features have autograd history
+        assert lg_bond_vec.requires_grad
+        assert lg_bond_dist.requires_grad
+        assert lg_bond_vec.grad_fn is not None
+        assert lg_bond_dist.grad_fn is not None
+
+        # 2. Verify discrete topology tensors are not tracked
+        assert not lg_edge_index.requires_grad
+        assert not lg_pbc_offset.requires_grad
+        assert not lg_src_bond_sign.requires_grad
+
+        # 3. Verify gradients propagate back to positions
+        loss = lg_bond_vec.sum() + lg_bond_dist.sum()
+        loss.backward()
+        assert pos.grad is not None
+        assert torch.isfinite(pos.grad).all()
+        assert (pos.grad.abs() > 0).any()
+

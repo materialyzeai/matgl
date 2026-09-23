@@ -6,6 +6,21 @@ nav_order: 3
 
 # Change Log
 
+## 4.0.4
+- **New: Release of compact ~1M parameter CHGNet MatPES models.** Released lightweight (1,083,842 parameter)
+  CHGNet foundation potentials for both PBE (`BowenD-UCB/CHGNet-PES-MatPES-PBE-1M-2026.9`) and r2SCAN
+  (`BowenD-UCB/CHGNet-PES-MatPES-r2SCAN-1M-2026.9`) trained on the official MatPES dataset (`2024.11` / `2025.2`). Despite having
+  ~2.5× fewer parameters than the 2.7M baseline, these compact models achieve comparable or superior test MAE across
+  energy (25.53 meV/atom PBE vs 28.09 meV/atom), forces (116.30 meV/Å PBE vs 117.36 meV/Å; 144.03 meV/Å r2SCAN vs 145.27 meV/Å),
+  and stresses.
+- **Fix: CHGNet three-body geometry autograd detachment (#834).** Continuous line-graph geometry features
+  (`lg_bond_vec` and `lg_bond_dist`) were previously sliced under `torch.no_grad()`, causing three-body angular
+  contributions to forces and stresses to be detached from autograd. Discrete graph topology is now isolated
+  in `torch.no_grad()` while coordinate slicing preserves gradient tracking (@wakamiya0315, @bowen-bd).
+- **Fix: Multi-GPU DDP training metric device mismatch and cache race condition.** Fixed an issue where dummy
+  metric tensors in `PotentialLightningModule.loss_fn` were constructed on CPU, causing NCCL `sync_dist=True` to
+  crash, and guarded dataset cache directory cleanup in `MGLDataset` against multi-rank race conditions.
+
 ## 4.0.3
 - **New: LAMMPS integration for TensorNet and M3GNet potentials (#815).** `matgl.ext.lammps.LAMMPSMatGLModel`
   exports a PyG `Potential` to a TorchScript artifact (via the new `mgl create-lammps-model` CLI subcommand),

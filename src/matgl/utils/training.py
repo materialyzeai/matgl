@@ -632,14 +632,15 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         e_rmse = self.rmse(e_label_per_atom, e_pred_per_atom)
         f_rmse = self.rmse(valid_labels[1], valid_preds[1])
 
-        s_mae = torch.zeros(1)
-        s_rmse = torch.zeros(1)
+        dev = valid_labels[0].device
+        s_mae = torch.zeros(1, device=dev)
+        s_rmse = torch.zeros(1, device=dev)
 
-        m_mae = torch.zeros(1)
-        m_rmse = torch.zeros(1)
+        m_mae = torch.zeros(1, device=dev)
+        m_rmse = torch.zeros(1, device=dev)
 
-        q_mae = torch.zeros(1)
-        q_rmse = torch.zeros(1)
+        q_mae = torch.zeros(1, device=dev)
+        q_rmse = torch.zeros(1, device=dev)
 
         total_loss = self.energy_weight * e_loss + self.force_weight * f_loss
 

@@ -436,82 +436,86 @@ def create_directed_line_graph(
     """
     device = edge_index.device
 
-    # --- filter bonds within three-body cutoff ---
-    valid = bond_dist <= threebody_cutoff
-    edge_ids = valid.nonzero(as_tuple=False).squeeze(1)  # global ids of valid bonds
+    # Vectorized Line Graph Edge Construction: wrapped in torch.no_grad()
+    # to avoid tracking discrete graph topology operations in autograd.
+    with torch.no_grad():
+        # --- filter bonds within three-body cutoff ---
+        valid = bond_dist <= threebody_cutoff
+        edge_ids = valid.nonzero(as_tuple=False).squeeze(1)  # global ids of valid bonds
 
-    if edge_ids.numel() == 0:
-        return (
-            torch.zeros((2, 0), dtype=matgl.int_th, device=device),
-            bond_vec.new_zeros((0, 3)),
-            bond_dist.new_zeros(0),
-            pbc_offset.new_zeros((0, 3)),
-            bond_vec.new_ones((0, 1)),
-        )
+        if edge_ids.numel() == 0:
+            return (
+                torch.zeros((2, 0), dtype=matgl.int_th, device=device),
+                bond_vec.new_zeros((0, 3)),
+                bond_dist.new_zeros(0),
+                pbc_offset.new_zeros((0, 3)),
+                bond_vec.new_ones((0, 1)),
+            )
 
-    src_indices = edge_index[0]  # central atom
-    dst_indices = edge_index[1]  # neighbor
+        src_indices = edge_index[0]  # central atom
+        dst_indices = edge_index[1]  # neighbor
 
-    # Map global edge ids → local line-graph node ids
-    num_lg_nodes = edge_ids.numel()
-    global_to_local = torch.full((edge_index.size(1),), -1, dtype=torch.long, device=device)
-    local_ids = torch.arange(num_lg_nodes, dtype=torch.long, device=device)
-    global_to_local[edge_ids] = local_ids
+        # Map global edge ids → local line-graph node ids
+        num_lg_nodes = edge_ids.numel()
+        global_to_local = torch.full((edge_index.size(1),), -1, dtype=torch.long, device=device)
+        local_ids = torch.arange(num_lg_nodes, dtype=torch.long, device=device)
+        global_to_local[edge_ids] = local_ids
 
-    # Sub-graph src/dst for valid bonds
-    v_src = src_indices[edge_ids]  # central atoms for valid bonds
-    v_dst = dst_indices[edge_ids]  # neighbors for valid bonds
-    v_images = pbc_offset[edge_ids]
+        # Sub-graph src/dst for valid bonds
+        v_src = src_indices[edge_ids]  # central atoms for valid bonds
+        v_dst = dst_indices[edge_ids]  # neighbors for valid bonds
+        v_images = pbc_offset[edge_ids]
 
-    is_self_edge = v_src == v_dst
+        is_self_edge = v_src == v_dst
 
-    # Vectorized Line Graph Edge Construction
+        # Calculate connections using dense matrices over the reduced (valid) edges
+        v_src_j = v_src.unsqueeze(0)  # shape (1, V)
+        v_dst_j = v_dst.unsqueeze(0)  # shape (1, V)
+        v_images_j = v_images.unsqueeze(0)  # shape (1, V, 3)
 
-    # Calculate connections using dense matrices over the reduced (valid) edges
-    v_src_j = v_src.unsqueeze(0)  # shape (1, V)
-    v_dst_j = v_dst.unsqueeze(0)  # shape (1, V)
-    v_images_j = v_images.unsqueeze(0)  # shape (1, V, 3)
+        v_src_i = v_src.unsqueeze(1)  # shape (V, 1)
+        v_dst_i = v_dst.unsqueeze(1)  # shape (V, 1)
+        v_images_i = v_images.unsqueeze(1)  # shape (V, 1, 3)
 
-    v_src_i = v_src.unsqueeze(1)  # shape (V, 1)
-    v_dst_i = v_dst.unsqueeze(1)  # shape (V, 1)
-    v_images_i = v_images.unsqueeze(1)  # shape (V, 1, 3)
+        # shared_src: src[i] == src[j]
+        shared_src = v_src_i == v_src_j
 
-    # shared_src: src[i] == src[j]
-    shared_src = v_src_i == v_src_j
+        # incoming_to_ca: dst[i] == src[j]
+        incoming_to_ca = v_dst_i == v_src_j
 
-    # incoming_to_ca: dst[i] == src[j]
-    incoming_to_ca = v_dst_i == v_src_j
+        # Backtracking: incoming & src[i] == dst[j] & images[i] == -images[j]
+        is_backtrack = incoming_to_ca & (v_src_i == v_dst_j) & torch.all(-v_images_i == v_images_j, dim=2)
 
-    # Backtracking: incoming & src[i] == dst[j] & images[i] == -images[j]
-    is_backtrack = incoming_to_ca & (v_src_i == v_dst_j) & torch.all(-v_images_i == v_images_j, dim=2)
+        # Base inclusion for non-self edges (matches DGL logic: incoming & (shared_src | ~backtracking))
+        include_mask = incoming_to_ca & (shared_src | ~is_backtrack)
 
-    # Base inclusion for non-self edges (matches DGL logic: incoming & (shared_src | ~backtracking))
-    include_mask = incoming_to_ca & (shared_src | ~is_backtrack)
+        # For self-edges (is_self_edge[j]), only include incoming_to_ca (no shared_src, no backtrack checks)
+        self_edges_j = is_self_edge.unsqueeze(0)  # (1, V)
+        include_mask = torch.where(self_edges_j, incoming_to_ca, include_mask)
 
-    # For self-edges (is_self_edge[j]), only include incoming_to_ca (no shared_src, no backtrack checks)
-    self_edges_j = is_self_edge.unsqueeze(0)  # (1, V)
-    include_mask = torch.where(self_edges_j, incoming_to_ca, include_mask)
+        # Exclude i == j
+        include_mask.fill_diagonal_(False)
 
-    # Exclude i == j
-    include_mask.fill_diagonal_(False)
+        # Get the indices of the connected line graph nodes
+        lg_src, lg_dst = include_mask.nonzero(as_tuple=True)
+        lg_edge_index = torch.stack([lg_src, lg_dst], dim=0)
 
-    # Get the indices of the connected line graph nodes
-    lg_src, lg_dst = include_mask.nonzero(as_tuple=True)
-    lg_edge_index = torch.stack([lg_src, lg_dst], dim=0)
+        lg_pbc_offset = pbc_offset[edge_ids]
 
-    # Line-graph node features = bond properties of the corresponding atom-graph edge
+        # Sign correction: non-self edges get sign = -1 (bond vector points away from central atom)
+        lg_src_bond_sign = torch.ones((num_lg_nodes, 1), dtype=bond_vec.dtype, device=device)
+
+        # Find local ids of non-self edges
+        not_self_edge = ~is_self_edge
+        ns_local_ids = local_ids[not_self_edge]
+        if ns_local_ids.numel() > 0:
+            lg_src_bond_sign[ns_local_ids] = -1.0
+
+    # Line-graph node features = bond properties of the corresponding atom-graph edge.
+    # Sliced outside torch.no_grad() so autograd tracks derivatives with respect to
+    # atomic positions (forces) and lattice strain (stresses).
     lg_bond_vec = bond_vec[edge_ids]
     lg_bond_dist = bond_dist[edge_ids]
-    lg_pbc_offset = pbc_offset[edge_ids]
-
-    # Sign correction: non-self edges get sign = -1 (bond vector points away from central atom)
-    lg_src_bond_sign = torch.ones((num_lg_nodes, 1), dtype=bond_vec.dtype, device=device)
-
-    # Find local ids of non-self edges
-    not_self_edge = ~is_self_edge
-    ns_local_ids = local_ids[not_self_edge]
-    if ns_local_ids.numel() > 0:
-        lg_src_bond_sign[ns_local_ids] = -1.0
 
     return lg_edge_index, lg_bond_vec, lg_bond_dist, lg_pbc_offset, lg_src_bond_sign
 

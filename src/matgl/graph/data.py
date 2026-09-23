@@ -365,7 +365,8 @@ class MGLDataset(Dataset):
         if self.has_cache():
             self.load()
 
-        shutil.rmtree(Path(self.root) / "processed")
+        if self.clear_processed:
+            shutil.rmtree(Path(self.root) / "processed", ignore_errors=True)
 
     def has_cache(self) -> bool:
         """Check if the processed files exist and match the current converter config.

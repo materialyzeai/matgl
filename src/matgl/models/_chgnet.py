@@ -6,8 +6,9 @@ prediction of site-wise magnetic moments.
 
 Reference paper: https://doi.org/10.1038/s42256-023-00716-3
 
-Line-graph construction is wrapped in ``torch.no_grad()`` so that three-body bond
-vectors and distances are detached from the position gradient graph.
+Line-graph topology construction is non-differentiable, but three-body bond
+vectors and distances remain connected to the autograd graph for force and stress
+calculations.
 """
 
 from __future__ import annotations
@@ -56,8 +57,9 @@ class CHGNet(MatGLModel):
     """CHGNet model.
 
     Uses PyTorch Geometric ``Data`` objects with center→neighbor edge direction
-    and destination-node aggregation. Line-graph construction is wrapped in
-    ``torch.no_grad()`` so three-body bond data is detached from the position gradient.
+    and destination-node aggregation. Line-graph bond vectors and distances
+    track gradients with respect to atomic positions and lattice strain for forces
+    and stresses.
     """
 
     __version__ = 1
@@ -346,10 +348,9 @@ class CHGNet(MatGLModel):
         # --- directed line graph (bond graph) ---
         if self.use_bond_graph:
             pbc_offset = getattr(g, "pbc_offset", torch.zeros(edge_index.size(1), 3, device=pos.device))
-            with torch.no_grad():
-                (lg_edge_index, lg_bond_vec, lg_bond_dist, _lg_pbc_offset, lg_src_bond_sign) = (
-                    create_directed_line_graph(edge_index, pbc_offset, bond_vec, bond_dist, self.three_body_cutoff)
-                )
+            (lg_edge_index, lg_bond_vec, lg_bond_dist, _lg_pbc_offset, lg_src_bond_sign) = create_directed_line_graph(
+                edge_index, pbc_offset, bond_vec, bond_dist, self.three_body_cutoff
+            )
 
             num_lg_nodes = lg_bond_dist.size(0)
 
