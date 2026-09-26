@@ -19,6 +19,7 @@ from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.io import write
 from ase.stress import voigt_6_to_full_3x3_stress
+from pymatgen.core import Lattice, Molecule, Structure
 
 from matgl.models import TensorNet
 from matgl.utils import training as training_mod
@@ -62,6 +63,14 @@ def _patch_hf_atomrefs_download(monkeypatch, tmp_path: pathlib.Path, payload) ->
 def _atomrefs_record(symbol: str, energy: float) -> dict:
     """Single-atom MatPES atomrefs record (``chemsys`` / ``energy`` schema)."""
     return {"chemsys": symbol, "energy": energy}
+
+
+def _minimal_pes_record(*, stress: bool = False) -> dict:
+    structure = Structure(Lattice.cubic(4), ["Li"], [[0, 0, 0]])
+    record = {"structure": structure.as_dict(), "energy": -1.0, "forces": [[0.0, 0.0, 0.0]]}
+    if stress:
+        record["stress"] = np.zeros((3, 3)).tolist()
+    return record
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +322,61 @@ class TestLoadMatpesDatasetFromJson:
         assert len(ds) == 2
 
 
+class TestMatpesSchemaValidation:
+    def test_accepts_samples_wrapper(self):
+        structures, labels = training_mod._matpes_samples_to_lists(
+            {"samples": [_minimal_pes_record()]}, stress_unit="GPa"
+        )
+        assert len(structures) == 1
+        assert labels["energies"] == [-1.0]
+
+    @pytest.mark.parametrize(
+        ("case", "message"),
+        [
+            ("missing", "must contain structures"),
+            ("energies", "energies, and forces must have the same length"),
+            ("stresses", "stresses must have the same length"),
+            ("magmoms", "magmoms must have the same length"),
+            ("charges", "charges must have the same length"),
+        ],
+    )
+    def test_rejects_invalid_aggregate_shapes(self, case, message):
+        if case == "missing":
+            payload = {}
+        else:
+            payload = {
+                "structures": [_minimal_pes_record()["structure"]],
+                "outputs": {"energies": [-1.0], "forces": [[[0.0, 0.0, 0.0]]]},
+            }
+            if case == "energies":
+                payload["outputs"]["energies"] = []
+            else:
+                payload["outputs"][case] = []
+
+        with pytest.raises(ValueError, match=message):
+            training_mod._matpes_samples_to_lists(payload)
+
+    def test_rejects_partially_populated_stress_labels(self):
+        with pytest.raises(ValueError, match="Stress labels must be present for every sample"):
+            training_mod._matpes_samples_to_lists([_minimal_pes_record(stress=True), _minimal_pes_record()])
+
+    def test_rejects_mixed_structure_and_molecule_dataset(self):
+        structures = [
+            Structure(Lattice.cubic(4), ["Li"], [[0, 0, 0]]),
+            Molecule(["H"], [[0, 0, 0]]),
+        ]
+        labels = {"energies": [-1.0, -0.5], "forces": [[[0.0, 0.0, 0.0]]] * 2}
+        with pytest.raises(ValueError, match="cannot mix periodic structures"):
+            training_mod._build_pes_dataset(
+                structures,
+                labels,
+                cutoff=4.0,
+                element_types=("H", "Li"),
+                save_cache=False,
+                root=None,
+            )
+
+
 class TestLoadDatasetFromExtxyz:
     def test_periodic_energy_force_stress_charge_and_magmom_labels(self, tmp_path):
         atoms = Atoms("LiO", positions=[[0, 0, 0], [1.6, 0, 0]], cell=[5, 5, 5], pbc=True)
@@ -364,6 +428,98 @@ class TestLoadDatasetFromExtxyz:
 
         assert set(ds.labels) == {"energies", "forces"}
         assert ds.converter.__class__.__name__ == "Molecule2Graph"
+
+    def test_custom_info_array_keys_and_full_stress_matrix(self, tmp_path):
+        atoms = Atoms("Li", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
+        atoms.info["custom_energy"] = -2.0
+        atoms.info["custom_stress"] = np.arange(9, dtype=float)
+        atoms.arrays["custom_forces"] = np.asarray([[0.1, 0.2, 0.3]])
+        path = tmp_path / "custom.extxyz"
+        write(path, atoms, format="extxyz")
+
+        ds = MGLDatasetLoader.from_extxyz(
+            path,
+            cutoff=3.0,
+            save_cache=False,
+            root=str(tmp_path / "custom_ds"),
+            stress_unit="GPa",
+            energy_key="custom_energy",
+            forces_key="custom_forces",
+            stress_key="custom_stress",
+        )
+
+        np.testing.assert_allclose(ds.labels["energies"], [-2.0])
+        np.testing.assert_allclose(ds.labels["forces"][0], [[0.1, 0.2, 0.3]])
+        np.testing.assert_allclose(ds.labels["stresses"][0], np.arange(9).reshape(3, 3))
+
+    def test_missing_required_field_raises(self, tmp_path):
+        atoms = Atoms("Li", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
+        atoms.calc = SinglePointCalculator(atoms, energy=-1.0, forces=np.zeros((1, 3)))
+        path = tmp_path / "missing.extxyz"
+        write(path, atoms, format="extxyz")
+
+        with pytest.raises(KeyError, match="missing required field 'unknown'"):
+            MGLDatasetLoader.from_extxyz(path, energy_key="unknown", save_cache=False)
+
+    def test_empty_file_raises(self, monkeypatch, tmp_path):
+        import ase.io
+
+        monkeypatch.setattr(ase.io, "read", lambda *args, **kwargs: [])
+        with pytest.raises(ValueError, match="contains no frames"):
+            MGLDatasetLoader.from_extxyz(tmp_path / "empty.extxyz", save_cache=False)
+
+    def test_inconsistent_stress_presence_raises(self, tmp_path):
+        with_stress = Atoms("Li", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
+        with_stress.calc = SinglePointCalculator(
+            with_stress,
+            energy=-1.0,
+            forces=np.zeros((1, 3)),
+            stress=np.zeros(6),
+        )
+        without_stress = with_stress.copy()
+        without_stress.calc = SinglePointCalculator(without_stress, energy=-1.0, forces=np.zeros((1, 3)))
+        path = tmp_path / "partial_stress.extxyz"
+        write(path, [with_stress, without_stress], format="extxyz")
+
+        with pytest.raises(ValueError, match="Stress labels must be present for every Extended XYZ frame"):
+            MGLDatasetLoader.from_extxyz(path, save_cache=False)
+
+    def test_partial_periodicity_raises(self, tmp_path):
+        atoms = Atoms("Li", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=[True, False, False])
+        atoms.calc = SinglePointCalculator(atoms, energy=-1.0, forces=np.zeros((1, 3)))
+        path = tmp_path / "partial_pbc.extxyz"
+        write(path, atoms, format="extxyz")
+
+        with pytest.raises(ValueError, match="Partially periodic"):
+            MGLDatasetLoader.from_extxyz(path, save_cache=False)
+
+    def test_mixed_periodicity_raises(self, tmp_path):
+        periodic = Atoms("Li", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
+        molecule = Atoms("H", positions=[[0, 0, 0]], pbc=False)
+        for atoms in (periodic, molecule):
+            atoms.calc = SinglePointCalculator(atoms, energy=-1.0, forces=np.zeros((1, 3)))
+        path = tmp_path / "mixed.extxyz"
+        write(path, [periodic, molecule], format="extxyz")
+
+        with pytest.raises(ValueError, match="cannot mix periodic structures"):
+            MGLDatasetLoader.from_extxyz(path, save_cache=False)
+
+    def test_invalid_stress_shape_raises(self, tmp_path):
+        atoms = Atoms("Li", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
+        atoms.info["custom_energy"] = -1.0
+        atoms.info["custom_stress"] = [1.0, 2.0, 3.0]
+        atoms.arrays["custom_forces"] = np.zeros((1, 3))
+        path = tmp_path / "invalid_stress.extxyz"
+        write(path, atoms, format="extxyz")
+
+        with pytest.raises(ValueError, match="stress must contain 6 or 9 values"):
+            MGLDatasetLoader.from_extxyz(
+                path,
+                save_cache=False,
+                energy_key="custom_energy",
+                forces_key="custom_forces",
+                stress_key="custom_stress",
+            )
 
 
 # ---------------------------------------------------------------------------

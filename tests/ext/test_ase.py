@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os.path
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -156,6 +157,15 @@ def test_Relaxer(MoS):
         assert len(t) == 5
     assert os.path.exists("MoS_relax.traj")
     os.remove("MoS_relax.traj")
+
+
+def test_relaxer_accepts_custom_optimizer_class():
+    class CustomOptimizer:
+        pass
+
+    with patch("matgl.ext.ase.PESCalculator", return_value=MagicMock()):
+        relaxer = Relaxer(MagicMock(), optimizer=CustomOptimizer)
+    assert relaxer.optimizer is CustomOptimizer
 
 
 def test_get_graph_from_atoms(LiFePO4):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
@@ -8,7 +9,7 @@ import pytest
 import torch
 from ase import Atoms
 from ase.io import read, write
-from pymatgen.core import Lattice, Structure
+from pymatgen.core import Lattice, Molecule, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 
 from matgl import cli
@@ -103,6 +104,54 @@ def test_load_potential_calls_matgl(monkeypatch):
     assert cli._load_potential("anything") is sentinel
 
 
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [("{", "invalid JSON"), ("[]", "expected a JSON object")],
+)
+def test_parse_json_object_rejects_invalid_values(value, message):
+    with pytest.raises(argparse.ArgumentTypeError, match=message):
+        cli._parse_json_object(value)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("1,0", "must contain 3 or 9"),
+        ("1,x,0", "must be 0 or 1"),
+        ("1,2,0", "must be 0 or 1"),
+    ],
+)
+def test_parse_md_mask_rejects_invalid_values(value, message):
+    with pytest.raises(argparse.ArgumentTypeError, match=message):
+        cli._parse_md_mask(value)
+
+
+def test_extended_xyz_readers_reject_empty_input(tmp_path):
+    path = tmp_path / "empty.extxyz"
+    with (
+        patch("ase.io.read", return_value=[]),
+        pytest.raises(ValueError, match="contains no frames"),
+    ):
+        cli._read_geometries(path)
+    with (
+        patch("ase.io.read", return_value=[]),
+        pytest.raises(ValueError, match="contains no frames"),
+    ):
+        cli.read_frames(path)
+
+
+def test_read_geometries_rejects_partial_periodicity(tmp_path):
+    path = tmp_path / "partial.extxyz"
+    write(path, Atoms("H", cell=[3, 3, 3], pbc=[True, False, False]), format="extxyz")
+    with pytest.raises(ValueError, match="Partially periodic"):
+        cli._read_geometries(path)
+
+
+def test_write_geometries_requires_extxyz_for_multiple_frames(tmp_path, tiny_structure):
+    with pytest.raises(ValueError, match="Multiple relaxed frames"):
+        cli._write_geometries([tiny_structure, tiny_structure], tmp_path / "multiple.cif")
+
+
 def test_relax_structure_outfile(tiny_cif, tiny_structure, tmp_path):
     """outfile branch writes to the specified path."""
     out = tmp_path / "out.cif"
@@ -160,6 +209,26 @@ def test_relax_structure_stdout(tiny_cif, tiny_structure, capsys):
     assert "Lattice parameters" in captured
     assert "Sites (Fractional coordinates)" in captured
     assert "->" in captured
+
+
+def test_relax_molecule_stdout_uses_cartesian_coordinates(tmp_path, capsys):
+    path = tmp_path / "h2.xyz"
+    molecule = Molecule(["H", "H"], [[0, 0, 0], [0.74, 0, 0]])
+    write(path, AseAtomsAdaptor.get_atoms(molecule), format="extxyz")
+    args = Namespace(
+        infile=[str(path)],
+        model="x",
+        verbose=False,
+        suffix=None,
+        outfile=None,
+        optimizer="FIRE",
+        relax_cell=False,
+        f_max=0.01,
+        steps=5,
+    )
+    with _patch_relaxer(molecule):
+        assert cli.relax_structure(args) == 0
+    assert "Sites (Cartesian coordinates)" in capsys.readouterr().out
 
 
 def test_predict_structure_eform(tiny_cif, fake_potential, capsys):
@@ -233,6 +302,26 @@ def test_predict_nonperiodic_extxyz_uses_molecule_converter(tmp_path, fake_poten
 
     with patch.object(cli, "_load_potential", return_value=fake_potential):
         cli.predict_structure(Namespace(model="EformModel", infile=[str(path)], mpids=None, state_attr=None))
+
+    converter = fake_potential.predict_structure.call_args.kwargs["graph_converter"]
+    assert converter.__class__.__name__ == "Molecule2Graph"
+
+
+def test_predict_bandgap_nonperiodic_extxyz_uses_molecule_converter(tmp_path, fake_potential):
+    path = tmp_path / "h2.xyz"
+    write(path, Atoms("H2", positions=[[0, 0, 0], [0.74, 0, 0]]), format="extxyz")
+    fake_potential.element_types = ("H",)
+    fake_potential.cutoff = 2.0
+
+    with patch.object(cli, "_load_potential", return_value=fake_potential):
+        cli.predict_structure(
+            Namespace(
+                model="MEGNet-MP-2019.4.1-BandGap-mfi",
+                infile=[str(path)],
+                mpids=None,
+                state_attr=["0"],
+            )
+        )
 
     converter = fake_potential.predict_structure.call_args.kwargs["graph_converter"]
     assert converter.__class__.__name__ == "Molecule2Graph"
@@ -414,12 +503,16 @@ def test_train_potential_scratch_uses_modern_pyg_trainer(tmp_path):
             '{"units": 16}',
             "--epochs",
             "2",
+            "--log-dir",
+            str(tmp_path / "logs"),
         ]
     )
+    fake_logger = MagicMock()
     with (
         patch("matgl.utils.training.MGLDatasetLoader.from_json", return_value=dataset) as load_data,
         patch("matgl.models.M3GNet", return_value=model) as model_class,
         patch("matgl.utils.training.MGLPotentialTrainer", return_value=trainer) as trainer_class,
+        patch("lightning.pytorch.loggers.CSVLogger", return_value=fake_logger) as logger_class,
     ):
         assert cli.train_potential(args) == 0
 
@@ -436,6 +529,9 @@ def test_train_potential_scratch_uses_modern_pyg_trainer(tmp_path):
     model_class.assert_called_once_with(element_types=("Li", "O"), cutoff=5.0, is_intensive=False, units=16)
     assert trainer_class.call_args.kwargs["max_epochs"] == 2
     assert trainer_class.call_args.kwargs["stress_weight"] == 0.0
+    assert trainer_class.call_args.kwargs["trainer_kwargs"]["logger"] is fake_logger
+    assert trainer_class.call_args.kwargs["trainer_kwargs"]["enable_checkpointing"] is True
+    logger_class.assert_called_once_with(save_dir=str(tmp_path / "logs"), name="matgl")
     trainer.fit.assert_called_once_with(dataset, atomrefs=None, save_path=str(tmp_path / "model"), ckpt_path=None)
 
 
@@ -483,6 +579,78 @@ def test_train_potential_tensornet_from_extxyz(tmp_path):
     assert load_data.call_args.kwargs["stress_unit"] == "eV/A3"
     model_class.assert_called_once_with(element_types=("Li", "O"), cutoff=5.0, is_intensive=False)
     trainer.fit.assert_called_once()
+
+
+def test_train_potential_fine_tunes_saved_potential(tmp_path):
+    dataset = MagicMock(element_types=("Li", "O"), labels={"energies": [], "forces": []})
+    potential = MagicMock()
+    potential.model.element_types = ("Li", "O")
+    potential.model.cutoff = 4.5
+    potential.element_refs.property_offset = torch.tensor([1.0, 2.0])
+    potential.data_mean = torch.tensor(3.0)
+    potential.data_std = torch.tensor(4.0)
+    trainer = MagicMock()
+    args = cli.build_parser().parse_args(
+        ["train", "-i", "data.jsonl", "-m", "./saved-model", "-o", str(tmp_path / "fine-tuned")]
+    )
+
+    with (
+        patch.object(cli, "_load_potential", return_value=potential),
+        patch("matgl.utils.training.MGLDatasetLoader.from_json", return_value=dataset) as load_data,
+        patch("matgl.utils.training.MGLPotentialTrainer", return_value=trainer) as trainer_class,
+    ):
+        assert cli.train_potential(args) == 0
+
+    assert load_data.call_args.kwargs["element_types"] == ("Li", "O")
+    assert load_data.call_args.kwargs["cutoff"] == 4.5
+    assert trainer_class.call_args.args[0] is potential.model
+    assert trainer_class.call_args.kwargs["data_mean"] == 3.0
+    assert trainer_class.call_args.kwargs["data_std"] == 4.0
+    np.testing.assert_allclose(trainer.fit.call_args.kwargs["atomrefs"], [1.0, 2.0])
+
+
+def test_train_potential_rejects_weight_for_missing_label(tmp_path):
+    dataset = MagicMock(element_types=("Li", "O"), labels={"energies": [], "forces": []})
+    args = cli.build_parser().parse_args(
+        [
+            "train",
+            "-i",
+            "data.jsonl",
+            "-m",
+            "M3GNet",
+            "-o",
+            str(tmp_path / "model"),
+            "--stress-weight",
+            "0.1",
+        ]
+    )
+    with (
+        patch("matgl.utils.training.MGLDatasetLoader.from_json", return_value=dataset),
+        pytest.raises(ValueError, match="no stresses labels"),
+    ):
+        cli.train_potential(args)
+
+
+def test_train_potential_rejects_cli_managed_model_kwargs(tmp_path):
+    dataset = MagicMock(element_types=("Li", "O"), labels={"energies": [], "forces": []})
+    args = cli.build_parser().parse_args(
+        [
+            "train",
+            "-i",
+            "data.jsonl",
+            "-m",
+            "M3GNet",
+            "-o",
+            str(tmp_path / "model"),
+            "--model-kwargs",
+            '{"cutoff": 3.0}',
+        ]
+    )
+    with (
+        patch("matgl.utils.training.MGLDatasetLoader.from_json", return_value=dataset),
+        pytest.raises(ValueError, match=r"cannot override.*cutoff"),
+    ):
+        cli.train_potential(args)
 
 
 def test_evaluate_potential_keeps_force_stress_autograd_enabled():
