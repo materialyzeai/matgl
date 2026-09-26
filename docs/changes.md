@@ -7,6 +7,15 @@ nav_order: 3
 # Change Log
 
 ## 4.0.4
+- **Disk-backed PyG training for datasets larger than memory.** `write_mgl_shards` streams records into versioned,
+  transactional CPU shards; `MGLDiskDataset` loads one shard per worker on demand; and `ShardBatchSampler` keeps
+  batches shard-local while assigning disjoint shards and equal step counts to distributed ranks. `MGLDataLoader`
+  now selects this path automatically for disk datasets without changing its existing in-memory behavior.
+  `MGLDataModule` provides Lightning fit/validate/test/predict loaders with deterministic epoch shuffling,
+  multiworker support, automatic MatGL collation, and optional on-the-fly graph conversion. Rebuild failures retain
+  the prior committed manifest and clean up incomplete shards, while successful rebuilds remove superseded shards.
+  A runnable QET notebook demonstrates sharded dataset creation, Lightning training, and per-graph QEq charge
+  conservation.
 - **Improved PyG command-line workflows.** `mgl train` now trains or fine-tunes interatomic potentials from local
   MatPES-shaped JSON/JSONL or Extended XYZ data through `MGLDatasetLoader` and `MGLPotentialTrainer`; `mgl evaluate`
   evaluates a saved potential with force/stress autograd enabled. Extended XYZ input supports periodic structures
