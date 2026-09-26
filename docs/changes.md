@@ -13,6 +13,18 @@ nav_order: 3
   ~2.5× fewer parameters than the 2.7M baseline, these compact models achieve comparable or superior test MAE across
   energy (25.53 meV/atom PBE vs 28.09 meV/atom), forces (116.30 meV/Å PBE vs 117.36 meV/Å; 144.03 meV/Å r2SCAN vs 145.27 meV/Å),
   and stresses.
+- **Fix: M3GNet three-body messages were routed to the wrong bonds whenever `threebody_cutoff < cutoff`.**
+  `create_line_graph` / `create_line_graph_torch` enumerated triplets on the bond list pruned to
+  `threebody_cutoff`, but `ThreeBodyInteractions` used those indices directly against parent-graph tensors, so
+  each triplet took atom `k` and the cutoff weights `f_c(r_ij) f_c(r_ik)` from the wrong bonds and was scattered
+  onto the wrong bond. This affected every MatGL release since v0.1.0 (DGL and PyG backends, and the LAMMPS export) with the
+  default 5 Å / 4 Å cutoffs; models with `threebody_cutoff == cutoff` were unaffected. The line graph now indexes
+  parent-graph bonds (as `original_index` / `ij_reverse_map` do in the reference TensorFlow M3GNet),
+  `n_triple_ij` has one entry per parent bond, and the three-body update scatters on `line_edge_index[0]`.
+  Pretrained M3GNet PES weights were fit with the mis-routed channel, which training suppressed to ~1e-4 of the
+  bond features; their predictions change by < 0.3 meV/atom and < 2.1 meV/Å (RMS), but they need retraining to
+  benefit from three-body information. `get_segment_indices_from_n` also merged segments when a count was zero
+  (`[2, 0, 3]` gave `[0, 0, 1, 1, 1]`); it now returns `[0, 0, 2, 2, 2]`.
 - **Fix: CHGNet three-body geometry autograd detachment (#834).** Continuous line-graph geometry features
   (`lg_bond_vec` and `lg_bond_dist`) were previously sliced under `torch.no_grad()`, causing three-body angular
   contributions to forces and stresses to be detached from autograd. Discrete graph topology is now isolated

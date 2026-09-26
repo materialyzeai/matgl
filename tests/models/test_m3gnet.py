@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import os
 from pathlib import Path
 
@@ -9,9 +10,10 @@ import torch
 from pymatgen.core import Structure
 
 import matgl
-from matgl.ext.pymatgen import Structure2Graph
+from matgl.ext.pymatgen import Structure2Graph, get_element_list
 from matgl.graph._compute import compute_pair_vector_and_distance
 from matgl.models import M3GNet
+from matgl.utils.cutoff import polynomial_cutoff
 
 PARITY_ARTIFACT = Path(__file__).resolve().parents[1] / "parity_data" / "m3gnet_parity.pt"
 
@@ -144,3 +146,91 @@ def test_m3gnet_parity(parity_artifact):
     assert torch.allclose(output, expected, atol=1e-5, rtol=1e-5), (
         f"M3GNet parity broken: got {output.item()}, expected {expected.item()}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Three-body correctness when threebody_cutoff < cutoff (the pretrained PES setting).
+# ---------------------------------------------------------------------------
+def _small_m3gnet(element_types, seed=0):
+    torch.manual_seed(seed)
+    model = M3GNet(
+        element_types=element_types,
+        dim_node_embedding=16,
+        dim_edge_embedding=16,
+        units=16,
+        max_n=3,
+        max_l=3,
+        nblocks=2,
+        cutoff=5.0,
+        threebody_cutoff=4.0,
+        is_intensive=False,
+    )
+    return model.eval()
+
+
+def _structure_graph(structure, element_types, cutoff=5.0):
+    g, lat, _ = Structure2Graph(element_types=element_types, cutoff=cutoff).get_graph(structure)
+    g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
+    g.pos = g.frac_coords @ lat[0]
+    return g
+
+
+def _bruteforce_three_body(model, g, node_feat, edge_feat):
+    """Reference three-body bond update from an explicit loop over triplets (j, i, k)."""
+    layer = model.three_body_interactions[0]
+    edge_index = g.edge_index
+    bond_vec, bond_dist = compute_pair_vector_and_distance(g.pos, edge_index, g.pbc_offshift)
+    fc = polynomial_cutoff(bond_dist, model.threebody_cutoff)
+    by_center: dict[int, list[int]] = {}
+    for b in range(edge_index.size(1)):
+        if bond_dist[b] <= model.threebody_cutoff:
+            by_center.setdefault(int(edge_index[0, b]), []).append(b)
+    ij, ik = torch.tensor([p for bonds in by_center.values() for p in itertools.permutations(bonds, 2)]).T
+    cos = ((bond_vec[ij] * bond_vec[ik]).sum(1) / (bond_dist[ij] * bond_dist[ik])).clamp(-1 + 1e-7, 1 - 1e-7)
+    basis = model.basis_expansion(bond_dist[ik], cos, torch.zeros_like(cos))
+    msg = basis * layer.update_network_atom(node_feat)[edge_index[1][ik]] * (fc[ij] * fc[ik])[:, None]
+    new_bonds = torch.zeros(edge_index.size(1), msg.size(1)).index_add_(0, ij, msg)
+    return edge_feat + layer.update_network_bond(new_bonds)
+
+
+def test_three_body_update_matches_bruteforce(LiFePO4):
+    """Each triplet message must reach bond i->j and use atom k and f_c(r_ij) f_c(r_ik) of the right bonds."""
+    element_types = get_element_list([LiFePO4])
+    model = _small_m3gnet(element_types)
+    g = _structure_graph(LiFePO4, element_types)
+    captured = {}
+    handle = model.three_body_interactions[0].register_forward_hook(
+        lambda _m, args, out: captured.update(args=args, out=out)
+    )
+    with torch.no_grad():
+        model(g=g)
+        handle.remove()
+        node_feat, edge_feat = captured["args"][6], captured["args"][7]
+        expected = _bruteforce_three_body(model, g, node_feat, edge_feat)
+    assert (expected - edge_feat).abs().max() > 1e-3, "three-body update is trivially zero"
+    torch.testing.assert_close(captured["out"], expected, atol=1e-5, rtol=1e-5)
+
+
+def _per_atom_three_body_update(model, structure, element_types):
+    """Squared norm of the block-1 three-body bond update, summed over the bonds of each atom."""
+    g = _structure_graph(structure, element_types)
+    captured = {}
+    handle = model.three_body_interactions[0].register_forward_hook(
+        lambda _m, args, out: captured.update(args=args, out=out)
+    )
+    with torch.no_grad():
+        model(g=g)
+    handle.remove()
+    delta = (captured["out"] - captured["args"][7]).pow(2).sum(1)
+    return torch.zeros(g.num_nodes).index_add_(0, g.edge_index[0].long(), delta)
+
+
+def test_three_body_update_permutation_equivariant(LiFePO4):
+    """Reordering atoms must permute, not change, the three-body update when bonds are pruned."""
+    element_types = get_element_list([LiFePO4])
+    model = _small_m3gnet(element_types)
+    perm = np.random.default_rng(0).permutation(len(LiFePO4))
+    permuted = Structure.from_sites([LiFePO4[int(i)] for i in perm])
+    ref = _per_atom_three_body_update(model, LiFePO4, element_types)
+    out = _per_atom_three_body_update(model, permuted, element_types)
+    torch.testing.assert_close(out, ref[torch.as_tensor(perm)], atol=1e-8, rtol=1e-4)

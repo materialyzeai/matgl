@@ -98,6 +98,7 @@ def get_segment_indices_from_n(ns):
     """Get segment indices from a number array.
 
     For example, if ``ns = [2, 3]``, the function returns ``[0, 0, 1, 1, 1]``.
+    Zero counts are allowed: ``ns = [2, 0, 3]`` returns ``[0, 0, 2, 2, 2]``.
 
     Args:
         ns: torch.Tensor, the number of atoms/bonds array
@@ -105,9 +106,8 @@ def get_segment_indices_from_n(ns):
     Returns:
         torch.Tensor: segment indices tensor
     """
-    segments = torch.zeros(ns.sum(), dtype=matgl.int_th)
-    segments[ns.cumsum(0)[:-1]] = 1
-    return segments.cumsum(0)
+    segments = torch.arange(ns.numel(), dtype=matgl.int_th, device=ns.device)
+    return torch.repeat_interleave(segments, ns.to(torch.long))
 
 
 def get_range_indices_from_n(ns: torch.Tensor):

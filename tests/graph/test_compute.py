@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
 import matgl
+from matgl.ext.pymatgen import Structure2Graph, get_element_list
 from matgl.graph._compute import (
     compute_pair_vector_and_distance,
+    compute_theta_and_phi,
+    create_line_graph,
+    create_line_graph_torch,
+    ensure_line_graph_compatibility,
     separate_node_edge_keys,
 )
 
@@ -173,3 +179,68 @@ class TestCreateDirectedLineGraph:
         assert torch.isfinite(pos.grad).all()
         assert (pos.grad.abs() > 0).any()
 
+
+def _pruned_graph(structure, cutoff=5.0):
+    """Graph whose cutoff exceeds the 4 A three-body cutoff, so the line graph is built on a pruned bond list."""
+    g, lat, _ = Structure2Graph(element_types=get_element_list([structure]), cutoff=cutoff).get_graph(structure)
+    g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
+    g.pos = g.frac_coords @ lat[0]
+    g.bond_vec, g.bond_dist = compute_pair_vector_and_distance(g.pos, g.edge_index, g.pbc_offshift)
+    return g
+
+
+class TestCreateLineGraph:
+    """M3GNet line graphs must index parent-graph bonds, as in the reference TF implementation."""
+
+    @pytest.mark.parametrize("builder", ["numpy", "torch"])
+    def test_line_graph_indexes_parent_bonds(self, LiFePO4, builder):
+        g = _pruned_graph(LiFePO4)
+        threebody_cutoff = 4.0
+        n_bonds = g.edge_index.size(1)
+        assert (g.bond_dist > threebody_cutoff).any(), "test requires bonds beyond the three-body cutoff"
+
+        if builder == "numpy":
+            l_g = create_line_graph(g.edge_index, g.bond_dist, g.bond_vec, g.pbc_offset, g.num_nodes, threebody_cutoff)
+        else:
+            l_g = create_line_graph_torch(g.edge_index, g.bond_dist, g.bond_vec, g.num_nodes, threebody_cutoff)
+        line_edge_index = l_g["line_edge_index"].long()
+
+        # Every triplet (j, i, k) pairs two distinct parent bonds i->j and i->k within the three-body cutoff.
+        expected = _loop_indices(g.edge_index.T.numpy(), g.bond_dist.detach().numpy(), cutoff=threebody_cutoff)
+        np.testing.assert_array_equal(line_edge_index.T.numpy(), expected)
+        assert torch.equal(g.edge_index[0][line_edge_index[0]], g.edge_index[0][line_edge_index[1]])
+
+        # One triple count per parent bond; zero beyond the three-body cutoff.
+        n_triple_ij = l_g["n_triple_ij"].long()
+        assert n_triple_ij.numel() == n_bonds
+        assert torch.equal(n_triple_ij, torch.bincount(line_edge_index[0], minlength=n_bonds))
+        assert (n_triple_ij[g.bond_dist > threebody_cutoff] == 0).all()
+
+        # Angles evaluated on parent bond vectors match an explicit loop.
+        cos_theta = compute_theta_and_phi(g.bond_vec, g.bond_dist, line_edge_index)["cos_theta"]
+        np.testing.assert_allclose(
+            cos_theta.detach().numpy(), _calculate_cos_loop(g, threebody_cutoff), rtol=1e-5, atol=1e-6
+        )
+
+    def test_torch_and_numpy_builders_agree(self, LiFePO4):
+        g = _pruned_graph(LiFePO4)
+        l_np = create_line_graph(g.edge_index, g.bond_dist, g.bond_vec, g.pbc_offset, g.num_nodes, 4.0)
+        l_th = create_line_graph_torch(g.edge_index, g.bond_dist, g.bond_vec, g.num_nodes, 4.0)
+        assert torch.equal(l_np["line_edge_index"].long(), l_th["line_edge_index"].long())
+        assert torch.equal(l_np["n_triple_ij"].long(), l_th["n_triple_ij"].long())
+        assert torch.equal(l_np["kept_edge_ids"], l_th["kept_edge_ids"])
+
+    def test_ensure_line_graph_compatibility(self, LiFePO4):
+        g = _pruned_graph(LiFePO4)
+        l_g = create_line_graph(g.edge_index, g.bond_dist, g.bond_vec, g.pbc_offset, g.num_nodes, 4.0)
+        new_vec = g.bond_vec * 1.01
+        new_dist = g.bond_dist * 1.01
+        refreshed = ensure_line_graph_compatibility(l_g, new_dist, new_vec, g.pbc_offset, 4.0)
+        assert refreshed["bond_vec"] is new_vec
+        assert refreshed["bond_dist"] is new_dist
+        assert torch.equal(refreshed["line_edge_index"], l_g["line_edge_index"])
+
+        # A bundle that indexes a different (e.g. pruned) bond list is rejected.
+        stale = dict(l_g, n_triple_ij=l_g["n_triple_ij"][l_g["kept_edge_ids"]])
+        with pytest.raises(ValueError, match="must index parent-graph bonds"):
+            ensure_line_graph_compatibility(stale, g.bond_dist, g.bond_vec, g.pbc_offset, 4.0)
