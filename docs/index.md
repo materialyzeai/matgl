@@ -273,6 +273,7 @@ Note: For stresses, we use the convention that compressive stress gives negative
 
 `matgl.utils.training.MGLPotentialTrainer` is a high-level wrapper around `PotentialLightningModule` and `pl.Trainer` with sensible MatPES-tuned defaults (Huber loss, stress weight 0.1, Adam + CosineAnnealingLR). Dataset construction is delegated to a sibling `MGLDatasetLoader` factory; the trainer itself only consumes pre-built `MGLDataset`s.
 
+
 #### Disk-backed large-dataset training
 
 For a dataset that cannot fit in memory, stream each split into independent shards and use `MGLDataModule` directly
