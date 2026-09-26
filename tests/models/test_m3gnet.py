@@ -8,10 +8,11 @@ import numpy as np
 import pytest
 import torch
 from pymatgen.core import Structure
+from torch_geometric.data import Data
 
 import matgl
 from matgl.ext.pymatgen import Structure2Graph, get_element_list
-from matgl.graph._compute import compute_pair_vector_and_distance
+from matgl.graph._compute import compute_pair_vector_and_distance, create_line_graph
 from matgl.models import M3GNet
 from matgl.utils.cutoff import polynomial_cutoff
 
@@ -48,6 +49,42 @@ def test_exceptions():
         _ = M3GNet(element_types=None, is_intensive=False, activation_type="whatever")
     with pytest.raises(ValueError, match=r"Classification task cannot be extensive."):
         _ = M3GNet(element_types=["Mo", "S"], is_intensive=False, task_type="classification")
+
+
+@pytest.mark.parametrize(
+    ("pos", "edge_index"),
+    [
+        (torch.tensor([[0.0, 0.0, 0.0]]), torch.empty((2, 0), dtype=torch.long)),
+        (torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]), torch.tensor([[0, 1], [1, 0]])),
+    ],
+    ids=["isolated-atom", "dimer"],
+)
+def test_m3gnet_handles_no_triplet_extremes(pos, edge_index):
+    """Full M3GNet forward remains finite and cache-equivalent when no angles exist."""
+    torch.manual_seed(3)
+    model = M3GNet(
+        element_types=("H",),
+        dim_node_embedding=8,
+        dim_edge_embedding=8,
+        units=8,
+        max_n=2,
+        max_l=2,
+        nblocks=1,
+        cutoff=3.0,
+        threebody_cutoff=2.0,
+        is_intensive=False,
+    ).eval()
+    node_type = torch.zeros(pos.size(0), dtype=torch.long)
+    graph = Data(pos=pos, edge_index=edge_index, node_type=node_type, num_nodes=pos.size(0))
+    bond_vec, bond_dist = compute_pair_vector_and_distance(pos, edge_index, None)
+    cached_line_graph = create_line_graph(edge_index, bond_dist, bond_vec, None, pos.size(0), 2.0)
+
+    with torch.no_grad():
+        dynamic = model(g=graph)
+        cached = model(g=graph, l_g=cached_line_graph)
+
+    assert torch.isfinite(dynamic).all()
+    torch.testing.assert_close(cached, dynamic)
 
 
 def test_model_intensive(graph_MoS):

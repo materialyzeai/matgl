@@ -369,8 +369,9 @@ def ensure_line_graph_compatibility(
 ) -> dict[str, torch.Tensor]:
     """Refresh per-line-graph-node tensors against an updated parent graph.
 
-    The line-graph topology (``line_edge_index``, ``n_triple_ij``) is kept and the
-    per-node geometry is replaced by the parent-graph tensors, which carry the
+    The line-graph topology (``line_edge_index``, ``n_triple_ij``) is kept only
+    when the same parent bonds remain inside ``threebody_cutoff``. The per-node
+    geometry is then replaced by the parent-graph tensors, which carry the
     current positions (and autograd history).
 
     Args:
@@ -378,7 +379,8 @@ def ensure_line_graph_compatibility(
         bond_dist: Refreshed per-bond distances of the parent graph.
         bond_vec: Refreshed per-bond vectors of the parent graph.
         pbc_offset: Refreshed per-bond PBC offsets (``None`` if not available).
-        threebody_cutoff: Unused; retained for API compatibility.
+        threebody_cutoff: Cutoff used to validate that cached topology membership
+            still matches the current bond distances.
 
     Returns:
         A new bundle whose per-node tensors come from the updated parent graph.
@@ -386,7 +388,8 @@ def ensure_line_graph_compatibility(
     Raises:
         ValueError: If the bundle does not index the bonds of this parent graph,
             e.g. a bundle built by matgl <= 4.0.3, whose indices addressed the
-            pruned bond list rather than the parent graph.
+            pruned bond list rather than the parent graph, or if a bond crossed
+            ``threebody_cutoff`` and changed the three-body topology.
     """
     num_bonds = bond_dist.size(0)
     n_entries = line_graph["n_triple_ij"].numel()
@@ -395,6 +398,20 @@ def ensure_line_graph_compatibility(
             f"Line graph has {n_entries} n_triple_ij entries but the parent graph has {num_bonds} bonds. "
             "M3GNet line graphs must index parent-graph bonds; rebuild it with create_line_graph."
         )
+
+    cached_kept_edge_ids = line_graph.get("kept_edge_ids")
+    if cached_kept_edge_ids is None:
+        raise ValueError("Line graph has no kept_edge_ids; rebuild it with create_line_graph.")
+
+    # Cutoff membership is discrete topology and must not enter the autograd graph.
+    # Keep the refreshed bond geometry below connected for force/stress gradients.
+    with torch.no_grad():
+        current_kept_edge_ids = torch.nonzero(bond_dist <= threebody_cutoff, as_tuple=False).squeeze(1)
+        cached_kept_edge_ids = cached_kept_edge_ids.to(
+            device=current_kept_edge_ids.device, dtype=current_kept_edge_ids.dtype
+        )
+        if not torch.equal(current_kept_edge_ids, cached_kept_edge_ids):
+            raise ValueError("M3GNet three-body topology changed; rebuild the line graph.")
 
     new_lg = dict(line_graph)
     new_lg["bond_dist"] = bond_dist

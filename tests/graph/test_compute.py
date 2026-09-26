@@ -193,6 +193,83 @@ class TestCreateLineGraph:
     """M3GNet line graphs must index parent-graph bonds, as in the reference TF implementation."""
 
     @pytest.mark.parametrize("builder", ["numpy", "torch"])
+    @pytest.mark.parametrize(
+        ("edge_index", "bond_dist", "num_nodes", "expected_kept"),
+        [
+            (torch.empty((2, 0), dtype=torch.long), torch.empty(0), 1, torch.empty(0, dtype=torch.long)),
+            (torch.tensor([[0, 1], [1, 0]]), torch.tensor([1.0, 1.0]), 2, torch.tensor([0, 1])),
+        ],
+        ids=["isolated-atom", "dimer"],
+    )
+    def test_no_triplets_for_isolated_atom_or_dimer(self, builder, edge_index, bond_dist, num_nodes, expected_kept):
+        """Zero or one outgoing bond per atom must produce valid empty triplet tensors."""
+        bond_vec = torch.zeros((edge_index.size(1), 3))
+        if builder == "numpy":
+            line_graph = create_line_graph(edge_index, bond_dist, bond_vec, None, num_nodes, 4.0)
+        else:
+            line_graph = create_line_graph_torch(edge_index, bond_dist, bond_vec, num_nodes, 4.0)
+
+        assert torch.equal(line_graph["kept_edge_ids"], expected_kept)
+        assert line_graph["line_edge_index"].shape == (2, 0)
+        assert torch.equal(line_graph["n_triple_ij"].long(), torch.zeros(edge_index.size(1), dtype=torch.long))
+
+    @pytest.mark.parametrize("builder", ["numpy", "torch"])
+    def test_noncontiguous_pruning_matches_m3gnet_lite_global_indices(self, builder):
+        """Reproduce m3gnet-lite's global-bond permutation result after cutoff filtering."""
+        edge_index = torch.tensor(
+            [[0, 0, 0, 0, 0, 1], [1, 2, 3, 4, 5, 0]],
+            dtype=torch.long,
+        )
+        bond_dist = torch.tensor([3.0, 4.5, 3.2, 4.6, 3.4, 2.0])
+        bond_vec = torch.tensor(
+            [
+                [3.0, 0.0, 0.0],
+                [0.0, 4.5, 0.0],
+                [0.0, 0.0, 3.2],
+                [-4.6, 0.0, 0.0],
+                [0.0, -3.4, 0.0],
+                [-2.0, 0.0, 0.0],
+            ]
+        )
+        if builder == "numpy":
+            line_graph = create_line_graph(edge_index, bond_dist, bond_vec, None, 6, 4.0)
+        else:
+            line_graph = create_line_graph_torch(edge_index, bond_dist, bond_vec, 6, 4.0)
+
+        # m3gnet-lite groups the retained *global* IDs [0, 2, 4] for atom 0
+        # and emits permutations(..., 2). Bond 5 is the sole bond of atom 1.
+        expected_triplets = torch.tensor(
+            [[0, 0, 2, 2, 4, 4], [2, 4, 0, 4, 0, 2]],
+            dtype=torch.long,
+        )
+        assert torch.equal(line_graph["kept_edge_ids"], torch.tensor([0, 2, 4, 5]))
+        assert torch.equal(line_graph["line_edge_index"].long(), expected_triplets)
+        assert torch.equal(line_graph["n_triple_ij"].long(), torch.tensor([2, 0, 2, 0, 2, 0]))
+
+        angles = compute_theta_and_phi(bond_vec, bond_dist, line_graph["line_edge_index"])
+        expected_cos = torch.zeros(6)
+        torch.testing.assert_close(angles["cos_theta"], expected_cos)
+
+    @pytest.mark.parametrize("builder", ["numpy", "torch"])
+    def test_no_pruning_preserves_legacy_triplet_indices(self, builder):
+        """When pair and three-body cutoffs agree, local and parent bond IDs are identical."""
+        edge_index = torch.tensor([[0, 0, 0, 1, 1], [1, 2, 3, 0, 2]], dtype=torch.long)
+        bond_dist = torch.tensor([2.0, 3.0, 4.0, 2.5, 3.5])
+        bond_vec = torch.eye(5, 3)
+        if builder == "numpy":
+            line_graph = create_line_graph(edge_index, bond_dist, bond_vec, None, 4, 4.0)
+        else:
+            line_graph = create_line_graph_torch(edge_index, bond_dist, bond_vec, 4, 4.0)
+
+        expected_triplets = torch.tensor(
+            [[0, 0, 1, 1, 2, 2, 3, 4], [1, 2, 0, 2, 0, 1, 4, 3]],
+            dtype=torch.long,
+        )
+        assert torch.equal(line_graph["kept_edge_ids"], torch.arange(5))
+        assert torch.equal(line_graph["line_edge_index"].long(), expected_triplets)
+        assert torch.equal(line_graph["n_triple_ij"].long(), torch.tensor([2, 2, 2, 1, 1]))
+
+    @pytest.mark.parametrize("builder", ["numpy", "torch"])
     def test_line_graph_indexes_parent_bonds(self, LiFePO4, builder):
         g = _pruned_graph(LiFePO4)
         threebody_cutoff = 4.0
@@ -234,7 +311,7 @@ class TestCreateLineGraph:
         g = _pruned_graph(LiFePO4)
         l_g = create_line_graph(g.edge_index, g.bond_dist, g.bond_vec, g.pbc_offset, g.num_nodes, 4.0)
         new_vec = g.bond_vec * 1.01
-        new_dist = g.bond_dist * 1.01
+        new_dist = g.bond_dist.clone()
         refreshed = ensure_line_graph_compatibility(l_g, new_dist, new_vec, g.pbc_offset, 4.0)
         assert refreshed["bond_vec"] is new_vec
         assert refreshed["bond_dist"] is new_dist
@@ -244,3 +321,19 @@ class TestCreateLineGraph:
         stale = dict(l_g, n_triple_ij=l_g["n_triple_ij"][l_g["kept_edge_ids"]])
         with pytest.raises(ValueError, match="must index parent-graph bonds"):
             ensure_line_graph_compatibility(stale, g.bond_dist, g.bond_vec, g.pbc_offset, 4.0)
+
+    @pytest.mark.parametrize(
+        ("cached_dist", "current_dist"),
+        [
+            ([3.99, 3.0, 4.01], [4.01, 3.0, 4.01]),
+            ([4.01, 3.0, 4.01], [3.99, 3.0, 4.01]),
+        ],
+        ids=["inside-to-outside", "outside-to-inside"],
+    )
+    def test_ensure_line_graph_rejects_cutoff_crossing(self, cached_dist, current_dist):
+        edge_index = torch.tensor([[0, 0, 0], [1, 2, 3]], dtype=torch.long)
+        bond_vec = torch.tensor([[3.99, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 4.01]])
+        line_graph = create_line_graph(edge_index, torch.tensor(cached_dist), bond_vec, None, 4, 4.0)
+
+        with pytest.raises(ValueError, match="three-body topology changed"):
+            ensure_line_graph_compatibility(line_graph, torch.tensor(current_dist), bond_vec, None, 4.0)

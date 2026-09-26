@@ -21,6 +21,10 @@ nav_order: 3
   default 5 Å / 4 Å cutoffs; models with `threebody_cutoff == cutoff` were unaffected. The line graph now indexes
   parent-graph bonds (as `original_index` / `ij_reverse_map` do in the reference TensorFlow M3GNet),
   `n_triple_ij` has one entry per parent bond, and the three-body update scatters on `line_edge_index[0]`.
+  Cached line graphs now compare their retained parent-bond IDs with the current cutoff membership and request a
+  rebuild if a bond crosses `threebody_cutoff`, while refreshed geometry remains connected to autograd. Regression
+  tests reproduce `m3gnet-lite`'s global-bond enumeration and cover non-contiguous pruning, equal cutoffs,
+  NumPy/Torch builder parity, finite-difference coordinate gradients, isolated atoms, and dimers.
   Pretrained M3GNet PES weights were fit with the mis-routed channel, which training suppressed to ~1e-4 of the
   bond features; their predictions change by < 0.3 meV/atom and < 2.1 meV/Å (RMS), but they need retraining to
   benefit from three-body information. `get_segment_indices_from_n` also merged segments when a count was zero
