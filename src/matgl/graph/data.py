@@ -2,25 +2,31 @@
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import logging
+import math
 import os
 import shutil
+import uuid
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
 
+import lightning as pl
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Subset
+from monty.json import MontyDecoder
+from torch.utils.data import DataLoader, Sampler, SequentialSampler, Subset
+from torch.utils.data import Dataset as TorchDataset
 from torch_geometric.data import Batch, Data, Dataset
 from tqdm import trange
 
 import matgl
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable, Iterator
 
     from matgl.graph.converters import GraphConverter
 
@@ -248,17 +254,18 @@ def _pick_collate_fn(labels: dict) -> Callable:
 
 
 def MGLDataLoader(
-    train_data: MGLDataset,
-    val_data: MGLDataset,
+    train_data: MGLDataset | MGLDiskDataset,
+    val_data: MGLDataset | MGLDiskDataset,
     collate_fn: Callable | None = None,
-    test_data: MGLDataset | None = None,
+    test_data: MGLDataset | MGLDiskDataset | None = None,
+    shard_seed: int = 0,
     **kwargs,
 ) -> tuple[DataLoader, ...]:
     """Dataloader for MatGL training in PyTorch Geometric.
 
     Args:
-        train_data (Dataset): Training dataset (PyG Dataset or subset).
-        val_data (Dataset): Validation dataset (PyG Dataset or subset).
+        train_data: Training dataset. Disk datasets automatically use shard-aware batches.
+        val_data: Validation dataset. Must use the same storage type as ``train_data``.
         collate_fn (Callable, optional): Collate function for batching. When ``None`` (default),
             one is auto-selected from the training dataset's label keys: ``collate_fn_graph`` for
             single-target property prediction (no ``forces`` key), or ``collate_fn_pes`` with
@@ -266,6 +273,7 @@ def MGLDataLoader(
             an explicit callable (e.g. ``partial(collate_fn_pes, include_stress=False)``) to
             override.
         test_data (Dataset, optional): Test dataset (PyG Dataset or subset). Defaults to None.
+        shard_seed: Base seed for epoch-wise shuffling of disk-backed shards.
         **kwargs: Pass-through kwargs to torch_geometric.loader.DataLoader. Common ones you may want to set are
             batch_size, num_workers, pin_memory, and generator.
 
@@ -279,6 +287,54 @@ def MGLDataLoader(
         ``num_workers > 0`` so the pool isn't torn down between epochs). Pass
         them explicitly to override.
     """
+    if isinstance(train_data, MGLDiskDataset):
+        if not isinstance(val_data, MGLDiskDataset) or (
+            test_data is not None and not isinstance(test_data, MGLDiskDataset)
+        ):
+            raise TypeError("train, validation, and test datasets must all use MGLDiskDataset")
+        if collate_fn is None:
+            collate_fn = _pick_collate_fn(train_data.labels)
+
+        loader_kwargs = _default_loader_kwargs(kwargs)
+        batch_size = loader_kwargs.pop("batch_size", 1)
+        drop_last = loader_kwargs.pop("drop_last", False)
+        controlled = {"batch_sampler", "sampler", "shuffle"}.intersection(loader_kwargs)
+        if controlled:
+            raise ValueError(f"disk-backed loading controls {sorted(controlled)}")
+        disk_train_loader = _disk_loader(
+            train_data,
+            collate_fn=collate_fn,
+            batch_size=batch_size,
+            shuffle=True,
+            drop_last=drop_last,
+            seed=shard_seed,
+            loader_kwargs=loader_kwargs,
+        )
+        disk_val_loader = _disk_loader(
+            val_data,
+            collate_fn=collate_fn,
+            batch_size=batch_size,
+            shuffle=False,
+            drop_last=False,
+            seed=shard_seed,
+            loader_kwargs=loader_kwargs,
+        )
+        if test_data is not None:
+            disk_test_loader = _disk_loader(
+                test_data,
+                collate_fn=collate_fn,
+                batch_size=batch_size,
+                shuffle=False,
+                drop_last=False,
+                seed=shard_seed,
+                loader_kwargs=loader_kwargs,
+            )
+            return disk_train_loader, disk_val_loader, disk_test_loader
+        return disk_train_loader, disk_val_loader
+
+    if isinstance(val_data, MGLDiskDataset) or isinstance(test_data, MGLDiskDataset):
+        raise TypeError("train, validation, and test datasets must use the same storage type")
+
     if collate_fn is None:
         # Peel ``Subset`` (the common shape after ``split_dataset``) to reach
         # the underlying ``MGLDataset`` whose ``labels`` drive the dispatch.
@@ -524,3 +580,634 @@ class MGLDataset(Dataset):
     def raw_file_names(self) -> list[str]:
         """List of raw file names (not used in this case)."""
         return []
+
+
+LARGE_DATA_FORMAT_VERSION = 1
+LabelLayout = Literal["graph", "node", "unchecked"]
+
+# Unknown properties remain supported and can be classified by callers through
+# ``label_layouts``. These defaults cover MatGL's built-in training targets.
+DEFAULT_LABEL_LAYOUTS: dict[str, LabelLayout] = {
+    "alpha": "graph",
+    "charges": "node",
+    "energies": "graph",
+    "forces": "node",
+    "magmoms": "node",
+    "spin": "node",
+    "stresses": "graph",
+    "total_charge": "graph",
+}
+
+
+def _large_state_attr(value: Any, graph_label: Any = None) -> torch.Tensor:
+    """Normalize a state attribute or explicit graph label onto the CPU."""
+    if graph_label is not None:
+        return torch.as_tensor(graph_label, dtype=torch.long, device="cpu")
+    return torch.as_tensor(value, dtype=matgl.float_th, device="cpu")
+
+
+def _atomic_torch_save(value: Any, path: Path) -> None:
+    """Write a Torch payload atomically within its destination directory."""
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        torch.save(value, temporary)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _atomic_json_save(value: Any, path: Path) -> None:
+    """Write JSON atomically within its destination directory."""
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(value, indent=2, sort_keys=True))
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _validate_labels(
+    labels: dict[str, Any],
+    *,
+    n_atoms: int | None,
+    record_index: int,
+    layouts: dict[str, LabelLayout],
+    expected_shapes: dict[str, tuple[int, ...] | None],
+) -> None:
+    """Validate fixed graph shapes and variable-leading-dimension node shapes."""
+    for key, value in labels.items():
+        if isinstance(value, str):
+            shape = None
+        else:
+            tensor = torch.as_tensor(value)
+            layout = layouts.get(key, "unchecked")
+            if layout == "node":
+                if tensor.ndim == 0:
+                    raise ValueError(f"record {record_index}: node label {key!r} must have a leading atom dimension")
+                if n_atoms is not None and tensor.shape[0] != n_atoms:
+                    raise ValueError(
+                        f"record {record_index}: {key!r} has leading dimension {tensor.shape[0]}, expected {n_atoms}"
+                    )
+                shape = tuple(tensor.shape[1:])
+            elif layout == "graph":
+                shape = tuple(tensor.shape)
+            else:
+                shape = None
+
+        if key not in expected_shapes:
+            expected_shapes[key] = shape
+        elif shape is not None and shape != expected_shapes[key]:
+            raise ValueError(
+                f"record {record_index}: {key!r} has shape signature {shape}, expected {expected_shapes[key]}"
+            )
+
+
+def _prepare_disk_graph(
+    converter: GraphConverter,
+    structure: Any,
+    labels: dict[str, Any],
+    *,
+    include_ref_charge: bool,
+) -> tuple[Data, torch.Tensor, Any]:
+    """Convert one structure using the same graph contract as ``MGLDataset``."""
+    graph, lattice, state_attr = converter.get_graph(structure)
+    graph = graph.to(device="cpu")
+    lattice = torch.as_tensor(lattice, dtype=matgl.float_th, device="cpu")
+    if include_ref_charge:
+        graph.q_ref = labels["charges"]
+    return graph, lattice, state_attr
+
+
+def write_mgl_shards(
+    records: Iterable[dict[str, Any]],
+    root: str | Path,
+    *,
+    converter: GraphConverter | None = None,
+    shard_size: int = 1000,
+    precomputed: bool = True,
+    include_ref_charge: bool = False,
+    label_layouts: dict[str, LabelLayout] | None = None,
+) -> None:
+    """Stream records into transactional, CPU-backed PyG shards.
+
+    Each record must contain ``structure`` and a per-record ``labels`` mapping.
+    All records must have the same label keys. The manifest is replaced only
+    after every new shard has been written successfully, so readers continue
+    to see the prior complete generation if conversion is interrupted.
+
+    Args:
+        records: Iterable of structure/label records.
+        root: Directory in which to write shards and ``metadata.json``.
+        converter: Graph converter, required when ``precomputed=True``.
+        shard_size: Maximum records in each independently loadable shard.
+        precomputed: Whether to convert structures while writing.
+        include_ref_charge: Whether to attach per-atom ``q_ref`` to graphs.
+        label_layouts: Optional graph/node/unchecked layout overrides.
+    """
+    if shard_size <= 0:
+        raise ValueError("shard_size must be greater than zero")
+    if precomputed and converter is None:
+        raise ValueError("converter is required when precomputed=True")
+
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    manifest_path = root / "metadata.json"
+    old_shards: set[str] = set()
+    if manifest_path.is_file():
+        try:
+            old_manifest = json.loads(manifest_path.read_text())
+            old_shards = {entry["file"] for entry in old_manifest.get("shards", [])}
+        except (json.JSONDecodeError, KeyError, TypeError):
+            old_shards = set()
+
+    generation = uuid.uuid4().hex[:12]
+    layouts = dict(DEFAULT_LABEL_LAYOUTS)
+    if label_layouts:
+        invalid = {key: value for key, value in label_layouts.items() if value not in {"graph", "node", "unchecked"}}
+        if invalid:
+            raise ValueError(f"invalid label layouts: {invalid}")
+        layouts.update(label_layouts)
+    expected_shapes: dict[str, tuple[int, ...] | None] = {}
+    expected_label_keys: tuple[str, ...] | None = None
+    shard: list[Any] = []
+    shard_entries: list[dict[str, Any]] = []
+    created_paths: list[Path] = []
+    n = 0
+
+    def flush() -> None:
+        nonlocal shard
+        if not shard:
+            return
+        filename = f"shard_{generation}_{len(shard_entries):06d}.pt"
+        path = root / filename
+        _atomic_torch_save(shard, path)
+        created_paths.append(path)
+        shard_entries.append({"file": filename, "n": len(shard)})
+        shard = []
+
+    try:
+        for record_index, record in enumerate(records):
+            if "structure" not in record or "labels" not in record:
+                raise ValueError(f"record {record_index}: expected 'structure' and 'labels'")
+            if not isinstance(record["labels"], dict):
+                raise TypeError(f"record {record_index}: 'labels' must be a mapping")
+            label_keys = tuple(sorted(record["labels"]))
+            if expected_label_keys is None:
+                expected_label_keys = label_keys
+            elif label_keys != expected_label_keys:
+                raise ValueError(
+                    f"record {record_index}: label keys {label_keys} do not match expected keys {expected_label_keys}"
+                )
+
+            labels = {
+                key: value if isinstance(value, str) else torch.as_tensor(value, dtype=matgl.float_th, device="cpu")
+                for key, value in record["labels"].items()
+            }
+            if include_ref_charge and "charges" not in labels:
+                raise ValueError(f"record {record_index}: include_ref_charge requires 'charges'")
+            structure = record["structure"]
+            item: tuple[Any, ...]
+
+            if precomputed:
+                if isinstance(structure, dict):
+                    structure = MontyDecoder().process_decoded(structure)
+                assert converter is not None
+                graph, lattice, state_attr = _prepare_disk_graph(
+                    converter,
+                    structure,
+                    labels,
+                    include_ref_charge=include_ref_charge,
+                )
+                _validate_labels(
+                    labels,
+                    n_atoms=int(graph.num_nodes) if graph.num_nodes is not None else len(structure),
+                    record_index=record_index,
+                    layouts=layouts,
+                    expected_shapes=expected_shapes,
+                )
+                item = (graph, lattice, _large_state_attr(state_attr, record.get("graph_label")), labels)
+            else:
+                if isinstance(structure, dict):
+                    structure_dict = structure
+                elif hasattr(structure, "as_dict"):
+                    structure_dict = structure.as_dict()
+                else:
+                    raise TypeError(f"record {record_index}: structure must be a mapping or implement as_dict()")
+                n_atoms = len(structure_dict.get("sites", [])) or None
+                _validate_labels(
+                    labels,
+                    n_atoms=n_atoms,
+                    record_index=record_index,
+                    layouts=layouts,
+                    expected_shapes=expected_shapes,
+                )
+                item = (structure_dict, labels, record.get("graph_label"))
+
+            shard.append(item)
+            n += 1
+            if len(shard) >= shard_size:
+                flush()
+
+        flush()
+        if n == 0:
+            raise ValueError("cannot create an empty MGL dataset")
+
+        label_schema = {
+            key: {"layout": layouts.get(key, "unchecked"), "shape": list(expected_shapes.get(key) or ())}
+            for key in expected_label_keys or ()
+        }
+        manifest = {
+            "format_version": LARGE_DATA_FORMAT_VERSION,
+            "backend": "pyg",
+            "n": n,
+            "shard_size": shard_size,
+            "shards": shard_entries,
+            "precomputed": precomputed,
+            "label_keys": list(expected_label_keys or ()),
+            "label_schema": label_schema,
+            "include_ref_charge": include_ref_charge,
+            "converter": None if converter is None else f"{type(converter).__module__}.{type(converter).__qualname__}",
+            "versions": {
+                "matgl": getattr(matgl, "__version__", "unknown"),
+                "torch": torch.__version__,
+            },
+        }
+        _atomic_json_save(manifest, manifest_path)
+    except Exception:
+        for path in created_paths:
+            path.unlink(missing_ok=True)
+        raise
+
+    new_shards = {entry["file"] for entry in shard_entries}
+    for filename in old_shards - new_shards:
+        (root / filename).unlink(missing_ok=True)
+
+
+class MGLDiskDataset(TorchDataset):
+    """Map-style PyG dataset backed by independently loadable shards."""
+
+    def __init__(self, root: str | Path, converter: GraphConverter | None = None):
+        """Open a sharded dataset and validate its manifest.
+
+        Args:
+            root: Directory containing ``metadata.json`` and shard files.
+            converter: Converter required for non-precomputed datasets.
+        """
+        self.root = Path(root)
+        manifest = json.loads((self.root / "metadata.json").read_text())
+        if manifest.get("format_version") != LARGE_DATA_FORMAT_VERSION:
+            raise ValueError(f"unsupported dataset format: {manifest.get('format_version')!r}")
+        if manifest.get("backend") != "pyg":
+            raise ValueError(f"expected a PyG dataset, found {manifest.get('backend')!r}")
+
+        self.n = int(manifest["n"])
+        self.shard_size = int(manifest["shard_size"])
+        self.precomputed = bool(manifest["precomputed"])
+        self.include_ref_charge = bool(manifest["include_ref_charge"])
+        self.label_schema = dict(manifest.get("label_schema", {}))
+        self.labels = dict.fromkeys(manifest["label_keys"])
+        self.converter = converter
+        self._shards = list(manifest["shards"])
+        self._offsets: list[int] = []
+        offset = 0
+        for entry in self._shards:
+            self._offsets.append(offset)
+            offset += int(entry["n"])
+            if not (self.root / entry["file"]).is_file():
+                raise FileNotFoundError(self.root / entry["file"])
+        if offset != self.n:
+            raise ValueError(f"manifest contains {offset} items but declares {self.n}")
+
+        self._shard_id: int | None = None
+        self._shard: list[Any] | None = None
+        if not self.precomputed and converter is None:
+            raise ValueError("converter is required for on-the-fly mode")
+
+    @property
+    def num_shards(self) -> int:
+        """Number of independently loadable shards."""
+        return len(self._shards)
+
+    def __len__(self) -> int:
+        """Return the number of structures in the dataset."""
+        return self.n
+
+    def shard_indices(self, shard_id: int) -> range:
+        """Return global sample indices stored in one shard."""
+        start = self._offsets[shard_id]
+        return range(start, start + int(self._shards[shard_id]["n"]))
+
+    def _location(self, idx: int) -> tuple[int, int]:
+        if idx < 0:
+            idx += self.n
+        if idx < 0 or idx >= self.n:
+            raise IndexError(f"index {idx} out of range for dataset of size {self.n}")
+        shard_id = bisect.bisect_right(self._offsets, idx) - 1
+        return shard_id, idx - self._offsets[shard_id]
+
+    def _load_shard(self, shard_id: int) -> list[Any]:
+        if shard_id != self._shard_id:
+            path = self.root / self._shards[shard_id]["file"]
+            # PyG Data requires pickle-backed loading. Only open trusted datasets.
+            loaded = torch.load(path, map_location="cpu", weights_only=False)
+            expected = int(self._shards[shard_id]["n"])
+            if len(loaded) != expected:
+                raise ValueError(f"{path} contains {len(loaded)} items; expected {expected}")
+            self._shard = loaded
+            self._shard_id = shard_id
+        assert self._shard is not None
+        return self._shard
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Drop the process-local shard cache when spawning loader workers."""
+        state = self.__dict__.copy()
+        state["_shard_id"] = state["_shard"] = None
+        return state
+
+    def __getitem__(self, idx: int) -> tuple[Data, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        """Load one graph and its labels."""
+        shard_id, local_idx = self._location(idx)
+        item = self._load_shard(shard_id)[local_idx]
+
+        if self.precomputed:
+            graph, lattice, state_attr, labels = item
+        else:
+            structure_dict, labels, graph_label = item
+            structure = MontyDecoder().process_decoded(structure_dict)
+            assert self.converter is not None
+            graph, lattice, state_attr = _prepare_disk_graph(
+                self.converter,
+                structure,
+                labels,
+                include_ref_charge=self.include_ref_charge,
+            )
+            state_attr = _large_state_attr(state_attr, graph_label)
+
+        tensor_labels = {
+            key: torch.as_tensor(value, dtype=matgl.float_th, device="cpu")
+            for key, value in labels.items()
+            if not isinstance(value, str)
+        }
+        return graph, lattice, state_attr, tensor_labels
+
+
+class ShardBatchSampler(Sampler[list[int]]):
+    """Produce shard-local batches with deterministic distributed partitioning."""
+
+    def __init__(
+        self,
+        sampler: MGLDiskDataset | Sampler[int],
+        batch_size: int,
+        *,
+        shuffle: bool | None = None,
+        drop_last: bool = False,
+        seed: int = 0,
+        rank: int | None = None,
+        world_size: int | None = None,
+    ):
+        """Initialize a sampler for shard-efficient single- or multi-rank loading."""
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than zero")
+        if (rank is None) != (world_size is None):
+            raise ValueError("rank and world_size must be supplied together")
+        if isinstance(sampler, MGLDiskDataset):
+            self.dataset = sampler
+            self.sampler: Sampler[int] = SequentialSampler(sampler)
+        else:
+            dataset = getattr(sampler, "dataset", getattr(sampler, "data_source", None))
+            if not isinstance(dataset, MGLDiskDataset):
+                raise TypeError("sampler must address an MGLDiskDataset")
+            self.dataset = dataset
+            self.sampler = sampler
+        self.batch_size = batch_size
+        self.shuffle = bool(getattr(sampler, "shuffle", False)) if shuffle is None else shuffle
+        self.drop_last = drop_last
+        self.seed = seed
+        self.rank = rank
+        self.world_size = world_size
+        self.epoch = 0
+
+    def set_epoch(self, epoch: int) -> None:
+        """Select the deterministic shuffle for an epoch."""
+        self.epoch = epoch
+        set_epoch = getattr(self.sampler, "set_epoch", None)
+        if callable(set_epoch):
+            set_epoch(epoch)
+
+    def _current_epoch(self) -> int:
+        return int(getattr(self.sampler, "epoch", self.epoch))
+
+    def _distributed_context(self) -> tuple[int, int]:
+        if self.rank is not None and self.world_size is not None:
+            rank, world_size = self.rank, self.world_size
+        elif hasattr(self.sampler, "rank") and hasattr(self.sampler, "num_replicas"):
+            rank = int(self.sampler.rank)  # type: ignore[attr-defined]
+            world_size = int(self.sampler.num_replicas)  # type: ignore[attr-defined]
+        elif torch.distributed.is_available() and torch.distributed.is_initialized():
+            rank = torch.distributed.get_rank()
+            world_size = torch.distributed.get_world_size()
+        else:
+            rank, world_size = 0, 1
+        if world_size <= 0 or not 0 <= rank < world_size:
+            raise ValueError(f"invalid distributed context rank={rank}, world_size={world_size}")
+        return rank, world_size
+
+    def _shard_order(self, epoch: int) -> tuple[list[int], torch.Generator]:
+        generator = torch.Generator().manual_seed(self.seed + epoch)
+        shard_ids = list(range(self.dataset.num_shards))
+        if self.shuffle:
+            permutation = torch.randperm(len(shard_ids), generator=generator).tolist()
+            shard_ids = [shard_ids[index] for index in permutation]
+        return shard_ids, generator
+
+    def _batches_in_shard(self, shard_id: int) -> int:
+        count = int(self.dataset._shards[shard_id]["n"])
+        if self.drop_last:
+            return count // self.batch_size
+        return math.ceil(count / self.batch_size)
+
+    def _distributed_plan(self, epoch: int) -> tuple[list[int], int, torch.Generator]:
+        rank, world_size = self._distributed_context()
+        if world_size > self.dataset.num_shards:
+            raise ValueError(
+                f"world_size={world_size} exceeds num_shards={self.dataset.num_shards}; "
+                "create more shards so every rank can read disjoint data"
+            )
+
+        shard_ids, generator = self._shard_order(epoch)
+        rank_shards = [shard_ids[current_rank::world_size] for current_rank in range(world_size)]
+        rank_batch_counts = [sum(self._batches_in_shard(shard_id) for shard_id in assigned) for assigned in rank_shards]
+        target = min(rank_batch_counts) if self.drop_last else max(rank_batch_counts)
+        if target == 0:
+            raise ValueError(
+                "at least one rank has no batches; use smaller batches, disable drop_last, "
+                "or create fewer/larger shards"
+            )
+        return rank_shards[rank], target, generator
+
+    def __len__(self) -> int:
+        """Return the number of batches produced on this rank."""
+        return self._distributed_plan(self._current_epoch())[1]
+
+    def __iter__(self) -> Iterator[list[int]]:
+        """Yield one epoch of shard-local batches."""
+        epoch = self._current_epoch()
+        shard_ids, target, generator = self._distributed_plan(epoch)
+        if self.shuffle and not hasattr(self.sampler, "epoch"):
+            self.epoch = epoch + 1
+
+        emitted = 0
+        last_batch: list[int] | None = None
+        for shard_id in shard_ids:
+            indices = list(self.dataset.shard_indices(shard_id))
+            if self.shuffle:
+                permutation = torch.randperm(len(indices), generator=generator).tolist()
+                indices = [indices[index] for index in permutation]
+            for start in range(0, len(indices), self.batch_size):
+                batch = indices[start : start + self.batch_size]
+                if len(batch) != self.batch_size and self.drop_last:
+                    continue
+                if emitted >= target:
+                    return
+                last_batch = batch
+                emitted += 1
+                yield batch
+
+        assert last_batch is not None
+        while emitted < target:
+            emitted += 1
+            yield last_batch
+
+
+def _disk_loader(
+    dataset: MGLDiskDataset,
+    *,
+    collate_fn: Callable,
+    batch_size: int,
+    shuffle: bool,
+    drop_last: bool,
+    seed: int,
+    loader_kwargs: dict[str, Any],
+) -> DataLoader:
+    """Build a DataLoader that keeps every batch within one shard."""
+    batch_sampler = ShardBatchSampler(
+        dataset,
+        batch_size,
+        shuffle=shuffle,
+        drop_last=drop_last,
+        seed=seed,
+    )
+    return DataLoader(dataset, batch_sampler=batch_sampler, collate_fn=collate_fn, **loader_kwargs)
+
+
+class MGLDataModule(pl.LightningDataModule):
+    """Lightning DataModule for sharded PyG MatGL datasets."""
+
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        collate_fn: Callable | None = None,
+        converter: GraphConverter | None = None,
+        batch_size: int = 32,
+        num_workers: int = 4,
+        pin_memory: bool | None = None,
+        persistent_workers: bool | None = None,
+        drop_last: bool = False,
+        seed: int = 0,
+        train_split: str = "train",
+        val_split: str = "valid",
+        test_split: str = "test",
+        predict_split: str | None = None,
+        **loader_kwargs: Any,
+    ):
+        """Configure shard-backed datasets and loaders for Lightning.
+
+        Args:
+            root: Parent directory containing one directory per split.
+            collate_fn: Optional MatGL collator. It is inferred from labels when omitted.
+            converter: Converter required for non-precomputed shards.
+            batch_size: Structures per batch.
+            num_workers: DataLoader worker processes.
+            pin_memory: Whether to use page-locked host memory.
+            persistent_workers: Whether workers persist between epochs.
+            drop_last: Whether to drop incomplete training batches.
+            seed: Base seed for deterministic epoch shuffling.
+            train_split: Training split directory name.
+            val_split: Validation split directory name.
+            test_split: Test split directory name.
+            predict_split: Prediction split directory name; defaults to ``test_split``.
+            **loader_kwargs: Additional uncontrolled DataLoader arguments.
+        """
+        super().__init__()
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than zero")
+        if num_workers < 0:
+            raise ValueError("num_workers cannot be negative")
+        controlled = {"batch_sampler", "batch_size", "collate_fn", "drop_last", "sampler", "shuffle"}
+        overlap = controlled.intersection(loader_kwargs)
+        if overlap:
+            raise ValueError(f"loader_kwargs cannot override {sorted(overlap)}")
+
+        self.root = Path(root)
+        self.collate_fn = collate_fn
+        self.converter = converter
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.pin_memory = torch.cuda.is_available() if pin_memory is None else pin_memory
+        self.persistent_workers = num_workers > 0 if persistent_workers is None else persistent_workers
+        if self.persistent_workers and num_workers == 0:
+            raise ValueError("persistent_workers requires num_workers > 0")
+        self.drop_last = drop_last
+        self.seed = seed
+        self.train_split = train_split
+        self.val_split = val_split
+        self.test_split = test_split
+        self.predict_split = predict_split or test_split
+        self.loader_kwargs = loader_kwargs
+
+    def setup(self, stage: str | None = None) -> None:
+        """Open only the datasets required by the current Lightning stage."""
+        if stage in (None, "fit"):
+            self.train_dataset = MGLDiskDataset(self.root / self.train_split, self.converter)
+            self.val_dataset = MGLDiskDataset(self.root / self.val_split, self.converter)
+        elif stage == "validate":
+            self.val_dataset = MGLDiskDataset(self.root / self.val_split, self.converter)
+        if stage in (None, "test"):
+            self.test_dataset = MGLDiskDataset(self.root / self.test_split, self.converter)
+        if stage in (None, "predict"):
+            self.predict_dataset = MGLDiskDataset(self.root / self.predict_split, self.converter)
+
+    def _loader(self, dataset: MGLDiskDataset, *, shuffle: bool, drop_last: bool = False) -> DataLoader:
+        collate_fn = self.collate_fn or _pick_collate_fn(dataset.labels)
+        kwargs = {
+            "num_workers": self.num_workers,
+            "pin_memory": self.pin_memory,
+            "persistent_workers": self.persistent_workers,
+            **self.loader_kwargs,
+        }
+        return _disk_loader(
+            dataset,
+            collate_fn=collate_fn,
+            batch_size=self.batch_size,
+            shuffle=shuffle,
+            drop_last=drop_last,
+            seed=self.seed,
+            loader_kwargs=kwargs,
+        )
+
+    def train_dataloader(self) -> DataLoader:
+        """Return the randomized shard-aware training loader."""
+        return self._loader(self.train_dataset, shuffle=True, drop_last=self.drop_last)
+
+    def val_dataloader(self) -> DataLoader:
+        """Return the deterministic validation loader."""
+        return self._loader(self.val_dataset, shuffle=False)
+
+    def test_dataloader(self) -> DataLoader:
+        """Return the deterministic test loader."""
+        return self._loader(self.test_dataset, shuffle=False)
+
+    def predict_dataloader(self) -> DataLoader:
+        """Return the deterministic prediction loader."""
+        return self._loader(self.predict_dataset, shuffle=False)
