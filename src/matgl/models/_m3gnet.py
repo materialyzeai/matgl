@@ -241,7 +241,8 @@ class M3GNet(MatGLModel):
         else:
             l_g = ensure_line_graph_compatibility(l_g, bond_dist, bond_vec, pbc_offshift, self.threebody_cutoff)
 
-        angles = compute_theta_and_phi(l_g["bond_vec"], l_g["bond_dist"], l_g["line_edge_index"])
+        # line_edge_index holds parent-graph bond ids, so angles use the parent bond tensors.
+        angles = compute_theta_and_phi(bond_vec, bond_dist, l_g["line_edge_index"])
         three_body_basis = self.basis_expansion(angles["triple_bond_lengths"], angles["cos_theta"], angles["phi"])
         three_body_cutoff = polynomial_cutoff(bond_dist, self.threebody_cutoff)
 

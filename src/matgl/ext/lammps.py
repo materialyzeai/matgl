@@ -255,7 +255,8 @@ class _M3GNetKernel(nn.Module):
 
         # Line graph (3-body): tensor-only build; no PyG Data, no numpy.
         l_g = create_line_graph_torch(edge_index, bond_dist, bond_vec, num_nodes, self.threebody_cutoff)
-        angles = compute_theta_and_phi(l_g["bond_vec"], l_g["bond_dist"], l_g["line_edge_index"])
+        # line_edge_index holds parent-graph bond ids, so angles use the parent bond tensors.
+        angles = compute_theta_and_phi(bond_vec, bond_dist, l_g["line_edge_index"])
 
         # Tensor-only spherical-Bessel x spherical-harmonic basis.
         three_body_basis = _m3gnet_three_body_basis_torch(

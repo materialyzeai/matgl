@@ -56,8 +56,8 @@ def compute_theta_and_phi(
     fixed to zero in the M3GNet (non-directed) variant.
 
     Args:
-        bond_vec: Per-bond vectors of the parent graph after three-body pruning,
-            shape ``(num_bonds, 3)``. Same indexing as line-graph nodes.
+        bond_vec: Per-bond vectors, shape ``(num_bonds, 3)``, indexed the same
+            way as ``line_edge_index`` (for M3GNet, the parent-graph bonds).
         bond_dist: Per-bond distances, shape ``(num_bonds,)``.
         line_edge_index: Line-graph edges as ``(2, num_triples)`` with row 0 =
             source bond, row 1 = destination bond.
@@ -116,20 +116,22 @@ def _compute_3body_indices(
 ) -> tuple[torch.Tensor, torch.Tensor, int]:
     """Enumerate (bond_i, bond_j) pairs that share a source atom (M3GNet 3-body).
 
-    The line-graph "nodes" are bonds in the parent graph (in their original
+    The returned indices are positions in ``edge_index`` (in its original
     order), and a line-graph edge ``(b_i, b_j)`` exists whenever ``b_i`` and
-    ``b_j`` share a source atom and ``b_i != b_j``.
+    ``b_j`` share a source atom and ``b_i != b_j``. When ``edge_index`` is a
+    pruned subset of the parent graph, map the result back to parent bond ids
+    with :func:`_lift_to_parent_bonds` before indexing parent-graph tensors.
 
     Args:
-        edge_index: ``(2, E)`` parent edge indices (after three-body pruning).
+        edge_index: ``(2, E)`` edge indices, sorted ascending by source atom.
         num_nodes: Number of atoms in the parent graph.
         device: Device for the returned tensors.
 
     Returns:
         Tuple ``(line_edge_index, n_triple_ij, max_bond_id)``:
             * ``line_edge_index``: shape ``(2, num_triples)``.
-            * ``n_triple_ij``: per-bond triple count (one entry per parent
-              bond, in original order; length ``E``).
+            * ``n_triple_ij``: per-bond triple count (one entry per bond of
+              ``edge_index``, in original order; length ``E``).
             * ``max_bond_id``: largest bond index appearing in
               ``line_edge_index`` plus 1 (for slicing line-graph node features
               from per-bond tensors).
@@ -218,6 +220,40 @@ def _compute_3body_indices_torch(edge_index: torch.Tensor, num_nodes: int) -> tu
     return line_edge_index, n_triple_ij, max_bond_id
 
 
+def _lift_to_parent_bonds(
+    line_edge_index: torch.Tensor,
+    n_triple_ij: torch.Tensor,
+    kept_edge_ids: torch.Tensor,
+    num_bonds: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Map three-body indices from the pruned bond list back to parent-graph bond ids.
+
+    :func:`_compute_3body_indices` and :func:`_compute_3body_indices_torch` enumerate
+    triplets on the list of bonds within the three-body cutoff, so the indices they return
+    are positions in that pruned list. Every consumer (bond angles, the per-bond cutoff
+    weights, the neighbour atom ``k`` and the scatter onto bond ``ij``) indexes per-bond
+    tensors of the *parent* graph, so the indices must be mapped through ``kept_edge_ids``.
+    This mirrors ``original_index[bond_indices]`` and the ``ij_reverse_map`` expansion of
+    ``n_triple_ij`` in the reference TensorFlow M3GNet implementation.
+
+    Args:
+        line_edge_index: ``(2, num_triples)`` indices into the pruned bond list.
+        n_triple_ij: Per-pruned-bond triple counts, one entry per kept bond.
+        kept_edge_ids: Parent-graph bond id of each kept bond, shape ``(num_kept,)``.
+        num_bonds: Number of bonds in the parent graph.
+
+    Returns:
+        Tuple ``(line_edge_index, n_triple_ij)`` in parent-graph bond ids, where
+        ``n_triple_ij`` has one entry per parent bond (zero for bonds beyond the
+        three-body cutoff).
+    """
+    kept = kept_edge_ids.to(torch.long)
+    parent_line_edge_index = kept[line_edge_index.to(torch.long)]
+    parent_n_triple_ij = torch.zeros(num_bonds, dtype=n_triple_ij.dtype, device=n_triple_ij.device)
+    parent_n_triple_ij[kept] = n_triple_ij
+    return parent_line_edge_index, parent_n_triple_ij
+
+
 def create_line_graph_torch(
     edge_index: torch.Tensor,
     bond_dist: torch.Tensor,
@@ -238,19 +274,27 @@ def create_line_graph_torch(
         num_nodes: Number of atoms in the parent graph.
         threebody_cutoff: Distance cutoff used to drop edges before forming
             three-body terms.
+
+    Returns:
+        Dict with keys ``kept_edge_ids``, ``bond_dist``, ``bond_vec``,
+        ``line_edge_index`` and ``n_triple_ij``, with the same semantics as
+        :func:`create_line_graph` (all indices are parent-graph bond ids).
     """
     valid = bond_dist <= threebody_cutoff
+    kept_edge_ids = torch.nonzero(valid).squeeze(1)
     pruned_edge_index = edge_index[:, valid]
-    pruned_bond_dist = bond_dist[valid]
-    pruned_bond_vec = bond_vec[valid]
 
-    line_edge_index, n_triple_ij, max_bond_id = _compute_3body_indices_torch(pruned_edge_index, num_nodes)
+    local_line_edge_index, local_n_triple_ij, _ = _compute_3body_indices_torch(pruned_edge_index, num_nodes)
+    line_edge_index, n_triple_ij = _lift_to_parent_bonds(
+        local_line_edge_index, local_n_triple_ij, kept_edge_ids, int(edge_index.size(1))
+    )
 
     return {
-        "bond_dist": pruned_bond_dist[:max_bond_id],
-        "bond_vec": pruned_bond_vec[:max_bond_id],
+        "kept_edge_ids": kept_edge_ids,
+        "bond_dist": bond_dist,
+        "bond_vec": bond_vec,
         "line_edge_index": line_edge_index,
-        "n_triple_ij": n_triple_ij[:max_bond_id],
+        "n_triple_ij": n_triple_ij,
     }
 
 
@@ -264,11 +308,15 @@ def create_line_graph(
 ) -> dict[str, torch.Tensor]:
     """Build the M3GNet 3-body line graph (PyG variant).
 
-    Equivalent to the equivalent DGL routine in earlier matgl versions for the
-    non-directed (M3GNet) case, but returns a tensor bundle (no ``DGLGraph``):
+    Triplets ``(j, i, k)`` are formed from pairs of distinct bonds ``i->j`` and
+    ``i->k`` that share the source atom ``i`` and both lie within
+    ``threebody_cutoff``. The line-graph nodes are the bonds of the *parent*
+    graph: every index in ``line_edge_index`` is a parent-graph bond id, so it
+    can be used directly against per-bond tensors of the parent graph
+    (``edge_index``, ``bond_vec``, ``bond_dist``, edge features, cutoff weights).
 
     Args:
-        edge_index: Parent ``(2, E)`` edge indices.
+        edge_index: Parent ``(2, E)`` edge indices, sorted ascending by source atom.
         bond_dist: Per-edge distances of the parent graph.
         bond_vec: Per-edge bond vectors of the parent graph.
         pbc_offset: Per-edge PBC offsets of the parent graph (``None`` if not
@@ -279,35 +327,36 @@ def create_line_graph(
 
     Returns:
         Dict with keys:
-            * ``edge_index_pruned``: parent edges that survived the cutoff.
-            * ``kept_edge_ids``: original parent edge indices of those edges.
+            * ``edge_index_pruned``: parent edges within ``threebody_cutoff``.
+            * ``kept_edge_ids``: parent bond ids of those edges.
             * ``bond_dist`` / ``bond_vec`` / ``pbc_offset``: per-line-graph-node
-              tensors (sliced to ``max_bond_id``).
-            * ``line_edge_index``: ``(2, num_triples)`` line-graph edges.
-            * ``n_triple_ij``: per-line-graph-node count of triples.
+              tensors, i.e. the parent-graph per-bond tensors.
+            * ``line_edge_index``: ``(2, num_triples)`` parent bond ids, row 0 =
+              bond ``i->j`` that receives the message, row 1 = bond ``i->k``.
+            * ``n_triple_ij``: number of triples per parent bond, length ``E``
+              (zero for bonds beyond ``threebody_cutoff``).
     """
-    edge_attrs: dict[str, torch.Tensor] = {"bond_dist": bond_dist, "bond_vec": bond_vec}
-    if pbc_offset is not None:
-        edge_attrs["pbc_offset"] = pbc_offset
-
-    pruned_edge_index, pruned_attrs, kept_edge_ids = prune_edges_by_features(
-        edge_index, edge_attrs, bond_dist, lambda x: x > threebody_cutoff
+    pruned_edge_index, _, kept_edge_ids = prune_edges_by_features(
+        edge_index, {}, bond_dist, lambda x: x > threebody_cutoff
     )
 
-    line_edge_index, n_triple_ij, max_bond_id = _compute_3body_indices(
+    local_line_edge_index, local_n_triple_ij, _ = _compute_3body_indices(
         pruned_edge_index, num_nodes, device=edge_index.device
+    )
+    line_edge_index, n_triple_ij = _lift_to_parent_bonds(
+        local_line_edge_index, local_n_triple_ij, kept_edge_ids, edge_index.size(1)
     )
 
     out: dict[str, torch.Tensor] = {
         "edge_index_pruned": pruned_edge_index,
         "kept_edge_ids": kept_edge_ids,
-        "bond_dist": pruned_attrs["bond_dist"][:max_bond_id],
-        "bond_vec": pruned_attrs["bond_vec"][:max_bond_id],
+        "bond_dist": bond_dist,
+        "bond_vec": bond_vec,
         "line_edge_index": line_edge_index,
-        "n_triple_ij": n_triple_ij[:max_bond_id],
+        "n_triple_ij": n_triple_ij,
     }
-    if "pbc_offset" in pruned_attrs:
-        out["pbc_offset"] = pruned_attrs["pbc_offset"][:max_bond_id]
+    if pbc_offset is not None:
+        out["pbc_offset"] = pbc_offset
     return out
 
 
@@ -320,38 +369,55 @@ def ensure_line_graph_compatibility(
 ) -> dict[str, torch.Tensor]:
     """Refresh per-line-graph-node tensors against an updated parent graph.
 
-    Mirrors the non-directed branch of
-    the equivalent DGL routine in earlier matgl versions.
+    The line-graph topology (``line_edge_index``, ``n_triple_ij``) is kept only
+    when the same parent bonds remain inside ``threebody_cutoff``. The per-node
+    geometry is then replaced by the parent-graph tensors, which carry the
+    current positions (and autograd history).
 
     Args:
         line_graph: Bundle previously produced by :func:`create_line_graph`.
         bond_dist: Refreshed per-bond distances of the parent graph.
         bond_vec: Refreshed per-bond vectors of the parent graph.
         pbc_offset: Refreshed per-bond PBC offsets (``None`` if not available).
-        threebody_cutoff: Same cutoff used to build the original line graph.
+        threebody_cutoff: Cutoff used to validate that cached topology membership
+            still matches the current bond distances.
 
     Returns:
         A new bundle whose per-node tensors come from the updated parent graph.
-    """
-    valid = bond_dist <= threebody_cutoff
-    valid_dist = bond_dist[valid]
-    valid_vec = bond_vec[valid]
 
-    n_lg_nodes = line_graph["bond_dist"].size(0)
-    if n_lg_nodes == valid_dist.size(0):
-        new_bond_dist = valid_dist
-        new_bond_vec = valid_vec
-        new_pbc_offset = pbc_offset[valid] if pbc_offset is not None else None
-    else:
-        new_bond_dist = bond_dist[:n_lg_nodes]
-        new_bond_vec = bond_vec[:n_lg_nodes]
-        new_pbc_offset = pbc_offset[:n_lg_nodes] if pbc_offset is not None else None
+    Raises:
+        ValueError: If the bundle does not index the bonds of this parent graph,
+            e.g. a bundle built by matgl <= 4.0.3, whose indices addressed the
+            pruned bond list rather than the parent graph, or if a bond crossed
+            ``threebody_cutoff`` and changed the three-body topology.
+    """
+    num_bonds = bond_dist.size(0)
+    n_entries = line_graph["n_triple_ij"].numel()
+    if n_entries != num_bonds:
+        raise ValueError(
+            f"Line graph has {n_entries} n_triple_ij entries but the parent graph has {num_bonds} bonds. "
+            "M3GNet line graphs must index parent-graph bonds; rebuild it with create_line_graph."
+        )
+
+    cached_kept_edge_ids = line_graph.get("kept_edge_ids")
+    if cached_kept_edge_ids is None:
+        raise ValueError("Line graph has no kept_edge_ids; rebuild it with create_line_graph.")
+
+    # Cutoff membership is discrete topology and must not enter the autograd graph.
+    # Keep the refreshed bond geometry below connected for force/stress gradients.
+    with torch.no_grad():
+        current_kept_edge_ids = torch.nonzero(bond_dist <= threebody_cutoff, as_tuple=False).squeeze(1)
+        cached_kept_edge_ids = cached_kept_edge_ids.to(
+            device=current_kept_edge_ids.device, dtype=current_kept_edge_ids.dtype
+        )
+        if not torch.equal(current_kept_edge_ids, cached_kept_edge_ids):
+            raise ValueError("M3GNet three-body topology changed; rebuild the line graph.")
 
     new_lg = dict(line_graph)
-    new_lg["bond_dist"] = new_bond_dist
-    new_lg["bond_vec"] = new_bond_vec
-    if new_pbc_offset is not None:
-        new_lg["pbc_offset"] = new_pbc_offset
+    new_lg["bond_dist"] = bond_dist
+    new_lg["bond_vec"] = bond_vec
+    if pbc_offset is not None:
+        new_lg["pbc_offset"] = pbc_offset
     return new_lg
 
 

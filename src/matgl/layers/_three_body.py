@@ -18,7 +18,7 @@ import torch
 from torch import nn
 
 import matgl
-from matgl.utils.maths import _block_repeat, get_segment_indices_from_n, scatter_sum
+from matgl.utils.maths import _block_repeat, scatter_sum
 
 
 class ThreeBodyInteractions(nn.Module):
@@ -54,14 +54,22 @@ class ThreeBodyInteractions(nn.Module):
     ):
         """Forward function for ThreeBodyInteractions.
 
+        For each bond ``i->j``, aggregates
+        ``sum_k basis(r_ik, theta_jik) * update_network_atom(v_k) * f_c(r_ij) * f_c(r_ik)``
+        over the neighbours ``k != j`` of ``i`` (Eq. 2) and adds
+        ``update_network_bond`` of the result to ``edge_feat`` (Eq. 3).
+
         Args:
             edge_dst_atom: For each bond ``b`` in the parent graph, the index
                 of the destination atom of that bond. Shape ``(num_bonds,)``.
-            line_edge_index: Line-graph edges as ``(2, num_triples)`` with
-                row 0 = source bond index, row 1 = destination bond index.
-            n_triple_ij: For each bond, the number of triples it participates
-                in as the "central" bond. Shape ``(num_bonds,)``. Used to
-                build segment ids for the per-bond aggregation.
+            line_edge_index: Triplets as ``(2, num_triples)`` parent-graph bond
+                ids: row 0 = bond ``i->j`` that receives the message, row 1 =
+                bond ``i->k`` that supplies the neighbour ``k``. Must index the
+                same bonds as ``edge_dst_atom``, ``three_cutoff`` and
+                ``edge_feat`` (see :func:`matgl.graph._compute.create_line_graph`).
+            n_triple_ij: Number of triples per parent bond, shape
+                ``(num_bonds,)``. Not used by the aggregation, which scatters on
+                ``line_edge_index[0]`` directly; retained for API compatibility.
             num_bonds: Total number of bonds in the parent graph (i.e. the
                 ``dim_size`` for the per-bond scatter).
             three_basis: three body basis expansion of shape
@@ -70,32 +78,21 @@ class ThreeBodyInteractions(nn.Module):
             node_feat: node features.
             edge_feat: edge features (one row per bond).
         """
-        # Get the indices of the end atoms for each bond in the line graph
-        end_atom_indices = edge_dst_atom[line_edge_index[1]].to(matgl.int_th)
+        bond_ij = line_edge_index[0].to(torch.long)
+        bond_ik = line_edge_index[1].to(torch.long)
 
-        # Update node features using the atom update network
+        # Updated features of the neighbour atom k of each triplet
         updated_atoms = self.update_network_atom(node_feat)
+        end_atom_features = updated_atoms[edge_dst_atom[bond_ik].to(torch.long)]
 
-        # Gather updated atom features for the end atoms
-        end_atom_features = updated_atoms[end_atom_indices]
+        # Basis weighted by the smooth cutoffs of both bonds in the triplet
+        weights = three_cutoff[bond_ij] * three_cutoff[bond_ik]
+        basis = three_basis * end_atom_features * weights[:, None]
 
-        # Compute the basis term
-        basis = three_basis * end_atom_features
-
-        # Reshape and compute weights based on the three-cutoff tensor
-        three_cutoff = three_cutoff.unsqueeze(1)
-        edge_indices = line_edge_index.t().contiguous()
-        weights = three_cutoff[edge_indices].view(-1, 2)
-        weights = weights.prod(dim=-1)
-
-        # Compute the weighted basis
-        basis = basis * weights[:, None]
-
-        # Aggregate the new bonds using scatter_sum
-        segment_ids = get_segment_indices_from_n(n_triple_ij)
+        # Aggregate onto the receiving bond i->j
         new_bonds = scatter_sum(
             basis.to(matgl.float_th),
-            segment_ids=segment_ids,
+            segment_ids=bond_ij,
             num_segments=num_bonds,
             dim=0,
         )

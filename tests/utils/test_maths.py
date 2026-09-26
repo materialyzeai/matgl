@@ -34,6 +34,9 @@ def test_spherical_bessel_roots():
 def test_torch_operations():
     ns = torch.tensor([2, 3])
     assert get_segment_indices_from_n(ns).tolist() == [0, 0, 1, 1, 1]
+    # Zero counts must skip their segment id, not merge neighbouring segments.
+    assert get_segment_indices_from_n(torch.tensor([2, 0, 3])).tolist() == [0, 0, 2, 2, 2]
+    assert get_segment_indices_from_n(torch.tensor([0, 1, 0, 0, 2, 0])).tolist() == [1, 4, 4]
     ns = torch.tensor([2, 3])
     assert get_range_indices_from_n(ns).tolist() == [0, 1, 0, 1, 2]
     assert repeat_with_n(torch.tensor([[0, 0], [1, 1], [2, 2]]), torch.tensor([1, 2, 3])).tolist() == [
