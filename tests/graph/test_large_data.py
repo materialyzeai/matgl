@@ -6,6 +6,7 @@ import lightning as pl
 import pytest
 import torch
 from pymatgen.core import Lattice, Structure
+from torch.utils.data import SequentialSampler
 from torch.utils.data.distributed import DistributedSampler
 from torch_geometric.data import Data
 
@@ -52,7 +53,7 @@ def _write_split(root, name: str, count: int = 5) -> MGLDiskDataset:
     write_mgl_shards(
         (_record(index) for index in range(count)),
         path,
-        converter=_Converter(),
+        converter=_Converter(),  # type: ignore[arg-type]
         shard_size=2,
         include_ref_charge=True,
     )
@@ -267,6 +268,152 @@ def test_loader_rejects_mixed_storage_types(tmp_path):
         MGLDataLoader(dataset, [])  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="same storage type"):
         MGLDataLoader([], dataset)  # type: ignore[arg-type]
+
+
+def test_disk_loader_supports_test_data_and_rejects_sampler_controls(tmp_path):
+    dataset = _write_split(tmp_path, "train")
+
+    loaders = MGLDataLoader(dataset, dataset, test_data=dataset, batch_size=2, num_workers=0)
+    assert len(loaders) == 3
+    assert all(len(loader) == 3 for loader in loaders)
+
+    with pytest.raises(ValueError, match="disk-backed loading controls"):
+        MGLDataLoader(dataset, dataset, batch_size=2, num_workers=0, shuffle=False)
+
+
+def test_writer_accepts_serialized_structures_and_graph_labels(tmp_path):
+    record = _record(0)
+    record["structure"] = record["structure"].as_dict()
+    record["graph_label"] = 3
+    record["labels"]["source"] = "calculation-1"
+    record["labels"]["custom"] = torch.tensor([1.0, 2.0])
+
+    write_mgl_shards(
+        [record],
+        tmp_path / "serialized",
+        converter=_Converter(),
+        label_layouts={"custom": "unchecked"},
+    )
+    dataset = MGLDiskDataset(tmp_path / "serialized")
+
+    assert dataset[0][2].item() == 3
+    assert "source" not in dataset[0][3]
+
+    write_mgl_shards([record], tmp_path / "on-the-fly", precomputed=False)
+    assert len(MGLDiskDataset(tmp_path / "on-the-fly", converter=_Converter())) == 1
+
+
+def test_writer_rejects_malformed_records_and_label_shapes(tmp_path):
+    with pytest.raises(ValueError, match="expected 'structure' and 'labels'"):
+        write_mgl_shards([{"structure": _structure()}], tmp_path / "missing", converter=_Converter())
+    with pytest.raises(TypeError, match=r"labels.*mapping"):
+        write_mgl_shards(
+            [{"structure": _structure(), "labels": []}],  # type: ignore[dict-item]
+            tmp_path / "labels",
+            converter=_Converter(),
+        )
+
+    scalar_node = _record(0)
+    scalar_node["labels"]["forces"] = 1.0
+    with pytest.raises(ValueError, match="leading atom dimension"):
+        write_mgl_shards([scalar_node], tmp_path / "scalar", converter=_Converter())
+
+    mismatched = [_record(0), _record(1)]
+    mismatched[1]["labels"]["stresses"] = torch.zeros(3)
+    with pytest.raises(ValueError, match="shape signature"):
+        write_mgl_shards(mismatched, tmp_path / "shape-signature", converter=_Converter())
+
+    invalid_structure = {"structure": object(), "labels": _record(0)["labels"]}
+    with pytest.raises(TypeError, match="structure must be a mapping"):
+        write_mgl_shards([invalid_structure], tmp_path / "structure", precomputed=False)
+
+
+def test_writer_recovers_from_invalid_old_manifest(tmp_path):
+    root = tmp_path / "train"
+    root.mkdir()
+    (root / "metadata.json").write_text("not json")
+
+    write_mgl_shards([_record(0)], root, converter=_Converter())
+
+    assert len(MGLDiskDataset(root)) == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("format_version", -1, "unsupported dataset format"),
+        ("backend", "dgl", "expected a PyG dataset"),
+        ("n", 2, "manifest contains"),
+    ],
+)
+def test_disk_dataset_rejects_invalid_manifest(tmp_path, field, value, message):
+    root = tmp_path / field
+    _write_split(tmp_path, field, count=1)
+    manifest_path = root / "metadata.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest[field] = value
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match=message):
+        MGLDiskDataset(root)
+
+
+def test_disk_dataset_rejects_missing_or_truncated_shards(tmp_path):
+    missing_root = tmp_path / "missing"
+    missing = _write_split(tmp_path, "missing", count=1)
+    (missing_root / missing._shards[0]["file"]).unlink()
+    with pytest.raises(FileNotFoundError):
+        MGLDiskDataset(missing_root)
+
+    truncated_root = tmp_path / "truncated"
+    truncated = _write_split(tmp_path, "truncated", count=2)
+    shard_path = truncated_root / truncated._shards[0]["file"]
+    torch.save(torch.load(shard_path, weights_only=False)[:1], shard_path)
+    with pytest.raises(ValueError, match="contains 1 items; expected 2"):
+        MGLDiskDataset(truncated_root)[0]
+
+
+def test_disk_dataset_worker_state_discards_cached_shard(tmp_path):
+    dataset = _write_split(tmp_path, "train", count=1)
+    _ = dataset[0]
+
+    state = dataset.__getstate__()
+
+    assert state["_shard_id"] is None
+    assert state["_shard"] is None
+
+
+def test_sampler_validation_epoch_and_distributed_context(tmp_path, monkeypatch):
+    dataset = _write_split(tmp_path, "train", count=5)
+    with pytest.raises(TypeError, match="MGLDiskDataset"):
+        ShardBatchSampler(SequentialSampler([]), 2)
+    with pytest.raises(ValueError, match="invalid distributed context"):
+        len(ShardBatchSampler(dataset, 2, rank=1, world_size=1))
+
+    distributed = DistributedSampler(dataset, num_replicas=2, rank=0)
+    sampler = ShardBatchSampler(distributed, 2)
+    sampler.set_epoch(4)
+    assert distributed.epoch == 4
+
+    monkeypatch.setattr(torch.distributed, "is_available", lambda: True)
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 1)
+    assert ShardBatchSampler(dataset, 2)._distributed_context() == (0, 1)
+
+    batches = list(ShardBatchSampler(dataset, 2, drop_last=True))
+    assert all(len(batch) == 2 for batch in batches)
+
+
+def test_data_module_validate_and_custom_predict_split(tmp_path):
+    _write_split(tmp_path, "valid", count=1)
+    _write_split(tmp_path, "inference", count=1)
+    data_module = MGLDataModule(tmp_path, batch_size=1, num_workers=0, predict_split="inference")
+
+    data_module.setup("validate")
+    assert len(data_module.val_dataset) == 1
+    data_module.setup("predict")
+    assert data_module.predict_dataset.root == tmp_path / "inference"
 
 
 @pytest.mark.parametrize(
