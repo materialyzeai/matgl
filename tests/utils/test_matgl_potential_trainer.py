@@ -15,6 +15,10 @@ import pathlib
 
 import numpy as np
 import pytest
+from ase import Atoms
+from ase.calculators.singlepoint import SinglePointCalculator
+from ase.io import write
+from ase.stress import voigt_6_to_full_3x3_stress
 
 from matgl.models import TensorNet
 from matgl.utils import training as training_mod
@@ -282,6 +286,84 @@ class TestLoadMatpesDatasetFromJson:
             rtol=1e-12,
             atol=0.0,
         )
+
+    def test_loads_legacy_aggregate_cli_schema_without_stress(self, tmp_path):
+        with gzip.open(_NACL_PARITY) as fh:
+            records = json.load(fh)["samples"][:2]
+        aggregate = {
+            "structures": [record["structure"] for record in records],
+            "outputs": {
+                "energies": [record["energy"] for record in records],
+                "forces": [record["forces"] for record in records],
+                "magmoms": [[0.1] * len(record["structure"]["sites"]) for record in records],
+            },
+        }
+        path = tmp_path / "legacy.json"
+        path.write_text(json.dumps(aggregate))
+
+        ds = MGLDatasetLoader.from_json(
+            path,
+            cutoff=4.0,
+            save_cache=False,
+            root=str(tmp_path / "legacy_ds"),
+            include_magmoms=True,
+        )
+
+        assert set(ds.labels) == {"energies", "forces", "magmoms"}
+        assert len(ds) == 2
+
+
+class TestLoadDatasetFromExtxyz:
+    def test_periodic_energy_force_stress_charge_and_magmom_labels(self, tmp_path):
+        atoms = Atoms("LiO", positions=[[0, 0, 0], [1.6, 0, 0]], cell=[5, 5, 5], pbc=True)
+        forces = np.asarray([[0.1, 0.0, 0.0], [-0.1, 0.0, 0.0]])
+        stress = np.asarray([0.01, 0.02, 0.03, 0.0, 0.0, 0.0])
+        atoms.calc = SinglePointCalculator(
+            atoms,
+            energy=-3.5,
+            forces=forces,
+            stress=stress,
+            charges=np.asarray([0.2, -0.2]),
+            magmoms=np.asarray([0.3, -0.3]),
+        )
+        path = tmp_path / "periodic.extxyz"
+        write(path, [atoms, atoms], format="extxyz")
+
+        ds = MGLDatasetLoader.from_extxyz(
+            path,
+            cutoff=4.0,
+            save_cache=False,
+            root=str(tmp_path / "periodic_ds"),
+            include_charges=True,
+            include_magmoms=True,
+        )
+
+        assert set(ds.labels) == {"energies", "forces", "stresses", "charges", "magmoms"}
+        np.testing.assert_allclose(ds.labels["energies"], [-3.5, -3.5])
+        np.testing.assert_allclose(ds.labels["forces"][0], forces)
+        np.testing.assert_allclose(
+            ds.labels["stresses"][0],
+            voigt_6_to_full_3x3_stress(stress) * training_mod.EV_PER_ANG3_TO_GPA,
+        )
+        np.testing.assert_allclose(ds.labels["charges"][0], [0.2, -0.2])
+        np.testing.assert_allclose(ds.labels["magmoms"][0], [0.3, -0.3])
+        assert ds.converter.__class__.__name__ == "Structure2Graph"
+
+    def test_nonperiodic_frames_use_molecule_converter(self, tmp_path):
+        atoms = Atoms("H2", positions=[[0, 0, 0], [0.74, 0, 0]], pbc=False)
+        atoms.calc = SinglePointCalculator(atoms, energy=-1.0, forces=np.zeros((2, 3)))
+        path = tmp_path / "molecule.xyz"
+        write(path, atoms, format="extxyz")
+
+        ds = MGLDatasetLoader.from_extxyz(
+            path,
+            cutoff=2.0,
+            save_cache=False,
+            root=str(tmp_path / "molecule_ds"),
+        )
+
+        assert set(ds.labels) == {"energies", "forces"}
+        assert ds.converter.__class__.__name__ == "Molecule2Graph"
 
 
 # ---------------------------------------------------------------------------

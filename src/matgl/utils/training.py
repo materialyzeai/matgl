@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import lightning as pl
@@ -12,7 +13,7 @@ import torch.nn.functional as F
 import torchmetrics
 from huggingface_hub import _CACHED_NO_EXIST, hf_hub_download, try_to_load_from_cache
 from monty.serialization import loadfn
-from pymatgen.core import Structure
+from pymatgen.core import Molecule, Structure
 from torch import nn
 
 from matgl.apps.pes import Potential
@@ -20,7 +21,7 @@ from matgl.config import MATGL_CACHE
 from matgl.utils.constants import EV_PER_ANG3_TO_GPA
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Iterable, Sequence
     from pathlib import Path
 
     from numpy.typing import ArrayLike
@@ -901,7 +902,7 @@ def _resolve_optional_source(
 
 
 def _matpes_samples_to_lists(
-    samples: Iterable[Mapping],
+    samples: Iterable[Mapping] | Mapping,
     stress_unit: StressUnit = "kbar",
     *,
     include_charges: bool | ChargesSource = False,
@@ -909,14 +910,15 @@ def _matpes_samples_to_lists(
 ) -> tuple[list[Structure], dict[str, list]]:
     """Walk a MatPES sample list and return parallel structures + labels dict.
 
-    Always extracts ``energies``, ``forces``, and ``stresses``. Per-atom optional
+    Extracts ``energies`` and ``forces``, plus ``stresses`` when present. Per-atom optional
     partial-charge / magmom fields are extracted when the corresponding
     ``include_*`` flag is truthy; samples whose requested optional field is
     ``None`` (i.e. the upstream calculation failed) are dropped from every
     parallel list, so the returned lists stay aligned.
 
     Args:
-        samples: Iterable of MatPES sample dicts.
+        samples: Iterable of MatPES sample dicts, or the legacy aggregate CLI
+            shape with parallel ``structures`` and ``outputs`` arrays.
         stress_unit: On-disk stress unit; see :meth:`MGLDatasetLoader.from_json`.
         include_charges: If truthy, extract per-atom partial charges under the
             label key ``"charges"`` and drop samples with missing values.
@@ -931,8 +933,8 @@ def _matpes_samples_to_lists(
             ``"bader"`` for Bader magmoms (``bader_magmoms``).
 
     Returns:
-        ``(structures, labels)`` where ``labels`` has keys ``"energies"``,
-        ``"forces"``, ``"stresses"``, and optionally ``"charges"`` / ``"magmoms"``.
+        ``(structures, labels)`` where ``labels`` has keys ``"energies"`` and
+        ``"forces"``, and optionally ``"stresses"`` / ``"charges"`` / ``"magmoms"``.
     """
     # (display_name, extractor_callable) tuples, one per enabled optional.
     enabled: list[tuple[str, str, Any]] = []
@@ -942,6 +944,56 @@ def _matpes_samples_to_lists(
     magmoms_resolved = _resolve_optional_source(include_magmoms, "magmoms", _MAGMOMS_EXTRACTORS, "ddec6")
     if magmoms_resolved is not None:
         enabled.append(("magmoms", *magmoms_resolved))
+
+    if isinstance(samples, Mapping) and "samples" in samples:
+        samples = list(samples["samples"])
+    elif isinstance(samples, Mapping):
+        try:
+            raw_structures = samples["structures"]
+            outputs = samples["outputs"]
+            raw_energies = outputs["energies"]
+            raw_forces = outputs["forces"]
+        except (KeyError, TypeError) as err:
+            raise ValueError(
+                "Aggregate PES JSON must contain structures plus outputs.energies and outputs.forces."
+            ) from err
+        count = len(raw_structures)
+        if len(raw_energies) != count or len(raw_forces) != count:
+            raise ValueError("Aggregate PES structures, energies, and forces must have the same length.")
+        raw_stresses = outputs.get("stresses")
+        if raw_stresses is not None and len(raw_stresses) != count:
+            raise ValueError("Aggregate PES structures and stresses must have the same length.")
+        raw_magmoms = outputs.get("magmoms")
+        if raw_magmoms is not None and len(raw_magmoms) != count:
+            raise ValueError("Aggregate PES structures and magmoms must have the same length.")
+        raw_charges = outputs.get("charges")
+        if raw_charges is not None and len(raw_charges) != count:
+            raise ValueError("Aggregate PES structures and charges must have the same length.")
+        samples = [
+            {
+                "structure": structure,
+                "energy": raw_energies[index],
+                "forces": raw_forces[index],
+                **({"stress": raw_stresses[index]} if raw_stresses is not None else {}),
+                **(
+                    {
+                        "ddec6": {
+                            **({"spin_moments": raw_magmoms[index]} if raw_magmoms is not None else {}),
+                            **({"partial_charges": raw_charges[index]} if raw_charges is not None else {}),
+                        }
+                    }
+                    if raw_magmoms is not None or raw_charges is not None
+                    else {}
+                ),
+            }
+            for index, structure in enumerate(raw_structures)
+        ]
+    else:
+        samples = list(samples)
+
+    has_stress = all("stress" in raw for raw in samples)
+    if not has_stress and any("stress" in raw for raw in samples):
+        raise ValueError("Stress labels must be present for every sample or omitted from every sample.")
 
     structures: list[Structure] = []
     energies: list[float] = []
@@ -972,11 +1024,14 @@ def _matpes_samples_to_lists(
         structures.append(struct)
         energies.append(float(raw["energy"]))
         forces.append(np.asarray(raw["forces"], dtype="float64").tolist())
-        stresses.append((np.asarray(raw["stress"], dtype="float64") * factor).tolist())
+        if has_stress:
+            stresses.append((np.asarray(raw["stress"], dtype="float64") * factor).tolist())
         for label, val in optional_values.items():
             optional_lists[label].append(val)
 
-    labels: dict[str, list] = {"energies": energies, "forces": forces, "stresses": stresses, **optional_lists}
+    labels: dict[str, list] = {"energies": energies, "forces": forces, **optional_lists}
+    if has_stress:
+        labels["stresses"] = stresses
     if dropped and enabled:
         import warnings
 
@@ -1029,7 +1084,7 @@ def _hf_download_cached_first(
 
 
 def _build_pes_dataset(
-    structures: Sequence[Structure],
+    structures: Sequence[Structure | Molecule],
     labels: Mapping[str, list],
     *,
     cutoff: float,
@@ -1039,12 +1094,18 @@ def _build_pes_dataset(
 ) -> MGLDataset:
     """Construct an ``MGLDataset`` from parallel structure / label lists."""
     # Lazy imports to avoid circulars (``matgl.utils.training`` is foundational).
-    from matgl.ext.pymatgen import Structure2Graph, get_element_list
+    from matgl.ext.pymatgen import Molecule2Graph, Structure2Graph, get_element_list
     from matgl.graph.data import MGLDataset
 
     if element_types is None:
         element_types = get_element_list(list(structures))
-    converter = Structure2Graph(element_types=element_types, cutoff=cutoff)
+    converter: Structure2Graph | Molecule2Graph
+    if all(isinstance(item, Structure) for item in structures):
+        converter = Structure2Graph(element_types=element_types, cutoff=cutoff)
+    elif all(isinstance(item, Molecule) for item in structures):
+        converter = Molecule2Graph(element_types=element_types, cutoff=cutoff)
+    else:
+        raise ValueError("A PES dataset cannot mix periodic structures and nonperiodic molecules.")
     ds_kwargs: dict = {
         "structures": list(structures),
         "converter": converter,
@@ -1085,6 +1146,10 @@ class MGLDatasetLoader:
 
     (The instance form ``loader.from_json(...)`` works too, for callers that
     already hold a loader.)
+
+    ASE Extended XYZ trajectories are supported through :meth:`from_extxyz`::
+
+        ds = MGLDatasetLoader.from_extxyz("/path/to/training.extxyz")
 
     Splitting + ``MGLDataLoader`` wrapping is the trainer's job — hand the
     returned ``MGLDataset`` straight to ``MGLPotentialTrainer.fit(...)`` and
@@ -1201,6 +1266,110 @@ class MGLDatasetLoader:
         )
 
     @staticmethod
+    def from_extxyz(
+        path: str | Path,
+        *,
+        cutoff: float = 5.0,
+        element_types: tuple[str, ...] | None = None,
+        save_cache: bool = True,
+        root: str | None = None,
+        stress_unit: StressUnit = "eV/A3",
+        include_charges: bool = False,
+        include_magmoms: bool = False,
+        energy_key: str = "energy",
+        forces_key: str = "forces",
+        stress_key: str = "stress",
+        charges_key: str = "charges",
+        magmoms_key: str = "magmoms",
+    ) -> MGLDataset:
+        """Build an ``MGLDataset`` from an ASE Extended XYZ trajectory.
+
+        Standard Extended XYZ calculator fields are read from the attached
+        ``SinglePointCalculator``; custom keys are also accepted from
+        ``Atoms.info`` (per-configuration) or ``Atoms.arrays`` (per-atom).
+        Energies must be in eV and forces in eV/angstrom. ASE writes stress in
+        eV/angstrom^3 with tensile-positive sign, matching matgl after unit
+        conversion to GPa, so ``stress_unit`` defaults to ``"eV/A3"``.
+
+        All frames must be either fully periodic or fully nonperiodic. The
+        former are converted to pymatgen ``Structure`` objects and the latter
+        to ``Molecule`` objects. Partially periodic frames and mixed
+        structure/molecule trajectories are rejected.
+        """
+        from ase.io import read
+        from ase.stress import voigt_6_to_full_3x3_stress
+        from pymatgen.io.ase import AseAtomsAdaptor
+
+        def get_value(atoms, key: str) -> Any:
+            results = getattr(getattr(atoms, "calc", None), "results", {})
+            if key in results:
+                return results[key]
+            if key in atoms.arrays:
+                return atoms.arrays[key]
+            if key in atoms.info:
+                return atoms.info[key]
+            raise KeyError(f"Extended XYZ frame is missing required field {key!r}")
+
+        frames = read(path, index=":", format="extxyz")
+        if not frames:
+            raise ValueError(f"Extended XYZ file contains no frames: {path}")
+
+        adaptor = AseAtomsAdaptor()
+        structures: list[Structure | Molecule] = []
+        labels: dict[str, list] = {"energies": [], "forces": []}
+        periodicity: bool | None = None
+        stress_present = [
+            stress_key in getattr(getattr(atoms, "calc", None), "results", {})
+            or stress_key in atoms.info
+            or stress_key in atoms.arrays
+            for atoms in frames
+        ]
+        if any(stress_present) and not all(stress_present):
+            raise ValueError("Stress labels must be present for every Extended XYZ frame or omitted from every frame.")
+        has_stress = all(stress_present)
+        if has_stress:
+            labels["stresses"] = []
+        if include_charges:
+            labels["charges"] = []
+        if include_magmoms:
+            labels["magmoms"] = []
+
+        factor = _STRESS_UNIT_TO_GPA[stress_unit]
+        for atoms in frames:
+            pbc = np.asarray(atoms.pbc, dtype=bool)
+            if pbc.any() and not pbc.all():
+                raise ValueError("Partially periodic Extended XYZ frames are not supported.")
+            is_periodic = bool(pbc.all())
+            if periodicity is not None and is_periodic != periodicity:
+                raise ValueError("Extended XYZ cannot mix periodic structures and nonperiodic molecules.")
+            periodicity = is_periodic
+            structures.append(adaptor.get_structure(atoms) if is_periodic else adaptor.get_molecule(atoms))
+            labels["energies"].append(float(np.asarray(get_value(atoms, energy_key)).squeeze()))
+            labels["forces"].append(np.asarray(get_value(atoms, forces_key), dtype="float64").tolist())
+            if has_stress:
+                stress = np.asarray(get_value(atoms, stress_key), dtype="float64")
+                if stress.shape == (6,):
+                    stress = voigt_6_to_full_3x3_stress(stress)
+                elif stress.size == 9:
+                    stress = stress.reshape(3, 3)
+                else:
+                    raise ValueError(f"Extended XYZ stress must contain 6 or 9 values; got shape {stress.shape}.")
+                labels["stresses"].append((stress * factor).tolist())
+            if include_charges:
+                labels["charges"].append(np.asarray(get_value(atoms, charges_key), dtype="float64").tolist())
+            if include_magmoms:
+                labels["magmoms"].append(np.asarray(get_value(atoms, magmoms_key), dtype="float64").tolist())
+
+        return _build_pes_dataset(
+            structures,
+            labels,
+            cutoff=cutoff,
+            element_types=element_types,
+            save_cache=save_cache,
+            root=root,
+        )
+
+    @staticmethod
     def from_json(
         path: str | Path,
         *,
@@ -1214,11 +1383,14 @@ class MGLDatasetLoader:
     ) -> MGLDataset:
         """Build an ``MGLDataset`` from a local MatPES-shaped JSON file.
 
-        The file format mirrors the live MatPES JSONL dataset exactly — one
-        JSON record per line, one record per (structure, PES data)
-        pair. Custom DFT runs and MatPES forks that respect this schema drop
-        in unchanged. No HF Hub round trip happens; this is the local-disk
-        sibling of :meth:`matpes_dataset`.
+        The preferred file format mirrors the live MatPES JSONL dataset exactly —
+        one JSON record per line, one record per (structure, PES data) pair.
+        For compatibility with the original ``mgl train`` prototype, a single
+        JSON object containing parallel ``structures`` and ``outputs`` arrays
+        (``energies``, ``forces``, and optional ``stresses`` / ``magmoms`` /
+        ``charges``) is also accepted.
+        No HF Hub round trip happens; this is the local-disk sibling of
+        :meth:`matpes_dataset`.
 
         **Schema (per record)** — the important keys are:
 
@@ -1228,9 +1400,10 @@ class MGLDatasetLoader:
         - ``energy`` (**required**): total energy in **eV** as a scalar.
         - ``forces`` (**required**): per-atom forces in **eV/Å**, shape
           ``(N_atoms, 3)`` (list-of-lists is fine).
-        - ``stress`` (**required**): stress tensor as either a ``3x3`` or
+        - ``stress`` (optional as a complete field): stress tensor as either a ``3x3`` or
           length-6 (Voigt) array. Units are controlled by ``stress_unit``
-          below; the default matches MatPES on-disk convention.
+          below; the default matches MatPES on-disk convention. It must be
+          present for every sample or omitted from every sample.
         - ``bader_charges`` / ``cm5_partial_charges`` / ``ddec6.partial_charges``
           (optional): per-atom partial charges, surfaced under the dataset
           label ``"charges"`` when ``include_charges`` is truthy.

@@ -69,6 +69,17 @@ class OPTIMIZERS(Enum):
     bfgslinesearch = opt.bfgslinesearch.BFGSLineSearch
 
 
+def _resolve_optimizer_class(name: str) -> type[Optimizer]:
+    """Resolve an ASE optimizer name, handling optional FIRE2 explicitly."""
+    key = name.lower()
+    if key == "fire2":
+        fire2 = getattr(opt, "FIRE2", None)
+        if fire2 is None:
+            raise ImportError("FIRE2 requires an ASE version that provides ase.optimize.FIRE2.")
+        return fire2
+    return OPTIMIZERS[key].value
+
+
 class Atoms2Graph(GraphConverter):
     """Construct a PyG graph from ASE Atoms."""
 
@@ -316,7 +327,7 @@ class Relaxer:
         self,
         potential: Potential,
         state_attr: torch.Tensor | None = None,
-        optimizer: Optimizer | str = "FIRE",
+        optimizer: type[Optimizer] | str = "FIRE",
         relax_cell: bool = True,
         **kwargs,
     ):
@@ -326,7 +337,7 @@ class Relaxer:
             potential (Potential): a M3GNet potential, a str path to a saved model or a short name for saved model
                 that comes with M3GNet distribution
             state_attr (torch.Tensor): State attr.
-            optimizer (str or ase Optimizer): the optimization algorithm.
+            optimizer (str or ASE Optimizer class): the optimization algorithm.
                 Defaults to "FIRE"
             relax_cell (bool): whether to relax the lattice cell
             **kwargs: Kwargs pass through to super().__init__().
@@ -341,7 +352,10 @@ class Relaxer:
                 stacklevel=2,
             )
             kwargs.pop("stress_weight")
-        self.optimizer: Optimizer = OPTIMIZERS[optimizer.lower()].value if isinstance(optimizer, str) else optimizer
+        if isinstance(optimizer, str):
+            self.optimizer: type[Optimizer] = _resolve_optimizer_class(optimizer)
+        else:
+            self.optimizer = optimizer
         self.calculator = PESCalculator(
             potential=potential,
             state_attr=state_attr,
@@ -386,7 +400,7 @@ class Relaxer:
             if self.relax_cell:
                 atoms = FrechetCellFilter(atoms, **params_asecellfilter)  # type:ignore[assignment]
 
-            optimizer = self.optimizer(atoms, **kwargs)  # type:ignore[operator]
+            optimizer = self.optimizer(atoms, **kwargs)  # type: ignore[arg-type]
             optimizer.attach(obs, interval=interval)
             optimizer.run(fmax=fmax, steps=steps)
             obs()

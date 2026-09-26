@@ -351,6 +351,19 @@ Note: For stresses, we use the convention that compressive stress gives negative
 
 `matgl.utils.training.MGLPotentialTrainer` is a high-level wrapper around `PotentialLightningModule` and `pl.Trainer` with sensible MatPES-tuned defaults (Huber loss, stress weight 0.1, Adam + CosineAnnealingLR). Dataset construction is delegated to a sibling `MGLDatasetLoader` factory; the trainer itself only consumes pre-built `MGLDataset`s.
 
+#### CLI training and evaluation
+
+The CLI accepts MatPES-shaped JSON/JSONL and ASE Extended XYZ files. To train TensorNet from scratch and evaluate the saved potential:
+
+```bash
+mgl train -i training.extxyz -m TensorNet -o TensorNet-local --epochs 100
+mgl evaluate -i test.extxyz -m TensorNet-local
+```
+
+For Extended XYZ, the default fields are `energy`, `forces`, `stress`, `charges`, and `magmoms`; override them with `--energy-key`, `--forces-key`, and the corresponding key options. Energies and forces are expected in eV and eV/Å. Stress defaults to ASE's eV/Å³ convention and is converted to matgl's GPa convention. Periodic frames use `Structure2Graph`, while fully nonperiodic frames use `Molecule2Graph`; one file cannot mix the two. Use `--model-kwargs '{"units": 128, "nblocks": 3}'` for architecture options, or pass a saved potential instead of `TensorNet` to fine-tune it.
+
+The geometry commands also accept multi-frame `.xyz` and `.extxyz` files. `mgl predict` reports one result per frame; `mgl relax -s _relaxed` writes all relaxed frames back to Extended XYZ; and `mgl md` starts one simulation per frame, using `_0`, `_1`, and so on in trajectory/log names. Nonperiodic molecular relaxation requires `--no-relax-cell`.
+
 #### Train a TensorNet on MatPES
 
 ```python
