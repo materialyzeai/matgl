@@ -7,6 +7,18 @@ nav_order: 3
 # Change Log
 
 ## 4.0.4
+- **Improved PyG command-line workflows.** `mgl train` now trains or fine-tunes interatomic potentials from local
+  MatPES-shaped JSON/JSONL or Extended XYZ data through `MGLDatasetLoader` and `MGLPotentialTrainer`; `mgl evaluate`
+  evaluates a saved potential with force/stress autograd enabled. Extended XYZ input supports periodic structures
+  and nonperiodic molecules, standard or user-selected label keys, and TensorNet scratch training. The JSON loader
+  accepts both current record-oriented MatPES files and the aggregate `structures`/`outputs` shape used by the
+  earlier CLI prototype. Multi-frame Extended XYZ input is also supported by `mgl predict`, `mgl relax`, and
+  `mgl md`, with per-frame predictions, trajectory-preserving relaxation output, and one MD run per frame.
+  The training and evaluation commands support
+  Lightning accelerator/device selection, optional charge or magnetic-moment targets, dataset caching, and explicit
+  stress units. Relaxation now exposes the
+  ASE optimizer, cell-relaxation toggle, force threshold, and step limit. Model arguments accept local save paths,
+  parser construction no longer queries the model registry, and MD boolean/mask arguments use unambiguous parsers.
 - **New: Release of compact ~1M parameter CHGNet MatPES models.** Released lightweight (1,083,842 parameter)
   CHGNet foundation potentials for both PBE (`BowenD-UCB/CHGNet-PES-MatPES-PBE-1M-2026.9`) and r2SCAN
   (`BowenD-UCB/CHGNet-PES-MatPES-r2SCAN-1M-2026.9`) trained on the official MatPES dataset (`2024.11` / `2025.2`). Despite having
