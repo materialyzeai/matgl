@@ -316,7 +316,7 @@ def test_relax_structure_preserves_extxyz_frames(tiny_extxyz, tiny_structure):
         verbose=False,
         suffix="_relaxed",
         outfile=None,
-        optimizer="FIRE2",
+        optimizer="FIRE",
         relax_cell=True,
         f_max=0.01,
         steps=5,
@@ -337,7 +337,7 @@ def test_relax_nonperiodic_extxyz_requires_fixed_cell(tmp_path):
         verbose=False,
         suffix="_relaxed",
         outfile=None,
-        optimizer="FIRE2",
+        optimizer="FIRE",
         relax_cell=True,
         f_max=0.01,
         steps=5,
@@ -393,9 +393,6 @@ def test_parser_accepts_local_models_and_safe_boolean_flags():
     md = parser.parse_args(["md", "-i", "in.cif", "-m", "./local-model", "--append-trajectory", "--mask", "1,0,1"])
     assert md.append_trajectory is True
     np.testing.assert_array_equal(md.mask, [1, 0, 1])
-
-    fire2 = parser.parse_args(["relax", "-i", "in.cif", "--optimizer", "FIRE2"])
-    assert fire2.optimizer == "FIRE2"
 
 
 def test_train_potential_scratch_uses_modern_pyg_trainer(tmp_path):

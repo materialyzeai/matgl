@@ -17,7 +17,7 @@ nav_order: 3
   The training and evaluation commands support
   Lightning accelerator/device selection, optional charge or magnetic-moment targets, dataset caching, and explicit
   stress units. Relaxation now exposes the
-  ASE optimizer (including FIRE2 when provided by ASE), cell-relaxation toggle, force threshold, and step limit. Model arguments accept local save paths,
+  ASE optimizer, cell-relaxation toggle, force threshold, and step limit. Model arguments accept local save paths,
   parser construction no longer queries the model registry, and MD boolean/mask arguments use unambiguous parsers.
 - **New: Release of compact ~1M parameter CHGNet MatPES models.** Released lightweight (1,083,842 parameter)
   CHGNet foundation potentials for both PBE (`BowenD-UCB/CHGNet-PES-MatPES-PBE-1M-2026.9`) and r2SCAN

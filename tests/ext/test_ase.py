@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os.path
 
-import ase.optimize as opt
 import numpy as np
 import pytest
 import torch
@@ -17,7 +16,6 @@ from matgl.ext.ase import (
     MolecularDynamics,
     PESCalculator,
     Relaxer,
-    _resolve_optimizer_class,
 )
 from matgl.models import QET
 
@@ -158,16 +156,6 @@ def test_Relaxer(MoS):
         assert len(t) == 5
     assert os.path.exists("MoS_relax.traj")
     os.remove("MoS_relax.traj")
-
-
-def test_relaxer_fire2_optimizer_is_registered():
-    assert _resolve_optimizer_class("FIRE2") is opt.FIRE2
-
-
-def test_relaxer_fire2_missing_raises_specific_error(monkeypatch):
-    monkeypatch.delattr(opt, "FIRE2")
-    with pytest.raises(ImportError, match="FIRE2 requires"):
-        _resolve_optimizer_class("FIRE2")
 
 
 def test_get_graph_from_atoms(LiFePO4):

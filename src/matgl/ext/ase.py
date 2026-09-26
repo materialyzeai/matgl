@@ -69,17 +69,6 @@ class OPTIMIZERS(Enum):
     bfgslinesearch = opt.bfgslinesearch.BFGSLineSearch
 
 
-def _resolve_optimizer_class(name: str) -> type[Optimizer]:
-    """Resolve an ASE optimizer name, handling optional FIRE2 explicitly."""
-    key = name.lower()
-    if key == "fire2":
-        fire2 = getattr(opt, "FIRE2", None)
-        if fire2 is None:
-            raise ImportError("FIRE2 requires an ASE version that provides ase.optimize.FIRE2.")
-        return fire2
-    return OPTIMIZERS[key].value
-
-
 class Atoms2Graph(GraphConverter):
     """Construct a PyG graph from ASE Atoms."""
 
@@ -353,7 +342,7 @@ class Relaxer:
             )
             kwargs.pop("stress_weight")
         if isinstance(optimizer, str):
-            self.optimizer: type[Optimizer] = _resolve_optimizer_class(optimizer)
+            self.optimizer: type[Optimizer] = OPTIMIZERS[optimizer.lower()].value
         else:
             self.optimizer = optimizer
         self.calculator = PESCalculator(

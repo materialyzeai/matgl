@@ -601,7 +601,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_relax.add_argument(
         "--optimizer",
-        choices=["FIRE", "FIRE2", "BFGS", "LBFGS", "LBFGSLineSearch"],
+        choices=["FIRE", "BFGS", "LBFGS", "LBFGSLineSearch"],
         default="FIRE",
         help="ASE geometry optimizer (default: FIRE).",
     )
