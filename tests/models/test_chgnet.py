@@ -205,6 +205,48 @@ class TestExtensivity:
 
         assert torch.allclose(out / structure.num_sites, out_s / supercell.num_sites, rtol=1e-4)
 
+    def test_supercell_invariance_self_image(self):
+        """Energy, forces, and stresses must be invariant between unit cell and supercell
+
+        even for small cells with periodic self-image bonds within the three-body cutoff (#839).
+        """
+        from ase.build import bulk
+        from pymatgen.io.ase import AseAtomsAdaptor
+
+        # Strained & displaced bcc Fe (lattice parameter ~2.87 A < 3.0 A cutoff)
+        fe = bulk("Fe", "bcc", a=2.87, cubic=True)
+        fe.set_cell(fe.cell @ [[1.012, 0.008, -0.003], [0.008, 0.991, 0.006], [-0.003, 0.006, 1.005]], scale_atoms=True)
+        fe.positions[0] += [0.035, -0.021, 0.017]
+        fe_sc = fe.repeat((2, 2, 2))
+
+        structure = AseAtomsAdaptor.get_structure(fe)
+        supercell = AseAtomsAdaptor.get_structure(fe_sc)
+
+        model = CHGNet()
+        pot = Potential(model=model)
+        conv = Structure2Graph(element_types=model.element_types, cutoff=model.cutoff)
+
+        g, lat, state = conv.get_graph(structure)
+        g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
+        g.pos = g.frac_coords @ lat[0]
+
+        gs, lats, states = conv.get_graph(supercell)
+        gs.pbc_offshift = torch.matmul(gs.pbc_offset, lats[0])
+        gs.pos = gs.frac_coords @ lats[0]
+
+        e, f, s, _ = pot(g, lat=lat, state_attr=state)
+        es, fs, ss, _ = pot(gs, lat=lats, state_attr=states)
+
+        natoms = len(structure)
+        natoms_sc = len(supercell)
+
+        # Energy per atom must match
+        assert torch.allclose(e / natoms, es / natoms_sc, atol=1e-5)
+        # Forces on corresponding atoms must match
+        assert torch.allclose(f, fs[:natoms], atol=1e-5)
+        # Stresses must match
+        assert torch.allclose(s, ss, atol=1e-5)
+
 
 # ---------------------------------------------------------------------------
 # predict_structure
@@ -543,17 +585,18 @@ _MATPES_EXPECTED = {
         "magmom": [[3.0529751777648926], [0.2098957896232605]],
     },
     ("r2SCAN", "fe_perturbed"): {
-        "energy_per_atom": -14.3956117630,
+        # Updated for supercell-invariant line graph construction (#839)
+        "energy_per_atom": -14.3958244324,
         "forces": [
-            [0.4258512258529663, -0.1235826313495636, 0.12358187139034271],
-            [-0.4258511960506439, 0.12358264625072479, -0.12358184158802032],
+            [0.41468507051467896, -0.12105222046375275, 0.12105147540569305],
+            [-0.41468513011932373, 0.12105226516723633, -0.12105147540569305],
         ],
         "stress": [
-            [1.0761417150497437, 0.16017884016036987, -0.160176083445549],
-            [0.16017739474773407, 0.9039998054504395, 0.0062924763187766075],
-            [-0.1601785570383072, 0.006292911246418953, 0.9039995670318604],
+            [1.1776633262634277, 0.1610802710056305, -0.16108068823814392],
+            [0.1610814332962036, 0.9183546304702759, 0.010953918099403381],
+            [-0.16108085215091705, 0.010953555814921856, 0.9183536171913147],
         ],
-        "magmom": [[2.7332448959350586], [2.7332446575164795]],
+        "magmom": [[2.733311414718628], [2.733311891555786]],
     },
     ("PBE", "mos"): {
         "energy_per_atom": -5.3955235481,
@@ -595,17 +638,18 @@ _MATPES_EXPECTED = {
         "magmom": [[3.9845972061157227], [0.19968606531620026]],
     },
     ("PBE", "fe_perturbed"): {
-        "energy_per_atom": -8.2331771851,
+        # Updated for supercell-invariant line graph construction (#839)
+        "energy_per_atom": -8.2332916260,
         "forces": [
-            [0.5191652774810791, -0.1568017303943634, 0.15680040419101715],
-            [-0.5191652774810791, 0.1568017452955246, -0.15680038928985596],
+            [0.5109330415725708, -0.1546865999698639, 0.15468531847000122],
+            [-0.5109331607818604, 0.1546865850687027, -0.15468531847000122],
         ],
         "stress": [
-            [6.75199031829834, 0.14844921231269836, -0.14844965934753418],
-            [0.14845024049282074, 6.802818298339844, 0.03695053607225418],
-            [-0.14844965934753418, 0.03694981336593628, 6.802807807922363],
+            [6.837135314941406, 0.15111377835273743, -0.1511136293411255],
+            [0.15111391246318817, 6.799311637878418, 0.043578580021858215],
+            [-0.15111158788204193, 0.043578434735536575, 6.7993011474609375],
         ],
-        "magmom": [[2.3732571601867676], [2.373257637023926]],
+        "magmom": [[2.3731558322906494], [2.3731565475463867]],
     },
 }
 
@@ -680,4 +724,3 @@ def test_matpes_1m_pretrained_inference(functional):
     energy, forces = out[0], out[1]
     assert energy.numel() == 1
     assert forces.shape == (natoms, 3)
-

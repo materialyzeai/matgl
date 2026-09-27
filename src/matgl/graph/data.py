@@ -219,7 +219,11 @@ def collate_fn_pes(
         if include_stress
         else torch.zeros(e.size(0), dtype=matgl.float_th)
     )
-    m = torch.vstack([d["magmoms"] for d in labels]) if include_magmom else torch.zeros(e.size(0), dtype=matgl.float_th)
+    m = (
+        torch.vstack([d["magmoms"].view(-1, 1) for d in labels])
+        if include_magmom
+        else torch.zeros(e.size(0), dtype=matgl.float_th)
+    )
     q = torch.hstack([d["charges"] for d in labels]) if include_charge else torch.zeros(e.size(0), dtype=matgl.float_th)
     state_attr = torch.stack(state_attr)  # type:ignore[assignment]
     lat = lattices[0] if g.batch_size == 1 else torch.squeeze(torch.stack(lattices))
@@ -421,8 +425,14 @@ class MGLDataset(Dataset):
         if self.has_cache():
             self.load()
 
-        if self.clear_processed:
+        if self.clear_processed and (Path(self.root) / "processed").exists():
             shutil.rmtree(Path(self.root) / "processed", ignore_errors=True)
+
+    def _process(self) -> None:
+        """Skip PyG internal processing if a valid cache already exists to prevent multi-process race conditions."""
+        if self.has_cache():
+            return
+        super()._process()
 
     def has_cache(self) -> bool:
         """Check if the processed files exist and match the current converter config.

@@ -447,14 +447,11 @@ def test_mgl_dataloader_autodetect_collate_fn(LiFePO4, BaNiO3):
     pes_batch = next(iter(pes_train_loader))
     assert len(pes_batch) == 6  # (g, lat, state_attr, e, f, s)
 
-    # PES with magmoms -> 7-tuple including ``m``. Use only LiFePO4 so per-atom
-    # magmom tensors all have the same length and ``collate_fn_pes``'s vstack
-    # works regardless of shuffle order (DataLoader inherits the global RNG,
-    # so this subtest can otherwise sample mixed-shape batches and fail
-    # depending on what set the seed earlier in the run).
-    mag_structs = [LiFePO4] * 20
-    mag_forces = [np.zeros((len(LiFePO4), 3)).tolist()] * 20
-    mag_magmoms = [[1.0] * len(LiFePO4)] * 20
+    # PES with magmoms -> 7-tuple including ``m``. Structures of varying sizes
+    # (LiFePO4 with 28 atoms and BaNiO3 with 10 atoms) with 1D magmom tensors.
+    mag_structs = [LiFePO4, BaNiO3] * 10
+    mag_forces = [np.zeros((len(s), 3)).tolist() for s in mag_structs]
+    mag_magmoms = [[1.0] * len(s) for s in mag_structs]
     mag_dataset = MGLDataset(
         structures=mag_structs,
         converter=cry_graph,
@@ -470,3 +467,7 @@ def test_mgl_dataloader_autodetect_collate_fn(LiFePO4, BaNiO3):
     mag_train_loader, _ = MGLDataLoader(train_data=mag_train, val_data=mag_val, batch_size=2, num_workers=0)
     mag_batch = next(iter(mag_train_loader))
     assert len(mag_batch) == 7
+    # Verify shape of magmoms m is (total_atoms_in_batch, 1)
+    assert mag_batch[6].ndim == 2
+    assert mag_batch[6].shape[1] == 1
+    assert mag_batch[6].shape[0] == mag_batch[0].num_nodes

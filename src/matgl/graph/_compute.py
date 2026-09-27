@@ -523,16 +523,10 @@ def create_directed_line_graph(
 
         # Map global edge ids → local line-graph node ids
         num_lg_nodes = edge_ids.numel()
-        global_to_local = torch.full((edge_index.size(1),), -1, dtype=torch.long, device=device)
-        local_ids = torch.arange(num_lg_nodes, dtype=torch.long, device=device)
-        global_to_local[edge_ids] = local_ids
-
         # Sub-graph src/dst for valid bonds
         v_src = src_indices[edge_ids]  # central atoms for valid bonds
         v_dst = dst_indices[edge_ids]  # neighbors for valid bonds
         v_images = pbc_offset[edge_ids]
-
-        is_self_edge = v_src == v_dst
 
         # Calculate connections using dense matrices over the reduced (valid) edges
         v_src_j = v_src.unsqueeze(0)  # shape (1, V)
@@ -543,24 +537,14 @@ def create_directed_line_graph(
         v_dst_i = v_dst.unsqueeze(1)  # shape (V, 1)
         v_images_i = v_images.unsqueeze(1)  # shape (V, 1, 3)
 
-        # shared_src: src[i] == src[j]
-        shared_src = v_src_i == v_src_j
-
         # incoming_to_ca: dst[i] == src[j]
         incoming_to_ca = v_dst_i == v_src_j
 
         # Backtracking: incoming & src[i] == dst[j] & images[i] == -images[j]
         is_backtrack = incoming_to_ca & (v_src_i == v_dst_j) & torch.all(-v_images_i == v_images_j, dim=2)
 
-        # Base inclusion for non-self edges (matches DGL logic: incoming & (shared_src | ~backtracking))
-        include_mask = incoming_to_ca & (shared_src | ~is_backtrack)
-
-        # For self-edges (is_self_edge[j]), only include incoming_to_ca (no shared_src, no backtrack checks)
-        self_edges_j = is_self_edge.unsqueeze(0)  # (1, V)
-        include_mask = torch.where(self_edges_j, incoming_to_ca, include_mask)
-
-        # Exclude i == j
-        include_mask.fill_diagonal_(False)
+        # All incoming bonds meeting at the central atom are included, excluding only backtracking
+        include_mask = incoming_to_ca & ~is_backtrack
 
         # Get the indices of the connected line graph nodes
         lg_src, lg_dst = include_mask.nonzero(as_tuple=True)
@@ -568,14 +552,8 @@ def create_directed_line_graph(
 
         lg_pbc_offset = pbc_offset[edge_ids]
 
-        # Sign correction: non-self edges get sign = -1 (bond vector points away from central atom)
-        lg_src_bond_sign = torch.ones((num_lg_nodes, 1), dtype=bond_vec.dtype, device=device)
-
-        # Find local ids of non-self edges
-        not_self_edge = ~is_self_edge
-        ns_local_ids = local_ids[not_self_edge]
-        if ns_local_ids.numel() > 0:
-            lg_src_bond_sign[ns_local_ids] = -1.0
+        # Sign correction: all src bonds are incoming (vector flipped to point away from central atom)
+        lg_src_bond_sign = bond_vec.new_full((num_lg_nodes, 1), -1.0)
 
     # Line-graph node features = bond properties of the corresponding atom-graph edge.
     # Sliced outside torch.no_grad() so autograd tracks derivatives with respect to
