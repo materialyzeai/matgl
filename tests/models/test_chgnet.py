@@ -706,7 +706,7 @@ def test_matpes_model_parity_pyg(matpes_pyg_potential, struct_name):
 @pytest.mark.parametrize("functional", ["r2SCAN", "PBE"])
 def test_matpes_1m_pretrained_inference(functional):
     """Verify newly released 1M CHGNet models load from Hub and execute forward pass."""
-    model_name = f"BowenD-UCB/CHGNet-PES-MatPES-{functional}-1M-2026.9"
+    model_name = f"materialyze/CHGNet-PES-MatPES-{functional}-1M-2026.9"
     try:
         pot = matgl.load_model(model_name)
     except Exception as e:

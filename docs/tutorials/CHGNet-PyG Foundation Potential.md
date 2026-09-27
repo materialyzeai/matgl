@@ -51,6 +51,9 @@ Two MatPES checkpoints are available:
 | `BowenD-UCB/CHGNet-PyG-MatPES-r2SCAN-2025.2.10` | r2SCAN |
 | `BowenD-UCB/CHGNet-PyG-MatPES-PBE-2025.2.10` | PBE |
 
+> The default CHGNet models are now the compact ~1M parameter `materialyze/CHGNet-PES-MatPES-{PBE,r2SCAN}-1M-2026.9`,
+> trained on MatPES 2025.2. This tutorial uses the 2.7M checkpoints above; every step works unchanged with the 1M models.
+
 Weights are numerically identical to the DGL checkpoints; the only difference is the
 message-passing backend. All predictions are in **eV** (energy), **eV/Å** (forces),
 **GPa** (stresses), and **μB** (magnetic moments).

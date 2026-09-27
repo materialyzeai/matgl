@@ -29,8 +29,9 @@ nav_order: 3
   ASE optimizer, cell-relaxation toggle, force threshold, and step limit. Model arguments accept local save paths,
   parser construction no longer queries the model registry, and MD boolean/mask arguments use unambiguous parsers.
 - **New: Release of compact ~1M parameter CHGNet MatPES models.** Released lightweight (1,083,842 parameter)
-  CHGNet foundation potentials for both PBE (`BowenD-UCB/CHGNet-PES-MatPES-PBE-1M-2026.9`) and r2SCAN
-  (`BowenD-UCB/CHGNet-PES-MatPES-r2SCAN-1M-2026.9`) trained on the official MatPES 2025.2 dataset. Despite having
+  CHGNet foundation potentials for both PBE (`materialyze/CHGNet-PES-MatPES-PBE-1M-2026.9`) and r2SCAN
+  (`materialyze/CHGNet-PES-MatPES-r2SCAN-1M-2026.9`) trained on the official MatPES 2025.2 dataset. These are now
+  the default CHGNet models; the 2.7M `materialyze/CHGNet-PES-MatPES-{PBE,r2SCAN}-2025.2.10` checkpoints remain available. Despite having
   ~2.5× fewer parameters than the standard 2.7M architecture, these compact models achieve strong train, validation, and test MAEs across
   energy (test: 26.72 meV/atom PBE, 27.45 meV/atom r2SCAN; val: 25.60 meV/atom PBE, 28.00 meV/atom r2SCAN; train: 22.58 meV/atom PBE, 25.46 meV/atom r2SCAN),
   forces (test: 110.53 meV/Å PBE, 137.58 meV/Å r2SCAN; val: 111.00 meV/Å PBE, 141.18 meV/Å r2SCAN; train: 86.75 meV/Å PBE, 112.27 meV/Å r2SCAN),
