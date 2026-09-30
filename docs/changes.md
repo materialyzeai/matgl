@@ -64,6 +64,30 @@ nav_order: 3
 - **Fix: Multi-GPU DDP training metric device mismatch and cache race condition.** Fixed an issue where dummy
   metric tensors in `PotentialLightningModule.loss_fn` were constructed on CPU, causing NCCL `sync_dist=True` to
   crash, and guarded dataset cache directory cleanup in `MGLDataset` against multi-rank race conditions.
+- **Security: `IOMixIn.load` now uses `torch.load(weights_only=True)`.** Both `state.pt` and `model.pt` are
+  loaded under the restricted unpickler, so untrusted checkpoints can no longer execute arbitrary code. Only the
+  small set of numpy types needed for legacy `element_refs` arrays is allowlisted. `Potential` now also
+  normalizes non-tensor `element_refs` (numpy arrays or sequences) to plain lists before saving.
+- **Security: require `lightning>=2.6.6` (CVE-2026-58659, #833).** The previous `<=2.6.1` cap sat inside the
+  affected range of `LightningModule.load_from_checkpoint`; the upper bound has been dropped.
+- **LAMMPS `pair_matgl` fixes and speed-up (#825, #828, #831).** The CMake snippets now register the
+  `matgl` and `matgl/kk` pair styles, link libtorch directly for Kokkos, and no longer hardcode cluster-specific
+  export paths (overridable via `MATGL_PYTHON` / `MATGL_EXPORT_SCRIPT`). Exported TorchScript models now run on
+  GPU, Kokkos CUDA kernels compile against the current Kokkos view API, and the CPU virial sign is corrected
+  (validated against finite-difference pressure). Node buffers are sized to local atoms only, which removes
+  ghost-row embedding. Model-node work drops 3.00× at 32 Å, and end-to-end runs are 1.38–1.71× faster.
+- **Fix: smooth spherical-Bessel basis precision (#826, #832).** `SphericalBesselFunction(smooth=True)` built its
+  constants in the ambient default dtype and `spherical_bessel_smooth` mixed float32 indices with float64 inputs
+  in the LAMMPS export path. Constants are now built in float64 and tied to the input dtype. Float32 outputs are
+  bit-identical, so no retraining is needed. The symbolic-function cache now actually hits, which saves
+  ~220 ms of `sympy.simplify` per module construction.
+- **Fix: `neighbor_list_from_ase(compute_distances=True)` crashed on periodic structures (#827).** An integer
+  shift matrix was multiplied by the float cell; shifts are now cast to the position dtype.
+- **Fix: stale `MGLDataset` caches with multi-fidelity data.** The cache fingerprint now includes a hash of
+  `graph_labels`, so changing the state labels (e.g. fidelity IDs) triggers reprocessing (cache format v2).
+- **Constants centralized in `matgl.utils.constants`**, with a regression test against scipy CODATA values.
+- **Dependencies:** cap `nvalchemi-toolkit-ops<0.4.0` for the `alchmtk` extra (incompatible `neighbor_list`
+  API under `torch.compile`), and bump torch to 2.13.0.
 
 ## 4.0.3
 - **New: LAMMPS integration for TensorNet and M3GNet potentials (#815).** `matgl.ext.lammps.LAMMPSMatGLModel`

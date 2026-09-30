@@ -126,7 +126,7 @@ def release(ctx, version):
 def get_changelog(version):
     with open("docs/changes.md") as f:
         contents = f.read()
-        m = re.search(f"## {version}([^#]*)", contents)
+        m = re.search(rf"^## {re.escape(version)}\n(.*?)(?=^## |\Z)", contents, re.DOTALL | re.MULTILINE)
         changes = m.group(1).strip()
         return changes
 
