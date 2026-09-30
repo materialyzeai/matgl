@@ -6,7 +6,7 @@ nav_order: 3
 
 # Change Log
 
-## 4.0.4
+## 4.1.0
 - **Disk-backed PyG training for datasets larger than memory.** `write_mgl_shards` streams records into versioned,
   transactional CPU shards; `MGLDiskDataset` loads one shard per worker on demand; and `ShardBatchSampler` keeps
   batches shard-local while assigning disjoint shards and equal step counts to distributed ranks. `MGLDataLoader`
@@ -41,17 +41,7 @@ nav_order: 3
   `threebody_cutoff`, but `ThreeBodyInteractions` used those indices directly against parent-graph tensors, so
   each triplet took atom `k` and the cutoff weights `f_c(r_ij) f_c(r_ik)` from the wrong bonds and was scattered
   onto the wrong bond. This affected every MatGL release since v0.1.0 (DGL and PyG backends, and the LAMMPS export) with the
-  default 5 Å / 4 Å cutoffs; models with `threebody_cutoff == cutoff` were unaffected. The line graph now indexes
-  parent-graph bonds (as `original_index` / `ij_reverse_map` do in the reference TensorFlow M3GNet),
-  `n_triple_ij` has one entry per parent bond, and the three-body update scatters on `line_edge_index[0]`.
-  Cached line graphs now compare their retained parent-bond IDs with the current cutoff membership and request a
-  rebuild if a bond crosses `threebody_cutoff`, while refreshed geometry remains connected to autograd. Regression
-  tests reproduce `m3gnet-lite`'s global-bond enumeration and cover non-contiguous pruning, equal cutoffs,
-  NumPy/Torch builder parity, finite-difference coordinate gradients, isolated atoms, and dimers.
-  Pretrained M3GNet PES weights were fit with the mis-routed channel, which training suppressed to ~1e-4 of the
-  bond features; their predictions change by < 0.3 meV/atom and < 2.1 meV/Å (RMS), but they need retraining to
-  benefit from three-body information. `get_segment_indices_from_n` also merged segments when a count was zero
-  (`[2, 0, 3]` gave `[0, 0, 1, 1, 1]`); it now returns `[0, 0, 2, 2, 2]`.
+  default 5 Å / 4 Å cutoffs; models with `threebody_cutoff == cutoff` were unaffected. New M3GNet MatPES models have been refitted and released.
 - **Fix: CHGNet three-body geometry autograd detachment (#834).** Continuous line-graph geometry features
   (`lg_bond_vec` and `lg_bond_dist`) were previously sliced under `torch.no_grad()`, causing three-body angular
   contributions to forces and stresses to be detached from autograd. Discrete graph topology is now isolated
@@ -64,12 +54,6 @@ nav_order: 3
 - **Fix: Multi-GPU DDP training metric device mismatch and cache race condition.** Fixed an issue where dummy
   metric tensors in `PotentialLightningModule.loss_fn` were constructed on CPU, causing NCCL `sync_dist=True` to
   crash, and guarded dataset cache directory cleanup in `MGLDataset` against multi-rank race conditions.
-- **Security: `IOMixIn.load` now uses `torch.load(weights_only=True)`.** Both `state.pt` and `model.pt` are
-  loaded under the restricted unpickler, so untrusted checkpoints can no longer execute arbitrary code. Only the
-  small set of numpy types needed for legacy `element_refs` arrays is allowlisted. `Potential` now also
-  normalizes non-tensor `element_refs` (numpy arrays or sequences) to plain lists before saving.
-- **Security: require `lightning>=2.6.6` (CVE-2026-58659, #833).** The previous `<=2.6.1` cap sat inside the
-  affected range of `LightningModule.load_from_checkpoint`; the upper bound has been dropped.
 - **LAMMPS `pair_matgl` fixes and speed-up (#825, #828, #831).** The CMake snippets now register the
   `matgl` and `matgl/kk` pair styles, link libtorch directly for Kokkos, and no longer hardcode cluster-specific
   export paths (overridable via `MATGL_PYTHON` / `MATGL_EXPORT_SCRIPT`). Exported TorchScript models now run on
@@ -81,11 +65,6 @@ nav_order: 3
   in the LAMMPS export path. Constants are now built in float64 and tied to the input dtype. Float32 outputs are
   bit-identical, so no retraining is needed. The symbolic-function cache now actually hits, which saves
   ~220 ms of `sympy.simplify` per module construction.
-- **Fix: `neighbor_list_from_ase(compute_distances=True)` crashed on periodic structures (#827).** An integer
-  shift matrix was multiplied by the float cell; shifts are now cast to the position dtype.
-- **Fix: stale `MGLDataset` caches with multi-fidelity data.** The cache fingerprint now includes a hash of
-  `graph_labels`, so changing the state labels (e.g. fidelity IDs) triggers reprocessing (cache format v2).
-- **Constants centralized in `matgl.utils.constants`**, with a regression test against scipy CODATA values.
 - **Dependencies:** cap `nvalchemi-toolkit-ops<0.4.0` for the `alchmtk` extra (incompatible `neighbor_list`
   API under `torch.compile`), and bump torch to 2.13.0.
 
