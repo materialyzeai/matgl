@@ -6,6 +6,13 @@ nav_order: 3
 
 # Change Log
 
+## Unreleased
+- **Fix: LR scheduler stepped twice per epoch.** `MatglLightningModuleMixin.on_train_epoch_end` manually called
+  `scheduler.step()` on top of Lightning's automatic epoch-interval step, so schedules ran at twice the intended
+  rate (e.g. `CosineAnnealingLR` reached `eta_min` after `decay_steps / 2` epochs and then rose again). The manual
+  step is removed and `decay_steps` now means what it says. **Behavior change:** to reproduce runs trained with
+  earlier versions, halve `decay_steps` (or the equivalent parameter of a custom scheduler). (#848)
+
 ## 4.1.1
 - **Breaking: Beta GRACE removed.** `matgl.models.GRACE` and its layers have been deleted, along with the tests. Use tensorpotential. (#847)
 - **Fix: float64 inference via `potential.double()`.** M3GNet and CHGNet previously crashed with a

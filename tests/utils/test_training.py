@@ -81,8 +81,8 @@ class TestModelTrainer:
         pred_BNO_energy = model.predict_structure(BaNiO3)
 
         # We are not expecting accuracy with 10 epochs. This just tests that the energy is actually < 0.
-        assert torch.allclose(pred_LFP_energy, torch.tensor([-2.8354]), atol=1e-4)
-        assert torch.allclose(pred_BNO_energy, torch.tensor([-2.6534]), atol=1e-4)
+        assert torch.allclose(pred_LFP_energy, torch.tensor([-2.8343]), atol=1e-4)
+        assert torch.allclose(pred_BNO_energy, torch.tensor([-2.6521]), atol=1e-4)
         # specify customize optimizer and scheduler
         from torch.optim.lr_scheduler import CosineAnnealingLR
 
@@ -598,6 +598,37 @@ def test_model_lightning_module_forward_and_step(LiFePO4, BaNiO3):
     assert {"Total_Loss", "MAE", "RMSE"}.issubset(results)
     assert batch_size == preds.numel()
     assert torch.isfinite(results["Total_Loss"])
+
+
+def test_lr_scheduler_steps_once_per_epoch(LiFePO4, BaNiO3):
+    """Lightning steps the epoch-interval scheduler itself; the module must not step it again (#848)."""
+    from torch.utils.data import DataLoader
+
+    from matgl.graph.data import collate_fn_graph
+
+    structures = [LiFePO4, BaNiO3]
+    element_types = get_element_list(structures)
+    dataset = MGLDataset(
+        structures=structures,
+        converter=Structure2Graph(element_types=element_types, cutoff=5.0),
+        labels={"energies": [-1.0, -2.0]},
+        save_cache=False,
+    )
+    loader = DataLoader(dataset, batch_size=2, collate_fn=collate_fn_graph)
+    model = TensorNet(element_types=element_types, is_intensive=True, ntargets=1, use_warp=False)
+    lit = ModelLightningModule(model=model, decay_steps=100)
+
+    max_epochs = 3
+    trainer = pl.Trainer(
+        max_epochs=max_epochs,
+        accelerator=device,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+    )
+    trainer.fit(lit, train_dataloaders=loader)
+
+    assert lit.lr_schedulers().last_epoch == max_epochs
 
 
 def test_fit_element_refs_recovers_synthetic_offsets():

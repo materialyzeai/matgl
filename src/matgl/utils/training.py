@@ -57,11 +57,6 @@ class MatglLightningModuleMixin:
 
         return results["Total_Loss"]
 
-    def on_train_epoch_end(self) -> None:
-        """Step scheduler every epoch."""
-        sch = self.lr_schedulers()  # type: ignore[attr-defined]
-        sch.step()
-
     def optimizer_zero_grad(
         self,
         epoch: int,
