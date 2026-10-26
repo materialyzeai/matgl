@@ -105,6 +105,11 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Build the published release from its tag so setuptools-scm can
+          # derive the distribution version from that tag.
+          ref: ${{ github.event.release.tag_name || github.sha }}
+          fetch-depth: 0
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
         with:

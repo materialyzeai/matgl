@@ -2,7 +2,8 @@
 requires = [
     # pin NumPy version used in the build
     "oldest-supported-numpy",
-    "setuptools>=58.0.3",
+    "setuptools>=64",
+    "setuptools-scm>=8",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -57,7 +58,7 @@ dependencies = [
     "pymatgen-core>=2026.5.18",
     "huggingface_hub>=0.24",
 ]
-version = "4.1.1"
+dynamic = ["version"]
 
 [project.scripts]
 mgl = "matgl.cli:main"
@@ -76,6 +77,10 @@ alchmtk = [
 jax = [
   "jax>=0.4.30",
 ]
+
+[tool.setuptools_scm]
+tag_regex = '^v(?P<version>\d+\.\d+\.\d+)$'
+version_scheme = "no-guess-dev"
 
 [tool.setuptools.packages.find]
 where = ["src"]
