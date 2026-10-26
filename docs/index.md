@@ -148,7 +148,7 @@ as other simple administrative tasks (e.g., clearing the cache). Some simple exa
 2. To use one of the pre-trained property models,
 
     ```bash
-    mgl predict --model M3GNet-Eform-MP-2018.6.1 --infile Li2O.cif
+    mgl predict --model M3GNet-Eform-MP-2019.4.1 --infile Li2O.cif
     ```
 
 3. To clear the cache,
@@ -170,10 +170,10 @@ passing the repo id in `"owner/name"` form. Pre-trained models released by the [
 import matgl
 
 # Load directly from a Hugging Face Hub repo id.
-model = matgl.load_model("materialyze/TensorNet-PES-MatPES-2025.2")
+model = matgl.load_model("materialyze/TensorNet-PES-MatPES-r2SCAN-2025.2")
 
 # For materialyze org, you can also just use the bare model names directly.
-model = matgl.load_model("TensorNet-PES-MatPES-2025.2")
+model = matgl.load_model("TensorNet-PES-MatPES-r2SCAN-2025.2")
 ```
 
 To publish a trained model to the Hugging Face Hub, use `push_to_hub` (requires `huggingface-cli login` or a `token`):
@@ -198,7 +198,7 @@ The following is an example of a prediction of the formation energy for CsCl.
 from pymatgen.core import Lattice, Structure
 import matgl
 
-model = matgl.load_model("MEGNet-Eform-MP-2018.6.1")
+model = matgl.load_model("M3GNet-Eform-MP-2019.4.1")
 
 # This is the structure obtained from the Materials Project.
 struct = Structure.from_spacegroup("Pm-3m", Lattice.cubic(4.1437), ["Cs", "Cl"], [[0, 0, 0], [0.5, 0.5, 0.5]])

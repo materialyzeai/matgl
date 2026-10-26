@@ -76,13 +76,12 @@ def test_save_load(tmp_path):
         os.chdir(cwd)
 
 
-def test_predict_structure_bandgap_model():
-    # Regression test: predict_structure with a float32 state index must not crash.
-    # MEGNet-BandGap-mfi-MP-2019.4.1 uses ntypes_state=4 (PBE/GLLB-SC/HSE/SCAN).
-    # Passing state_attr as float32 (the dtype produced internally by predict_structure)
-    # previously raised: "Expected tensor for argument #1 'indices' to have scalar types
-    # Long, Int; but got FloatTensor".
-    model = matgl.load_model("MEGNet-BandGap-mfi-MP-2019.4.1")
+def test_predict_structure_float_state_index():
+    # Regression test: predict_structure with a float32 state index must not crash for a model with
+    # an embedded categorical state (as in multi-fidelity models with ntypes_state=4, e.g.
+    # PBE/GLLB-SC/HSE/SCAN). Previously raised: "Expected tensor for argument #1 'indices' to have
+    # scalar types Long, Int; but got FloatTensor".
+    model = _make_megnet(ntypes_state=4, element_types=("Si",), is_classification=False)
     si = Structure(Lattice.cubic(5.43), ["Si", "Si"], [[0, 0, 0], [0.25, 0.25, 0.25]])
     result = model.predict_structure(si, state_attr=torch.tensor([0], dtype=torch.float32))
     assert torch.numel(result) == 1
