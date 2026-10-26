@@ -394,3 +394,48 @@ def test_get_available_pretrained_models_strips_owner_prefix():
         names = get_available_pretrained_models()
 
     assert names == ["Alpha", "Zeta"]
+
+
+class ModelWithBuffer(torch.nn.Module, IOMixIn):
+    """IOMixIn model with a parameter and a constructor-derived buffer."""
+
+    def __init__(self, cutoff=5.0):
+        super().__init__()
+        self.save_args(locals())
+        self.lin = torch.nn.Linear(5, 3)
+        self.register_buffer("cutoff", torch.tensor(cutoff))
+
+
+def _rewrite_state(path, edit):
+    state = torch.load(path / "state.pt", weights_only=True)
+    edit(state)
+    torch.save(state, path / "state.pt")
+
+
+def test_load_rejects_missing_parameters(tmp_path):
+    """A renamed parameter must not be silently left at its random initialization."""
+    ModelWithBuffer().save(tmp_path)
+    # E.g. a checkpoint that stores a submodule one level deeper than the current code expects.
+    _rewrite_state(tmp_path, lambda s: s.update({f"old.{k}": s.pop(k) for k in ["lin.weight", "lin.bias"]}))
+    with pytest.raises(RuntimeError, match=r"2 parameter\(s\) would be left randomly initialized"):
+        ModelWithBuffer.load(tmp_path)
+
+
+def test_load_allows_missing_buffers(tmp_path):
+    """Buffers rebuilt from constructor args (e.g. cutoffs) may be absent from older checkpoints."""
+    model = ModelWithBuffer(cutoff=4.0)
+    model.save(tmp_path)
+    _rewrite_state(tmp_path, lambda s: s.pop("cutoff"))
+    loaded = ModelWithBuffer.load(tmp_path)
+    assert float(loaded.cutoff) == 4.0
+    assert torch.equal(loaded.lin.weight, model.lin.weight)
+
+
+def test_load_warns_on_unexpected_keys(tmp_path, caplog):
+    ModelWithBuffer().save(tmp_path)
+    _rewrite_state(tmp_path, lambda s: s.update({"stale.weight": torch.zeros(2), "refs.onehot": torch.eye(3)}))
+    with caplog.at_level("WARNING", logger="matgl.utils.io"):
+        ModelWithBuffer.load(tmp_path)
+    assert "stale.weight" in caplog.text
+    # Known-benign stale buffers are not reported.
+    assert "onehot" not in caplog.text
