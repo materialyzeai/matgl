@@ -6,7 +6,7 @@ nav_order: 3
 
 # Change Log
 
-## Unreleased
+## 4.1.2
 - **Fix: LR scheduler stepped twice per epoch.** `MatglLightningModuleMixin.on_train_epoch_end` manually called
   `scheduler.step()` on top of Lightning's automatic epoch-interval step, so schedules ran at twice the intended
   rate (e.g. `CosineAnnealingLR` reached `eta_min` after `decay_steps / 2` epochs and then rose again). The manual
