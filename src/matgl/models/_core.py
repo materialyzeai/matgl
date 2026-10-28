@@ -74,7 +74,8 @@ def structure_to_graph(
     device = param.device if param is not None else g.frac_coords.device
     dtype = param.dtype if param is not None and param.is_floating_point() else g.frac_coords.dtype
     g = g.to(device)
-    lat = torch.as_tensor(lat, device=device, dtype=dtype)
+    # Converters return (1, 3, 3); accept a bare (3, 3) lattice too.
+    lat = torch.as_tensor(lat, device=device, dtype=dtype).reshape(-1, 3, 3)
     g.frac_coords = g.frac_coords.to(dtype)
     g.pbc_offset = g.pbc_offset.to(dtype)
     g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])

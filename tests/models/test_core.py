@@ -112,3 +112,16 @@ def test_tensornet_warns_on_ignored_options(kwargs, match):
 def test_chgnet_angle_readout_with_distinct_angle_width(MoS):
     model = CHGNet(element_types=ELEMENTS, readout_field="angle_feat", dim_angle_embedding=32, dim_bond_embedding=64)
     assert torch.isfinite(model.predict_structure(MoS)).all()
+
+
+def test_structure_to_graph_accepts_unbatched_lattice(MoS):
+    """A converter returning a (3, 3) lattice (instead of (1, 3, 3)) must still give 3-D positions."""
+
+    class Unbatched(Structure2Graph):
+        def get_graph(self, structure):
+            g, lat, state = super().get_graph(structure)
+            return g, lat[0], state
+
+    model = M3GNet(element_types=ELEMENTS, is_intensive=False)
+    g, _ = structure_to_graph(model, MoS, Unbatched(element_types=ELEMENTS, cutoff=model.cutoff))
+    assert g.pos.shape == (len(MoS), 3)
