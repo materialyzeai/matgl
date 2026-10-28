@@ -21,7 +21,7 @@ from matgl.config import MATGL_CACHE
 from matgl.utils.constants import EV_PER_ANG3_TO_GPA
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
     from pathlib import Path
 
     from numpy.typing import ArrayLike
@@ -619,7 +619,9 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         e_label_per_atom = valid_labels[0] / valid_num_atoms
         e_pred_per_atom = valid_preds[0] / valid_num_atoms
 
-        def _terms(loss_fn: nn.Module, label: torch.Tensor, pred: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        def _terms(
+            loss_fn: Callable[..., torch.Tensor], label: torch.Tensor, pred: torch.Tensor
+        ) -> tuple[torch.Tensor, ...]:
             # With allow_missing_labels, a batch may have no valid entries for a component; the mean over an
             # empty tensor is NaN, so return zeros (kept on the autograd graph via pred) instead.
             if label.numel() == 0:
