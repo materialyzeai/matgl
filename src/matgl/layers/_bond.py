@@ -15,10 +15,15 @@ import torch
 from torch import nn
 
 from matgl.layers._basis import ExpNormalFunction, GaussianExpansion, SphericalBesselFunction
+from matgl.utils.io import IOMixIn
 
 
-class BondExpansion(nn.Module):
-    """Expand pair distances into a set of spherical bessel or gaussian functions."""
+class BondExpansion(nn.Module, IOMixIn):
+    """Expand pair distances into a set of spherical bessel or gaussian functions.
+
+    Subclasses :class:`~matgl.utils.io.IOMixIn` so that a model taking a ``BondExpansion`` constructor argument
+    (e.g. ``MEGNet(bond_expansion=...)``) can be saved and reloaded; its weights live in the parent's state dict.
+    """
 
     def __init__(
         self,
@@ -46,6 +51,7 @@ class BondExpansion(nn.Module):
             width (float): width of gaussian function.
         """
         super().__init__()
+        self.save_args(locals())
 
         self.max_n = max_n
         self.cutoff = cutoff
