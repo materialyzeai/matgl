@@ -357,9 +357,11 @@ class TensorNet(MatGLModel):
                 output = self.sigmoid(output)
             output = torch.squeeze(output)
         else:
-            atomic_energies = self.final_layer(x).view(-1)
+            atomic_energies = self.final_layer(x)  # (num_nodes, ntargets)
+            if atomic_energies.shape[-1] == 1:
+                atomic_energies = atomic_energies.view(-1)
             if batch is None:
-                output = atomic_energies.sum()
+                output = atomic_energies.sum(dim=0)
             else:
                 batch_long = batch.to(torch.long)
                 if num_graphs is None:

@@ -83,7 +83,11 @@ class AtomRef(nn.Module):
             # Multi-state: (S, max_z) -> per-atom (S, N) -> per-graph (S, B)
             atomic_offset = self.property_offset[:, g.node_type]  # (S, N)
             offset_per_graph = global_add_pool(atomic_offset.T, batch).T  # (S, B)
-            return offset_per_graph[state_attr] if state_attr is not None else offset_per_graph
+            if state_attr is None:
+                return offset_per_graph
+            # Pick each graph's offset under its own state label -> (B,)
+            graph_index = torch.arange(offset_per_graph.shape[1], device=offset_per_graph.device)
+            return offset_per_graph[state_attr.reshape(-1).long(), graph_index]
 
         atomic_offset = self.property_offset[g.node_type]  # (N,)
         return global_add_pool(atomic_offset, batch)  # (B,)

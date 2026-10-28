@@ -127,7 +127,12 @@ class M3GNet(MatGLModel):
             ]
         )
 
-        dim_state_feats_used = dim_state_embedding
+        # Width of the state features produced by the embedding block: an nn.Embedding for categorical states,
+        # a Linear projection to ``dim_state_feats`` for continuous states, else the raw state attributes.
+        if include_state and not (ntypes_state and dim_state_embedding) and dim_state_feats is not None:
+            dim_state_feats_used = dim_state_feats
+        else:
+            dim_state_feats_used = dim_state_embedding
 
         self.graph_layers = nn.ModuleList(
             [
@@ -302,11 +307,12 @@ class M3GNet(MatGLModel):
         else:
             atomic = self.final_layer(node_feat)  # (num_nodes, ntargets)
             fea_dict["readout"] = atomic
-            atomic = atomic.view(-1)
+            if atomic.shape[-1] == 1:
+                atomic = atomic.view(-1)
             if batch is None:
-                output = atomic.sum().view(1)
+                output = atomic.sum(dim=0, keepdim=True)
             else:
-                output = torch.zeros(num_graphs, dtype=atomic.dtype, device=atomic.device)
+                output = torch.zeros((num_graphs, *atomic.shape[1:]), dtype=atomic.dtype, device=atomic.device)
                 output = output.index_add(0, batch.to(torch.long), atomic)
 
         fea_dict["final"] = output
