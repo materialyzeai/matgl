@@ -76,3 +76,39 @@ def test_structure_to_graph_molecule(CH4):
     assert torch.all(g.pbc_offshift == 0)
     assert state.dtype == next(model.parameters()).dtype
     assert isinstance(CH4, Molecule)
+
+
+@pytest.mark.parametrize(
+    ("factory", "match"),
+    [
+        (lambda: M3GNet(element_types=ELEMENTS, rbf_type="Gaussian"), "SphericalBessel"),
+        (lambda: M3GNet(element_types=ELEMENTS, is_intensive=True, field="edge_feat"), "edge_feat"),
+        (lambda: MEGNet(element_types=ELEMENTS, include_state=False), "include_state=True"),
+        (lambda: CHGNet(element_types=ELEMENTS, dim_state_embedding=8), "dim_state_feats"),
+        (lambda: SO3Net(element_types=ELEMENTS, target_property="graph", is_intensive=False), "is_intensive"),
+        (lambda: SO3Net(element_types=ELEMENTS, target_property="graph", include_state=True), "include_state"),
+    ],
+    ids=["m3gnet-gaussian", "m3gnet-edge-feat", "megnet-no-state", "chgnet-state", "so3net-extensive", "so3net-state"],
+)
+def test_unsupported_configs_fail_at_construction(factory, match):
+    """Combinations that used to crash with shape errors in ``forward`` are rejected in ``__init__``."""
+    with pytest.raises(ValueError, match=match):
+        factory()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"include_state": True}, "state attributes"),
+        ({"is_intensive": True, "readout_type": "set2set"}, "falls back to a mean"),
+        ({"field": "edge_feat"}, "node features"),
+    ],
+)
+def test_tensornet_warns_on_ignored_options(kwargs, match):
+    with pytest.warns(UserWarning, match=match):
+        TensorNet(element_types=ELEMENTS, use_warp=False, **kwargs)
+
+
+def test_chgnet_angle_readout_with_distinct_angle_width(MoS):
+    model = CHGNet(element_types=ELEMENTS, readout_field="angle_feat", dim_angle_embedding=32, dim_bond_embedding=64)
+    assert torch.isfinite(model.predict_structure(MoS)).all()

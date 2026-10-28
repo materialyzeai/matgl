@@ -84,6 +84,16 @@ class M3GNet(MatGLModel):
                 f"Invalid activation type, please try using one of {[af.name for af in ActivationFunction]}"
             ) from None
 
+        if rbf_type != "SphericalBessel":
+            raise ValueError(
+                f"M3GNet only supports rbf_type='SphericalBessel' (got {rbf_type!r}): the embedding and graph "
+                "blocks are sized for the spherical Bessel basis."
+            )
+        if is_intensive and field == "edge_feat" and readout_type != "set2set":
+            raise ValueError(
+                f"M3GNet readout_type={readout_type!r} does not support field='edge_feat'; use field='node_feat'."
+            )
+
         self.element_types = element_types or DEFAULT_ELEMENTS
 
         self.bond_expansion = BondExpansion(max_l, max_n, cutoff, rbf_type=rbf_type, smooth=use_smooth)

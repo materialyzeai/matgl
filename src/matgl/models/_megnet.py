@@ -65,6 +65,9 @@ class MEGNet(MatGLModel):
 
         self.save_args(locals(), kwargs)
 
+        if not include_state:
+            raise ValueError("MEGNet requires include_state=True: its blocks and readout always use a global state.")
+
         self.element_types = element_types or DEFAULT_ELEMENTS
         self.cutoff = cutoff
         self.bond_expansion = bond_expansion or BondExpansion(

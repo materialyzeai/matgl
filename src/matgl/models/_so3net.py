@@ -141,6 +141,11 @@ class SO3Net(MatGLModel):
         self.radial_basis = RadialBesselFunction(max_n=nmax, cutoff=cutoff, learnable=rbf_learnable)
         self.return_vector_representation = return_vector_representation
         self.element_types = element_types or DEFAULT_ELEMENTS
+        if target_property == "graph" and not is_intensive:
+            raise ValueError("SO3Net target_property='graph' requires is_intensive=True.")
+        if target_property == "graph" and include_state:
+            raise ValueError("SO3Net target_property='graph' does not support include_state=True.")
+
         self.target_property = target_property
         self.task_type = task_type
         self.include_state = include_state
