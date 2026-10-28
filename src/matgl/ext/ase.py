@@ -94,6 +94,10 @@ class Atoms2Graph(GraphConverter):
             g: PyG graph
             state_attr: state features
         """
+        # Partially periodic systems (e.g. slabs with pbc=(T, T, F)) are treated as periodic with no images
+        # along the non-periodic directions; only fully non-periodic systems are treated as molecules.
+        periodic = bool(atoms.pbc.any())
+        lattice_matrix: np.ndarray | torch.Tensor
         # use NVIDIA Warp neighbor list
         if _alchmtk_available:
             src_id, dst_id, _, images, positions, max_neighbors = neighbor_list_from_ase(
@@ -103,11 +107,12 @@ class Atoms2Graph(GraphConverter):
                 density_guess=self.max_neighbors,
             )
             self.max_neighbors = max_neighbors
-            if atoms.get_pbc().any():
+            if periodic:
                 lattice_matrix = torch.as_tensor(atoms.cell.array, dtype=torch.float32, device=src_id.device)
                 # Convert Cartesian positions to fractional coordinates
                 # The model expects fractional coords and computes: g.pos = g.frac_coords @ lattice
                 frac_coords = positions @ torch.linalg.inv(lattice_matrix)
+                lattice_matrix = lattice_matrix.unsqueeze(0)
             else:
                 lattice_matrix = torch.eye(3, dtype=torch.float32, device=src_id.device).unsqueeze(0)
                 # For molecules (non-periodic), use Cartesian positions directly
@@ -115,13 +120,12 @@ class Atoms2Graph(GraphConverter):
         # use pymatgen neighbor list
         else:
             numerical_tol = 1.0e-8
-            # Note this needs to be specified as np.int64 or the code will fail on Windows systems as it will default to
-            # long.
-            pbc = np.array([1, 1, 1], dtype=np.int64)
-            element_types = self.element_types
-            lattice_matrix = np.array(atoms.get_cell()) if atoms.pbc.all() else np.expand_dims(np.identity(3), axis=0)  # type: ignore[assignment]
             cart_coords = atoms.get_positions()
-            if atoms.pbc.all():
+            if periodic:
+                # Note this needs to be specified as np.int64 or the code will fail on Windows systems as it will
+                # default to long.
+                pbc = np.array(atoms.pbc, dtype=np.int64)
+                lattice_matrix = np.array(atoms.get_cell())
                 src_id, dst_id, images, bond_dist = find_points_in_spheres(
                     cart_coords,
                     cart_coords,
@@ -138,7 +142,9 @@ class Atoms2Graph(GraphConverter):
                     bond_dist[exclude_self],
                 )
                 frac_coords = atoms.get_scaled_positions(False)
+                lattice_matrix = np.expand_dims(lattice_matrix, axis=0)
             else:
+                lattice_matrix = np.expand_dims(np.identity(3), axis=0)
                 dist = np.linalg.norm(cart_coords[:, None, :] - cart_coords[None, :, :], axis=-1)
                 adj = sp.csr_matrix(dist <= self.cutoff) - sp.eye(len(atoms.get_positions()), dtype=np.bool_)
                 adj = adj.tocoo()
@@ -151,10 +157,10 @@ class Atoms2Graph(GraphConverter):
             atoms,
             src_id,
             dst_id,
-            images if atoms.pbc.all() else np.zeros((len(src_id), 3)),
-            [lattice_matrix] if atoms.pbc.all() and not _alchmtk_available else lattice_matrix,  # type: ignore[arg-type]
+            images if periodic else np.zeros((len(src_id), 3)),
+            lattice_matrix,
             element_types,
-            frac_coords if atoms.pbc.all() else cart_coords,
+            frac_coords if periodic else cart_coords,
             is_atoms=True,
         )
 
@@ -309,6 +315,29 @@ class M3GNetCalculator(PESCalculator):
         super().__init__(potential=potential, state_attr=state_attr, stress_weight=stress_weight, **kwargs)
 
 
+def _strainable_axes(atoms: Atoms) -> np.ndarray | None:
+    """Cartesian axes along which a partially periodic cell may strain, or None if no default mask applies.
+
+    Cell-filter and NPT masks act on Cartesian strain components, so the pbc flags only translate into a mask when
+    each non-periodic cell vector lies along its own Cartesian axis and the periodic vectors have no component
+    along it (e.g. a slab with its vacuum along z).
+    """
+    pbc = np.asarray(atoms.pbc, dtype=bool)
+    if pbc.all() or not pbc.any():
+        return None
+    cell = atoms.cell.array
+    for i in np.flatnonzero(~pbc):
+        if not (np.allclose(np.delete(cell[i], i), 0) and np.allclose(cell[pbc, i], 0)):
+            warnings.warn(
+                "Non-periodic cell vectors are not aligned with Cartesian axes, so the cell will also deform along "
+                "vacuum directions. Pass an explicit strain mask to prevent this.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return None
+    return pbc
+
+
 class Relaxer:
     """Relaxer is a class for structural relaxation."""
 
@@ -376,14 +405,22 @@ class Relaxer:
             verbose (bool): Whether to have verbose output.
             params_asecellfilter (dict): Parameters to be passed to FrechetCellFilter. Allows
                 setting of constant pressure or constant volume relaxations, for example. Refer to
-                https://wiki.fysik.dtu.dk/ase/ase/filters.html#FrechetCellFilter for more information
+                https://wiki.fysik.dtu.dk/ase/ase/filters.html#FrechetCellFilter for more information.
+                For partially periodic cells (e.g. slabs with pbc=(T, T, F)), ``mask`` defaults to fixing the
+                strain components along non-periodic directions.
             **kwargs: Kwargs pass-through to optimizer.
         """
         if isinstance(atoms, Structure | Molecule):
             atoms = self.ase_adaptor.get_atoms(atoms)
         atoms.set_calculator(self.calculator)
         stream = sys.stdout if verbose else io.StringIO()
-        params_asecellfilter = params_asecellfilter or {}
+        params_asecellfilter = dict(params_asecellfilter or {})
+        if self.relax_cell and "mask" not in params_asecellfilter:
+            # The stress along a non-periodic direction is the response to stretching the vacuum, so keep those
+            # strain components fixed (e.g. a z-slab may only relax xx, yy and xy).
+            axes = _strainable_axes(atoms)
+            if axes is not None:
+                params_asecellfilter["mask"] = np.outer(axes, axes).astype(int)
         with contextlib.redirect_stdout(stream):
             obs = TrajectoryObserver(atoms)
             if self.relax_cell:
@@ -545,7 +582,9 @@ class MolecularDynamics:
             loginterval (int): write to log file every interval steps
             append_trajectory (bool): Whether to append to prev trajectory.
             mask (np.array): either a tuple of 3 numbers (0 or 1) or a symmetric 3x3 array indicating,
-                which strain values may change for NPT simulations
+                which strain values may change for NPT simulations. Only used by ``npt_nose_hoover``. Defaults to
+                the identity, or for partially periodic cells (e.g. slabs) to fixing the non-periodic directions.
+                Other NPT ensembles cannot mask strain, so they also deform the cell along vacuum directions.
             **kwargs: Kwargs pass-through to molecular dynamics.
         """
         # Detect user-provided stress_weight
@@ -569,7 +608,9 @@ class MolecularDynamics:
             taup = 1000 * timestep * units.fs
 
         if mask is None:
-            mask = np.array([(1, 0, 0), (0, 1, 0), (0, 0, 1)])
+            # Keep vacuum directions of partially periodic cells fixed; the identity otherwise.
+            axes = _strainable_axes(self.atoms) if ensemble.lower() == "npt_nose_hoover" else None
+            mask = np.diag(axes).astype(int) if axes is not None else np.eye(3, dtype=int)
         if external_stress is None:
             external_stress = pressure
         if ensemble.lower() in ("npt", "npt_berendsen") and compressibility_au is None:
