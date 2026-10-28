@@ -205,6 +205,8 @@ class TensorNet(MatGLModel):
             task_type=task_type,
         )
         self.reset_parameters()
+        # Only some submodules take ``dtype`` explicitly; cast the readout / final layers too.
+        self.to(dtype)
 
     def _build_readout(
         self,

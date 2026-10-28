@@ -110,3 +110,17 @@ def test_qet_single_atom(overrides):
     output = model(g=graph, total_charge=torch.tensor([0.0]))
     assert torch.numel(output) == 1
     assert torch.isfinite(output).all()
+
+
+def test_qet_float64_dtype(graph_MoS):
+    """``dtype=torch.float64`` must also cover the QET-specific heads (chi, hardness, norm, final layer)."""
+    structure, graph, _ = graph_MoS
+    lat = torch.tensor(structure.lattice.matrix, dtype=torch.float64)
+    graph = graph.clone()
+    graph.pos = graph.frac_coords.double() @ lat
+    graph.pbc_offshift = graph.pbc_offset.double() @ lat
+    model = _make_qet(is_intensive=False, dtype=torch.float64)
+    assert {p.dtype for p in model.parameters()} == {torch.float64}
+    assert model.sigma.dtype == torch.float64
+    output = model(g=graph, total_charge=torch.zeros(1, dtype=torch.float64))
+    assert output.dtype == torch.float64
