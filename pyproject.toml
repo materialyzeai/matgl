@@ -238,6 +238,8 @@ exclude_lines = [
 
 [dependency-groups]
 dev = [
+    # Pull in mypy/ruff so a plain ``uv sync`` can run the Lint workflow commands locally.
+    { include-group = "lint" },
     "coverage>=7.7.1",
     "docutils>=0.21.2",
     "invoke>=2.2.0",
