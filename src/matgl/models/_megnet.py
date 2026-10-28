@@ -28,7 +28,7 @@ from ._core import MatGLModel
 if TYPE_CHECKING:
     from typing import Any
 
-    from matgl.graph._converters import GraphConverter
+    from matgl.graph.converters import GraphConverter
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +211,7 @@ class MEGNet(MatGLModel):
         self.feature_dict = fea_dict
         return output
 
-    def predict_structure(
+    def predict_structure(  # type: ignore[override]
         self,
         structure,
         state_attr: torch.Tensor | None = None,
@@ -220,22 +220,11 @@ class MEGNet(MatGLModel):
         """Convenience method to directly predict a property from a structure.
 
         Args:
-            structure: Input crystal/molecule.
+            structure: Input crystal/molecule (pymatgen ``Structure``/``Molecule`` or ASE ``Atoms``).
             state_attr: Graph attributes (optional).
-            graph_converter: Custom converter; defaults to ``Structure2Graph``.
+            graph_converter: Custom converter; defaults to one matching the input type.
 
         Returns:
             Output property tensor.
         """
-        import matgl
-
-        if graph_converter is None:
-            from matgl.ext.pymatgen import Structure2Graph
-
-            graph_converter = Structure2Graph(element_types=self.element_types, cutoff=self.cutoff)
-        g, lat, state_attr_default = graph_converter.get_graph(structure)
-        g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
-        g.pos = g.frac_coords @ lat[0]
-        if state_attr is None:
-            state_attr = torch.tensor(state_attr_default, dtype=matgl.float_th)
-        return self(g=g, state_attr=state_attr).detach()
+        return super().predict_structure(structure, state_feats=state_attr, graph_converter=graph_converter)

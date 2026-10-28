@@ -7,7 +7,7 @@ line graph from ``matgl.graph._compute.create_line_graph``.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import torch
 from torch import nn
@@ -34,9 +34,6 @@ from matgl.layers._readout_torch import ReduceReadOut, WeightedAtomReadOut, Weig
 from matgl.utils.cutoff import polynomial_cutoff
 
 from ._core import MatGLModel, _warn_feature_dict_kwarg
-
-if TYPE_CHECKING:
-    from matgl.graph._converters import GraphConverter
 
 logger = logging.getLogger(__name__)
 
@@ -320,40 +317,3 @@ class M3GNet(MatGLModel):
         if return_all_layer_output:
             return fea_dict
         return torch.squeeze(output)
-
-    def predict_structure(
-        self,
-        structure,
-        state_feats: torch.Tensor | None = None,
-        graph_converter: GraphConverter | None = None,
-        output_layers: list | None = None,
-        return_features: bool = False,
-    ):
-        """Convenience method to predict a property from a structure (PyG).
-
-        Args:
-            structure: An input crystal/molecule.
-            state_feats: Optional state attributes.
-            graph_converter: Graph converter. Defaults to ``Structure2Graph``.
-            output_layers: Currently unused; kept for API symmetry with other models.
-            return_features: **Deprecated.** Use ``model.feature_dict`` after calling
-                ``predict_structure`` instead. Will be removed in matgl v5.
-        """
-        import matgl
-
-        if return_features:
-            _warn_feature_dict_kwarg("return_features")
-
-        if graph_converter is None:
-            from matgl.ext.pymatgen import Structure2Graph
-
-            graph_converter = Structure2Graph(element_types=self.element_types, cutoff=self.cutoff)
-        g, lat, state_attr_default = graph_converter.get_graph(structure)
-        g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
-        g.pos = g.frac_coords @ lat[0]
-        if state_feats is None:
-            state_feats = torch.tensor(state_attr_default, dtype=matgl.float_th)
-        if return_features:
-            self(g=g, state_attr=state_feats)
-            return self.feature_dict
-        return self(g=g, state_attr=state_feats).detach()

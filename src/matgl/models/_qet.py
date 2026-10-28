@@ -23,11 +23,11 @@ from matgl.config import DEFAULT_ELEMENTS
 from matgl.layers import MLP, ElectrostaticPotential, LinearQeq, WeightedReadOut
 from matgl.utils.maths import scatter_add
 
-from ._core import _warn_feature_dict_kwarg
+from ._core import _warn_feature_dict_kwarg, structure_to_graph
 from ._tensornet import TensorNet
 
 if TYPE_CHECKING:
-    from matgl.graph._converters import GraphConverter
+    from matgl.graph.converters import GraphConverter
 
 logger = logging.getLogger(__name__)
 
@@ -282,15 +282,9 @@ class QET(TensorNet):
         Returns:
             output (torch.Tensor): output property
         """
-        if graph_converter is None:
-            from matgl.ext.pymatgen import Structure2Graph
-
-            graph_converter = Structure2Graph(element_types=self.element_types, cutoff=self.cutoff)  # type: ignore
-        g, lat, state_feats_default = graph_converter.get_graph(structure)
-        g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
-        g.pos = g.frac_coords @ lat[0]
+        g, state_feats_default = structure_to_graph(self, structure, graph_converter)
         if state_feats is None:
-            state_feats = torch.tensor(state_feats_default)
+            state_feats = state_feats_default
         if self.return_features:
             node_features, atomic_energies = self(g=g, state_attr=state_feats, total_charge=total_charge)
             return node_features.detach(), atomic_energies.detach()

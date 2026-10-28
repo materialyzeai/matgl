@@ -11,7 +11,7 @@ please refer to::
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import torch
 from torch import nn
@@ -35,9 +35,6 @@ from matgl.utils.cutoff import polynomial_cutoff
 from matgl.utils.maths import scatter_add
 
 from ._core import MatGLModel
-
-if TYPE_CHECKING:
-    from matgl.graph._converters import GraphConverter
 
 logger = logging.getLogger(__name__)
 
@@ -379,30 +376,3 @@ class SO3Net(MatGLModel):
         fea_dict["final"] = alpha
         self.feature_dict = fea_dict
         return alpha
-
-    def predict_structure(
-        self,
-        structure,
-        state_feats: torch.Tensor | None = None,
-        graph_converter: GraphConverter | None = None,
-    ):
-        """Convenience method to directly predict property from structure.
-
-        Args:
-            structure: An input crystal/molecule.
-            state_feats (torch.tensor): Graph attributes.
-            graph_converter: Object that implements ``get_graph``.
-
-        Returns:
-            output (torch.tensor): output property
-        """
-        if graph_converter is None:
-            from matgl.ext.pymatgen import Structure2Graph
-
-            graph_converter = Structure2Graph(element_types=self.element_types, cutoff=self.cutoff)  # type: ignore
-        g, lat, state_feats_default = graph_converter.get_graph(structure)
-        g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
-        g.pos = g.frac_coords @ lat[0]
-        if state_feats is None:
-            state_feats = torch.tensor(state_feats_default)
-        return self(g=g, state_attr=state_feats).detach()
