@@ -42,6 +42,8 @@ class _EpochErrorMetric(torchmetrics.Metric):
     """
 
     full_state_update = False
+    total: torch.Tensor
+    count: torch.Tensor
 
     def __init__(self, squared: bool = False, **kwargs):
         super().__init__(**kwargs)
