@@ -32,8 +32,82 @@ if TYPE_CHECKING:
     from matgl.graph.data import MGLDataset
 
 
+class _EpochErrorMetric(torchmetrics.Metric):
+    """Exact epoch-level MAE or RMSE accumulated from per-batch values.
+
+    Each batch contributes its MAE (or RMSE) together with the number of labelled elements it was computed over,
+    so the epoch value is ``sum(|err|) / n`` (or ``sqrt(sum(err**2) / n)``) over all elements seen in the epoch,
+    rather than a mean of per-batch values weighted by the number of structures. States are summed across
+    processes, so the result is also correct under DDP.
+    """
+
+    full_state_update = False
+    total: torch.Tensor
+    count: torch.Tensor
+
+    def __init__(self, squared: bool = False, **kwargs):
+        super().__init__(**kwargs)
+        self.squared = squared
+        self.add_state("total", default=torch.tensor(0.0, dtype=torch.float64), dist_reduce_fx="sum")
+        self.add_state("count", default=torch.tensor(0.0, dtype=torch.float64), dist_reduce_fx="sum")
+
+    def update(self, value: torch.Tensor, count: torch.Tensor | int) -> None:
+        """Add one batch.
+
+        Args:
+            value: Per-batch MAE, or RMSE when ``squared=True``.
+            count: Number of labelled elements the batch value was averaged over.
+        """
+        # No .item() / Python branching on device tensors: avoids a host-device sync per metric per step.
+        count = torch.as_tensor(count, dtype=torch.float64, device=self.count.device)
+        value = value.detach().reshape(-1)[0].to(device=self.total.device, dtype=torch.float64)
+        contribution = (value**2 if self.squared else value) * count
+        # A component with no labelled elements may report NaN; it must not poison the epoch sum.
+        self.total += torch.where(count > 0, contribution, torch.zeros_like(contribution))
+        self.count += count
+
+    def compute(self) -> torch.Tensor:
+        """Return the epoch MAE (or RMSE); zero if no labelled elements were seen."""
+        if self.count == 0:
+            return torch.zeros((), dtype=torch.float64, device=self.count.device)
+        mean = self.total / self.count
+        return torch.sqrt(mean) if self.squared else mean
+
+
 class MatglLightningModuleMixin:
     """Mix-in class implementing common functions for training."""
+
+    def _init_epoch_metrics(self, keys: Sequence[str]) -> None:
+        """Create per-split epoch accumulators for the ``*MAE`` / ``*RMSE`` keys returned by ``loss_fn``."""
+        self.epoch_metrics = nn.ModuleDict(
+            {
+                f"{split}_{key}": _EpochErrorMetric(squared=key.endswith("RMSE"))
+                for split in ("train", "val", "test")
+                for key in keys
+            }
+        )
+
+    def _log_results(self, split: str, results: dict[str, Any], batch_size: int) -> None:
+        """Log step results; MAE/RMSE go through exact epoch accumulators when their element counts are known."""
+        epoch_metrics = getattr(self, "epoch_metrics", None)
+        counts: dict[str, Any] = getattr(self, "_last_metric_counts", None) or {}
+        per_batch = {}
+        for key, val in results.items():
+            name = f"{split}_{key}"
+            if epoch_metrics is not None and name in epoch_metrics and key in counts:
+                metric = epoch_metrics[name]
+                metric.update(val, counts[key])
+                self.log(name, metric, on_epoch=True, on_step=False, prog_bar=True)  # type: ignore[attr-defined]
+            else:
+                per_batch[name] = val
+        self.log_dict(  # type: ignore[attr-defined]
+            per_batch,
+            batch_size=batch_size,
+            on_epoch=True,
+            on_step=False,
+            prog_bar=True,
+            sync_dist=self.sync_dist,  # type: ignore[attr-defined]
+        )
 
     def training_step(self, batch: tuple, batch_idx: int) -> Any:
         """Training step.
@@ -46,14 +120,7 @@ class MatglLightningModuleMixin:
            Total loss.
         """
         results, batch_size = self.step(batch)  # type: ignore
-        self.log_dict(  # type: ignore
-            {f"train_{key}": val for key, val in results.items()},
-            batch_size=batch_size,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-            sync_dist=self.sync_dist,  # type: ignore
-        )
+        self._log_results("train", results, batch_size)
 
         return results["Total_Loss"]
 
@@ -79,14 +146,7 @@ class MatglLightningModuleMixin:
             batch_idx: Batch index.
         """
         results, batch_size = self.step(batch)  # type: ignore
-        self.log_dict(  # type: ignore
-            {f"val_{key}": val for key, val in results.items()},
-            batch_size=batch_size,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-            sync_dist=self.sync_dist,  # type: ignore
-        )
+        self._log_results("val", results, batch_size)
         return results["Total_Loss"]
 
     def test_step(self, batch: tuple, batch_idx: int) -> dict[str, Any]:
@@ -101,14 +161,7 @@ class MatglLightningModuleMixin:
         # force/stress computation, and the non-PES path (ModelLightningModule)
         # legitimately runs under Lightning's default eval mode.
         results, batch_size = self.step(batch)  # type: ignore
-        self.log_dict(  # type: ignore
-            {f"test_{key}": val for key, val in results.items()},
-            batch_size=batch_size,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-            sync_dist=self.sync_dist,  # type: ignore
-        )
+        self._log_results("test", results, batch_size)
         return results
 
     def configure_optimizers(self) -> tuple[list[torch.optim.Optimizer], list[torch.optim.lr_scheduler.LRScheduler]]:
@@ -202,6 +255,7 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         self.include_line_graph = include_line_graph
         self.mae = torchmetrics.MeanAbsoluteError()
         self.rmse = torchmetrics.MeanSquaredError(squared=False)
+        self._init_epoch_metrics(("MAE", "RMSE"))
         self.data_mean = data_mean
         self.data_std = data_std
         self.lr = lr
@@ -275,6 +329,8 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             preds = self(g=g, lat=lat, state_attr=state_attr)
         results = self.loss_fn(loss=self.loss, preds=preds, labels=labels)  # type: ignore
         batch_size = preds.numel()
+        n_labels = labels.numel()
+        self._last_metric_counts = {"MAE": n_labels, "RMSE": n_labels}
         return results, batch_size
 
     def loss_fn(self, loss: nn.Module, labels: torch.Tensor, preds: torch.Tensor) -> dict[str, Any]:
@@ -363,6 +419,9 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
 
         self.mae = torchmetrics.MeanAbsoluteError()
         self.rmse = torchmetrics.MeanSquaredError(squared=False)
+        self._init_epoch_metrics(
+            [f"{q}_{m}" for q in ("Energy", "Force", "Stress", "Magmom", "Charge") for m in ("MAE", "RMSE")]
+        )
         self.register_buffer("data_mean", torch.tensor(data_mean))
         self.register_buffer("data_std", torch.tensor(data_std))
 
@@ -512,6 +571,7 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             num_atoms=num_atoms,
         )
         batch_size = preds[0].numel()
+        self._last_metric_counts = self._metric_counts(labels)
 
         self._last_preds = preds
         self._last_labels = labels
@@ -562,6 +622,26 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             "indices": self._last_indices,
             "num_atoms": self._last_num_atoms,
         }
+
+    def _metric_counts(self, labels: tuple) -> dict[str, torch.Tensor]:
+        """Number of labelled elements behind each MAE/RMSE returned by ``loss_fn``.
+
+        Missing (NaN) labels are excluded, matching ``allow_missing_labels``. Components that ``loss_fn`` does not
+        evaluate get a count of zero so they do not contribute to the epoch value.
+        """
+
+        def n_valid(label: torch.Tensor) -> torch.Tensor:
+            return (~torch.isnan(label)).sum()
+
+        zero = torch.zeros((), dtype=torch.long, device=labels[0].device)
+        counts = {
+            "Energy": n_valid(labels[0]),
+            "Force": n_valid(labels[1]),
+            "Stress": n_valid(labels[2]) if self.model.calc_stresses else zero,
+            "Magmom": n_valid(labels[3]) if self.model.calc_magmom and len(labels) > 3 else zero,
+            "Charge": n_valid(labels[3]) if self.model.calc_charge and len(labels) > 3 else zero,
+        }
+        return {f"{q}_{m}": n for q, n in counts.items() for m in ("MAE", "RMSE")}
 
     def loss_fn(
         self,
