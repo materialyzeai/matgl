@@ -52,21 +52,26 @@ __all__ = [
 def set_default_dtype(type_: str = "float", size: int = 32) -> None:
     """Set the default dtype size (16, 32 or 64) for int or float used throughout matgl.
 
+    For ``type_="float"`` this also sets torch's default floating point dtype. For ``type_="int"`` only matgl's
+    ``int_th`` / ``int_np`` are changed.
+
     Args:
         type_: "float" or "int"
-        size: 32 or 64.
+        size: 16, 32 or 64.
     """
-    if size in (16, 32, 64):
-        globals()[f"{type_}_th"] = getattr(torch, f"{type_}{size}")
-        globals()[f"{type_}_np"] = getattr(np, f"{type_}{size}")
-        torch.set_default_dtype(getattr(torch, f"float{size}"))
-    else:
+    if type_ not in ("float", "int"):
+        raise ValueError(f"Invalid dtype type {type_!r}; must be 'float' or 'int'.")
+    if size not in (16, 32, 64):
         raise ValueError("Invalid dtype size")
     if type_ == "float" and size == 16 and not torch.cuda.is_available():
         raise Exception(
             "torch.float16 is not supported for M3GNet because addmm_impl_cpu_ is not implemented"
             " for this floating precision, please use size = 32, 64 or using 'cuda' instead !!"
         )
+    globals()[f"{type_}_th"] = getattr(torch, f"{type_}{size}")
+    globals()[f"{type_}_np"] = getattr(np, f"{type_}{size}")
+    if type_ == "float":
+        torch.set_default_dtype(getattr(torch, f"float{size}"))
 
 
 def get_best_device() -> typing.Literal["cpu", "cuda", "mps"]:
