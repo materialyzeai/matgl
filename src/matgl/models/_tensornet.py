@@ -10,6 +10,7 @@ please refer to::
 
 from __future__ import annotations
 
+import warnings
 from typing import Any, Literal
 
 import torch
@@ -42,6 +43,26 @@ try:
     _warp_available = True
 except ImportError:
     _warp_available = False
+
+
+def _warn_ignored_tensornet_options(include_state: bool, readout_type: str, field: str, is_intensive: bool) -> None:
+    """Warn about TensorNet options that are accepted for API compatibility but have no effect."""
+    if include_state:
+        warnings.warn(
+            "TensorNet does not use state attributes; include_state / ntypes_state / dim_state_* are ignored.",
+            UserWarning,
+            stacklevel=3,
+        )
+    if is_intensive and readout_type not in ("weighted_atom", "reduce_atom"):
+        warnings.warn(
+            f"TensorNet readout_type={readout_type!r} is not supported and falls back to a mean ('reduce_atom').",
+            UserWarning,
+            stacklevel=3,
+        )
+    if field != "node_feat":
+        warnings.warn(
+            f"TensorNet always reads out node features; field={field!r} is ignored.", UserWarning, stacklevel=3
+        )
 
 
 class TensorNet(MatGLModel):
@@ -108,7 +129,7 @@ class TensorNet(MatGLModel):
                 (default :obj:`"O(3)"`)
             dtype (torch.dtype): data type for all variables
             width (float): the width of Gaussian radial basis functions
-            readout_type (str): Readout function type, `set2set`, `weighted_atom` (default) or `reduce_atom`.
+            readout_type (str): Readout function type, `weighted_atom` (default) or `reduce_atom`.
             task_type (str): `classification` or `regression` (default).
             field (str): Using either "node_feat" or "edge_feat" for Set2Set and Reduced readout
             is_intensive (bool): Whether the prediction is intensive
@@ -129,6 +150,8 @@ class TensorNet(MatGLModel):
             raise ValueError(
                 f"Invalid activation type, please try using one of {[af.name for af in ActivationFunction]}"
             ) from None
+
+        _warn_ignored_tensornet_options(include_state, readout_type, field, is_intensive)
 
         if use_warp and not _warp_available:
             raise ImportError(

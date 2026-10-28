@@ -158,6 +158,10 @@ class CHGNet(MatGLModel):
 
         element_types = element_types or DEFAULT_ELEMENTS
         self.use_bond_graph = threebody_cutoff > 0
+        if dim_state_embedding is not None and dim_state_feats is None:
+            raise ValueError(
+                "CHGNet dim_state_embedding requires dim_state_feats (the number of state labels) to be set."
+            )
         if not self.use_bond_graph and readout_field == "angle_feat":
             raise ValueError(
                 f"Angle readout requires threebody_cutoff > 0, but got threebody_cutoff={threebody_cutoff}"
@@ -259,7 +263,11 @@ class CHGNet(MatGLModel):
 
         # --- final readout MLP ---
         # _EmbedMLP (_MLPNorm) stores only Linear layers at consecutive indices in self.layers.
-        input_dim = dim_atom_embedding if readout_field == "atom_feat" else dim_bond_embedding
+        input_dim = {
+            "atom_feat": dim_atom_embedding,
+            "bond_feat": dim_bond_embedding,
+            "angle_feat": dim_angle_embedding,
+        }[readout_field]
         _act = activation if activation is not None else nn.SiLU()
         if final_mlp_type == "mlp":
             self.final_layer = _EmbedMLP(
