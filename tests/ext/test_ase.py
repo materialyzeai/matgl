@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 import torch
-from ase.build import molecule
+from ase.build import fcc111, molecule
 from pymatgen.io.ase import AseAtomsAdaptor
 
 import matgl
@@ -199,6 +199,27 @@ def test_get_graph_from_atoms_mol():
     assert np.allclose(graph.num_edges, 20)
     # check the state features
     assert np.allclose(state, [0.0, 0.0])
+
+
+def test_get_graph_from_atoms_partial_pbc():
+    """Slabs with pbc=(T, T, F) keep in-plane periodic images and get no images along the vacuum direction."""
+    slab = fcc111("Cu", size=(2, 2, 3), vacuum=8.0)
+    assert list(slab.pbc) == [True, True, False]
+    a2g = Atoms2Graph(element_types=["Cu"], cutoff=5.0)
+    graph, lat, _ = a2g.get_graph(slab)
+    assert lat.shape == (1, 3, 3)
+    assert torch.all(graph.pbc_offset[:, 2] == 0)
+    # Vacuum (16 A) exceeds the cutoff, so full pbc must give the same neighbour count.
+    slab_full_pbc = slab.copy()
+    slab_full_pbc.pbc = True
+    graph_full, _, _ = a2g.get_graph(slab_full_pbc)
+    assert graph.num_edges == graph_full.num_edges
+    # Thin box along z: the non-periodic direction must not create bonds through the cell boundary.
+    thin = slab.copy()
+    thin.center(vacuum=0.5, axis=2)
+    graph_thin, _, _ = a2g.get_graph(thin)
+    assert graph_thin.num_edges == graph.num_edges
+    assert torch.all(graph_thin.pbc_offset[:, 2] == 0)
 
 
 def test_molecular_dynamics(MoS2):
