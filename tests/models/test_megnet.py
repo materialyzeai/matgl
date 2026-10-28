@@ -10,6 +10,7 @@ from pymatgen.core import Lattice, Structure
 import matgl
 from matgl.ext.pymatgen import Structure2Graph
 from matgl.graph._compute import compute_pair_vector_and_distance
+from matgl.layers import BondExpansion
 from matgl.models import MEGNet
 
 PARITY_ARTIFACT = Path(__file__).resolve().parents[1] / "parity_data" / "megnet_parity.pt"
@@ -68,6 +69,21 @@ def test_save_load(tmp_path):
     model = _make_megnet(dropout=0.1)
     model.save(tmp_path, metadata={"description": "forme model"})
     MEGNet.load(tmp_path)
+
+
+def test_save_load_custom_bond_expansion(tmp_path, graph_MoS):
+    """A user-supplied ``bond_expansion`` must survive save/load (it was pickled as an nn.Module before)."""
+    structure, graph, state = graph_MoS
+    graph = _prep_graph(graph, structure)
+    state_t = torch.tensor(np.array(state), dtype=matgl.float_th)
+    torch.manual_seed(0)
+    bond_expansion = BondExpansion(rbf_type="Gaussian", initial=0.0, final=5.0, num_centers=50, width=0.4)
+    model = _make_megnet(dim_edge_embedding=50, bond_expansion=bond_expansion, is_classification=False)
+    model.save(tmp_path)
+    loaded = MEGNet.load(tmp_path)
+    assert isinstance(loaded.bond_expansion, BondExpansion)
+    assert (loaded.bond_expansion.num_centers, loaded.bond_expansion.width) == (50, 0.4)
+    assert torch.allclose(loaded(g=graph, state_attr=state_t), model(g=graph, state_attr=state_t))
 
 
 def test_predict_structure_float_state_index():
