@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os.path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 import torch
+from ase import units
 from ase.build import fcc111, molecule
 from pymatgen.io.ase import AseAtomsAdaptor
 
@@ -145,18 +145,18 @@ def test_PESCalculator_charges(MoS):
     np.testing.assert_allclose(explicit.get_potential_energy(), e_charged, atol=1e-6)
 
 
-def test_Relaxer(MoS):
+def test_Relaxer(MoS, tmp_path):
     pot = matgl.load_model("materialyze/TensorNet-PES-MatPES-PBE-2025.2")
     r = Relaxer(pot)
-    results = r.relax(MoS, traj_file="MoS_relax.traj")
+    traj_file = tmp_path / "MoS_relax.traj"
+    results = r.relax(MoS, traj_file=str(traj_file))
     s = results["final_structure"]
     traj = results["trajectory"].as_pandas()
     assert s.lattice.a < 3.5
     assert traj["energies"].iloc[-1] < traj["energies"].iloc[0]
     for t in results["trajectory"]:
         assert len(t) == 5
-    assert os.path.exists("MoS_relax.traj")
-    os.remove("MoS_relax.traj")
+    assert traj_file.exists()
 
 
 def test_relaxer_accepts_custom_optimizer_class():
@@ -244,3 +244,9 @@ def test_molecular_dynamics(MoS2):
     md.run(10)
     with pytest.raises(ValueError, match="Ensemble not supported"):
         MolecularDynamics(MoS2, potential=pot, ensemble="notanensemble")
+    for ensemble in ["npt", "npt_berendsen"]:
+        with pytest.raises(ValueError, match="compressibility_au"):
+            MolecularDynamics(MoS2, potential=pot, ensemble=ensemble)
+    pressure = 10 * units.GPa
+    md = MolecularDynamics(MoS2, potential=pot, ensemble="npt_nose_hoover", pressure=pressure)
+    assert np.allclose(md.dyn.externalstress, [-pressure] * 3 + [0] * 3)

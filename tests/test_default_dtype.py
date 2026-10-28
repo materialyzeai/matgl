@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import torch
 
+import matgl
 from matgl import set_default_dtype
 
 
@@ -23,4 +24,24 @@ def test_set_default_dtype_invalid_size():
 def test_set_default_dtype_exception():
     with pytest.raises(Exception, match=r"torch.float16 is not supported for M3GNet"):
         set_default_dtype("float", 16)
+    # Rejected sizes must not leave globals half-updated.
+    assert matgl.float_th == torch.float32
+    assert torch.get_default_dtype() == torch.float32
     set_default_dtype("float", 32)
+
+
+def test_set_default_dtype_int_does_not_touch_float():
+    try:
+        set_default_dtype("int", 64)
+        assert matgl.int_th == torch.int64
+        assert matgl.int_np == np.int64
+        assert torch.get_default_dtype() == torch.float32
+        assert matgl.float_th == torch.float32
+    finally:
+        set_default_dtype("int", 32)
+    assert torch.get_default_dtype() == torch.float32
+
+
+def test_set_default_dtype_invalid_type():
+    with pytest.raises(ValueError, match="Invalid dtype type"):
+        set_default_dtype("complex", 64)

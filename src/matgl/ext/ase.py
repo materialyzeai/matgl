@@ -97,6 +97,7 @@ class Atoms2Graph(GraphConverter):
         # Partially periodic systems (e.g. slabs with pbc=(T, T, F)) are treated as periodic with no images
         # along the non-periodic directions; only fully non-periodic systems are treated as molecules.
         periodic = bool(atoms.pbc.any())
+        lattice_matrix: np.ndarray | torch.Tensor
         # use NVIDIA Warp neighbor list
         if _alchmtk_available:
             src_id, dst_id, _, images, positions, max_neighbors = neighbor_list_from_ase(
@@ -540,11 +541,12 @@ class MolecularDynamics:
             taup (float): time constant for pressure coupling
             friction (float): friction coefficient for nvt_langevin, typically set to 1e-4 to 1e-2
             andersen_prob (float): random collision probability for nvt_andersen, typically set to 1e-4 to 1e-1
-            ttime (float): Characteristic timescale of the thermostat, in ASE internal units
+            ttime (float): Characteristic timescale of the thermostat for npt_nose_hoover, in fs
             pfactor (float): A constant in the barostat differential equation.
-            external_stress (float): The external stress in eV/A^3.
-                Either 3x3 tensor,6-vector or a scalar representing pressure
-            compressibility_au (float): compressibility of the material in A^3/eV
+            external_stress (float): The external stress in eV/A^3 for npt_nose_hoover.
+                Either 3x3 tensor,6-vector or a scalar representing pressure. Defaults to `pressure`.
+            compressibility_au (float): compressibility of the material in A^3/eV. Required for npt and
+                npt_berendsen.
             trajectory (str or Trajectory): Attach trajectory object
             logfile (str): open this file for recording MD outputs
             loginterval (int): write to log file every interval steps
@@ -576,7 +578,9 @@ class MolecularDynamics:
         if mask is None:
             mask = np.array([(1, 0, 0), (0, 1, 0), (0, 0, 1)])
         if external_stress is None:
-            external_stress = 0.0
+            external_stress = pressure
+        if ensemble.lower() in ("npt", "npt_berendsen") and compressibility_au is None:
+            raise ValueError(f"compressibility_au (in A^3/eV) must be specified for the {ensemble} ensemble.")
 
         if np.isclose(self.atoms.get_kinetic_energy(), 0.0, rtol=0, atol=1e-12):
             MaxwellBoltzmannDistribution(self.atoms, temperature_K=temperature)
