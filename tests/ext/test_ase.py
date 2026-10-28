@@ -218,8 +218,23 @@ def test_get_graph_from_atoms_partial_pbc():
     thin = slab.copy()
     thin.center(vacuum=0.5, axis=2)
     graph_thin, _, _ = a2g.get_graph(thin)
+    # Recentering shifts every atom by the same z offset, so in-cell and in-plane image pairs are unchanged; with
+    # only 1 A of vacuum, any extra edge here could only be a bond through the non-periodic z boundary.
     assert graph_thin.num_edges == graph.num_edges
     assert torch.all(graph_thin.pbc_offset[:, 2] == 0)
+
+
+@pytest.mark.parametrize("pbc", [True, (True, True, False), False], ids=["bulk", "slab", "molecule"])
+def test_atoms2graph_lattice_shape(pbc):
+    """Both neighbour-list backends (pymatgen, and nvalchemiops when installed) must return a (1, 3, 3) lattice;
+    JAXPESCalculator and structure_to_graph index it as a batch."""
+    atoms = fcc111("Cu", size=(2, 2, 2), vacuum=6.0)
+    atoms.pbc = pbc
+    graph, lat, _ = Atoms2Graph(element_types=["Cu"], cutoff=4.0).get_graph(atoms)
+    assert lat.shape == (1, 3, 3)
+    if not np.any(pbc):
+        assert torch.equal(lat[0], torch.eye(3, dtype=lat.dtype, device=lat.device))
+    assert graph.num_edges > 0
 
 
 def test_molecular_dynamics(MoS2):
