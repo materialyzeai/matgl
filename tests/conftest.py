@@ -23,6 +23,16 @@ from matgl.ext.pymatgen import Molecule2Graph, Structure2Graph, get_element_list
 from matgl.graph._compute import compute_pair_vector_and_distance
 
 
+@pytest.fixture(autouse=True)
+def _run_in_tmp_path(tmp_path, monkeypatch):
+    """Run every test in its own temporary directory.
+
+    Datasets (default ``root="MGLDataset"``), saved models, trajectories and ``lightning_logs`` written to relative
+    paths then land in ``tmp_path`` instead of the repository, and cannot leak between tests.
+    """
+    monkeypatch.chdir(tmp_path)
+
+
 def get_graph(structure, cutoff):
     """Helper to build a PyG graph from a Structure or Molecule.
 

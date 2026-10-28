@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Environment setup (Python 3.11+ required):
 
 ```bash
-uv venv && uv sync                 # install runtime deps + dev group
+uv venv && uv sync                 # install runtime deps + dev group (which includes the lint group: ruff, mypy)
 ```
 
 Tests:
@@ -23,7 +23,7 @@ uv run pytest tests/models/test_tensornet.py::test_module  # one test
 uv run pytest -k tensornet --cov=matgl              # keyword filter + coverage
 ```
 
-`pyproject.toml` injects `--durations=30 --quiet -rXs -p no:warnings` automatically. `tests/conftest.py` calls `matgl.clear_cache(confirm=False)` at import time, so the user-level `~/.cache/matgl/` is wiped on every test run — be aware when running tests on a machine where you've manually cached models.
+`pyproject.toml` injects `--durations=30 --quiet -rXs --color=yes -p no:warnings` automatically (so don't add `-q`: the doubled quiet hides the pass/fail summary). `tests/conftest.py` calls `matgl.clear_cache(confirm=False)` at import time, so the user-level `~/.cache/matgl/` is wiped on every test run — be aware when running tests on a machine where you've manually cached models. An autouse fixture runs every test inside its own `tmp_path`, so anything written to relative paths (datasets, saved models, `lightning_logs`) never lands in the repo.
 
 Lint/format/type-check (matches the `Lint` workflow):
 
@@ -33,7 +33,7 @@ uv run ruff format src        # add --check for CI parity
 uv run mypy -p matgl
 ```
 
-Pre-commit (`uv run pre-commit run --all-files`) layers `ruff`, `mypy`, `codespell`, and `nbstripout`. `pre-commit-ci` skips `mypy`.
+Pre-commit (`uv run pre-commit run --all-files`) layers `ruff`, `mypy`, `codespell`, and `nbstripout`. `pre-commit-ci` skips `mypy`. Keep the `mirrors-mypy` hook `rev` in step with the mypy version in `uv.lock` so local hooks and the `Lint` workflow agree.
 
 CLI entry point (installed by the package):
 
@@ -63,10 +63,11 @@ Modules prefixed with `_` are private. Public names are re-exported from each su
 
 - `matgl.models` — graph-network architectures (M3GNet, MEGNet, CHGNet, TensorNet, SO3Net, QET) plus `TransformedTargetModel` wrapper.
 - `matgl.layers` — building blocks (embeddings, graph conv, readout, ZBL, atom-ref, basis functions, activations).
-- `matgl.apps.pes.Potential` — wraps a graph model into an interatomic potential that returns energies/forces/stresses via autograd. Implementation in `_pes.py`.
+- `matgl.apps.pes.Potential` — wraps a graph model into an interatomic potential that returns energies/forces/stresses via autograd. Implementation in `apps/pes.py`.
 - `matgl.graph` — graph construction and `MGLDataset` / data loaders.
-- `matgl.ext` — external-library adaptors (`pymatgen` for `Structure`/`Molecule` → graph, `ase` for `Relaxer` / `MolecularDynamics` calculators, `alchmtk` for NVIDIA Alchemi toolkit ops).
-- `matgl.electrostatics` — fast charge-equilibration and Gaussian-smeared Coulomb electrostatic potential utilities used by QET; split into `_fast_qeq.py` and `_elec_pot.py`.
+- `matgl.ext` — external-library adaptors (`pymatgen` for `Structure`/`Molecule` → graph, `ase` for `Relaxer` / `MolecularDynamics` calculators, `alchmtk` for NVIDIA Alchemi toolkit ops, `lammps` for exporting TorchScript models to the `pair_matgl` LAMMPS plugin, `jax` for a JAX port of TensorNet/QET with an ASE calculator).
+- Electrostatics (`LinearQeq` charge equilibration and the Gaussian-smeared Coulomb `ElectrostaticPotential` used by QET) live in `matgl.layers` (`layers/_fast_qeq.py`, `layers/_elec_pot.py`). `matgl.electrostatics` is only a deprecated re-export that warns on import; don't add code there.
+- `matgl.data` — target transformers (`Normalizer`, `LogTransformer`; MSONable so `TransformedTargetModel` can be saved).
 - `matgl.kernels` / `matgl.ops` — NVIDIA Warp GPU kernels and their pure-PyTorch reference ops; per-file ignores in `pyproject.toml` skip docstring/lint rules here.
 - `matgl.utils` — `IOMixIn` (model save/load + HF Hub), training loops (`training.py`), spherical harmonics, math helpers, cutoff functions.
 
@@ -78,22 +79,17 @@ End-user models often wrap a graph model: `Potential` wraps an `M3GNet`/`TensorN
 
 Models subclass `torch.nn.Module` **and** `matgl.utils.io.IOMixIn`, and call `self.save_args(locals(), kwargs)` at the end of `__init__`. This is required so `model.save(path)` / `Model.load(path)` / `matgl.load_model(...)` can round-trip the constructor arguments via the standard triple `model.pt` + `state.pt` + `model.json`. Set a class-level `__version__: int` and bump it whenever architectural changes invalidate previously saved checkpoints.
 
-`matgl.load_model("owner/name")` loads from Hugging Face Hub; bare names resolve under the `materialyze` org or the locally cached `pretrained_models/` directory. Use `model.push_to_hub(...)` to publish.
+`matgl.load_model(...)` resolves, in order: a local directory containing the three files, an `"owner/name"` Hugging Face Hub repo, then a bare name under the `materialyze` org. Hub downloads are cached under `~/.cache/matgl/`. Use `model.push_to_hub(...)` to publish.
 
-### Pre-trained model layout
+### Pre-trained models
 
-**The in-repo `pretrained_models/` directory is deprecated.** All new pre-trained models must be
-uploaded to Hugging Face Hub (under the `materialyze` org) via `model.push_to_hub(...)`, and loaded
-with `matgl.load_model("materialyze/<model-name>")` or the bare-name form. Do not add new model
-directories to `pretrained_models/`.
-
-The existing layout — `pretrained_models/<MODEL_NAME>/` holding `model.pt`, `state.pt`,
-`model.json`, plus a `README.md` and a notebook documenting metrics — is retained only for the
-already-shipped checkpoints that `mgl predict --choices` still discovers locally.
+All pre-trained models live on Hugging Face Hub under the `materialyze` org, uploaded with
+`model.push_to_hub(...)` and loaded with `matgl.load_model("materialyze/<model-name>")` or the bare-name form.
+The former in-repo `pretrained_models/` directory has been removed; do not reintroduce it.
 
 ### Tests
 
-`tests/` mirrors `src/matgl/`. `tests/conftest.py` provides session-scoped fixtures: pymatgen `Structure`/`Molecule` (`LiFePO4`, `BaNiO3`, `MoS2`, `Mo`, `CH4`, `CO`, `Li3InCl6`, `AcAla3NHMe`) and pre-built graphs (`graph_<name>`). The `get_graph` helper in `conftest.py` builds a PyG graph for the given pymatgen structure.
+`tests/` mirrors `src/matgl/`. `tests/conftest.py` provides session-scoped fixtures: pymatgen `Structure`/`Molecule` (`LiFePO4`, `BaNiO3`, `MoS`, `MoS2`, `Mo`, `NaCl`, `CH4`, `CO`, `Li3InCl6`, `AcAla3NHMe`) and pre-built graphs (`graph_<name>`). The `get_graph` helper in `conftest.py` builds a PyG graph for the given pymatgen structure.
 
 ## Conventions
 

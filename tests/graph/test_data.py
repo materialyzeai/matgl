@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+import json
 import os
-import shutil
 
 # This function is used for M3GNet property dataset
 from functools import partial
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from pymatgen.core import Molecule
 
 from matgl.ext.pymatgen import Molecule2Graph, Structure2Graph, get_element_list
-from matgl.graph.data import MGLDataLoader, MGLDataset, collate_fn_graph, collate_fn_pes, split_dataset
+from matgl.graph.data import (
+    MGLDataLoader,
+    MGLDataset,
+    _compute_cache_fingerprint,
+    collate_fn_graph,
+    collate_fn_pes,
+    split_dataset,
+)
 
 module_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -48,6 +57,17 @@ def test_load_mgl_dataset(LiFePO4, BaNiO3):
     structures = [LiFePO4, BaNiO3]
     element_types = get_element_list(structures)
     cry_graph = Structure2Graph(element_types=element_types, cutoff=4.0)
+    # Build the cache first (previously this relied on test_mgl_dataset leaving it in the working directory).
+    MGLDataset(
+        structures=structures,
+        converter=cry_graph,
+        labels={
+            "energies": [-1.0, 2.0],
+            "forces": [np.zeros((28, 3)).tolist(), np.zeros((10, 3)).tolist()],
+            "stresses": [np.zeros((3, 3)).tolist(), np.zeros((3, 3)).tolist()],
+        },
+        root="MGLDataset_pes",
+    )
     dataset = MGLDataset(
         root="MGLDataset_pes",
     )
@@ -63,7 +83,6 @@ def test_load_mgl_dataset(LiFePO4, BaNiO3):
     assert np.shape(pes2["forces"])[0] == 10
     assert np.allclose(lat1.detach().cpu().numpy(), structures[0].lattice.matrix)
     assert np.allclose(lat2.detach().cpu().numpy(), structures[1].lattice.matrix)
-    shutil.rmtree(f"{dataset.root}")
 
 
 def test_mgl_property_dataset(LiFePO4, BaNiO3):
@@ -98,7 +117,6 @@ def test_mgl_property_dataset(LiFePO4, BaNiO3):
     assert g1.num_nodes == cry_graph.get_graph(LiFePO4)[0].num_nodes
     assert g2.num_edges == cry_graph.get_graph(BaNiO3)[0].num_edges
     assert g2.num_nodes == cry_graph.get_graph(BaNiO3)[0].num_nodes
-    shutil.rmtree(f"{dataset.root}")
 
 
 def test_mgl_property_dataset_with_graph_label(LiFePO4, BaNiO3):
@@ -129,31 +147,28 @@ def test_graph_labels_change_invalidates_cache(LiFePO4, BaNiO3):
     element_types = get_element_list(structures)
     cry_graph = Structure2Graph(element_types=element_types, cutoff=4.0)
     root = "MGLDataset_graph_labels"
-    try:
-        # First build with no graph_labels -> converter-default (float) state.
-        no_label = MGLDataset(
-            structures=structures,
-            converter=cry_graph,
-            labels={"Eform_per_atom": [1.0, -2.0]},
-            root=root,
-        )
-        assert no_label.state_attr.dtype.is_floating_point
+    # First build with no graph_labels -> converter-default (float) state.
+    no_label = MGLDataset(
+        structures=structures,
+        converter=cry_graph,
+        labels={"Eform_per_atom": [1.0, -2.0]},
+        root=root,
+    )
+    assert no_label.state_attr.dtype.is_floating_point
 
-        # Rebuild with graph_labels present: the stale cache must be rejected so
-        # the integer fidelity ids actually take effect.
-        with_label = MGLDataset(
-            structures=structures,
-            converter=cry_graph,
-            labels={"Eform_per_atom": [1.0, -2.0]},
-            graph_labels=[0, 1],
-            root=root,
-        )
-        _, _, state0, _ = with_label[0]
-        _, _, state1, _ = with_label[1]
-        assert state0.detach().numpy() == 0
-        assert state1.detach().numpy() == 1
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
+    # Rebuild with graph_labels present: the stale cache must be rejected so
+    # the integer fidelity ids actually take effect.
+    with_label = MGLDataset(
+        structures=structures,
+        converter=cry_graph,
+        labels={"Eform_per_atom": [1.0, -2.0]},
+        graph_labels=[0, 1],
+        root=root,
+    )
+    _, _, state0, _ = with_label[0]
+    _, _, state1, _ = with_label[1]
+    assert state0.detach().numpy() == 0
+    assert state1.detach().numpy() == 1
 
 
 def test_megnet_dataloader(LiFePO4, BaNiO3):
@@ -411,7 +426,6 @@ def test_mgl_dataloader_with_magmom(LiFePO4, BaNiO3):
     assert len(train_loader) == 8
     assert len(val_loader) == 1
     assert len(test_loader) == 1
-    shutil.rmtree(f"{dataset.root}")
 
 
 def test_mgl_dataloader_autodetect_collate_fn(LiFePO4, BaNiO3):
@@ -471,3 +485,56 @@ def test_mgl_dataloader_autodetect_collate_fn(LiFePO4, BaNiO3):
     assert mag_batch[6].ndim == 2
     assert mag_batch[6].shape[1] == 1
     assert mag_batch[6].shape[0] == mag_batch[0].num_nodes
+
+
+class TestMGLDatasetCache:
+    """The on-disk cache must never be reused for different structures or labels."""
+
+    @staticmethod
+    def _dataset(structures, energies, root, save_cache=True, **kwargs):
+        converter = Structure2Graph(element_types=("Li", "Fe", "P", "O", "Ba", "Ni"), cutoff=4.0)
+        labels = {"energies": energies} if energies is not None else {}
+        return MGLDataset(
+            structures=structures, converter=converter, labels=labels, root=str(root), save_cache=save_cache, **kwargs
+        )
+
+    @pytest.mark.parametrize("save_cache", [True, False])
+    def test_different_structures_same_root(self, LiFePO4, BaNiO3, tmp_path, save_cache):
+        self._dataset([LiFePO4] * 5, [1.0] * 5, tmp_path)
+        dataset = self._dataset([BaNiO3] * 3, [2.0] * 3, tmp_path, save_cache=save_cache)
+        assert len(dataset) == 3
+        assert dataset.labels == {"energies": [2.0] * 3}
+        assert dataset[0][0].num_nodes == len(BaNiO3)
+
+    def test_different_labels_same_structures(self, LiFePO4, tmp_path):
+        self._dataset([LiFePO4] * 2, [1.0, 1.0], tmp_path)
+        dataset = self._dataset([LiFePO4] * 2, [3.0, 4.0], tmp_path)
+        assert dataset.labels == {"energies": [3.0, 4.0]}
+
+    def test_identical_inputs_reuse_cache(self, LiFePO4, BaNiO3, tmp_path):
+        self._dataset([LiFePO4, BaNiO3], [1.0, 2.0], tmp_path)
+        dataset = self._dataset([LiFePO4, BaNiO3], [1.0, 2.0], tmp_path)
+        assert dataset.has_cache()
+        # Loading with a converter but no structures still uses the cache.
+        loaded = self._dataset(None, None, tmp_path)
+        assert len(loaded) == 2
+        assert loaded.labels == {"energies": [1.0, 2.0]}
+
+    def test_stale_labels_not_reused(self, LiFePO4, tmp_path):
+        self._dataset([LiFePO4] * 2, [1.0, 1.0], tmp_path)
+        dataset = self._dataset([LiFePO4] * 2, None, tmp_path, include_line_graph=True)
+        assert dataset.labels == {}
+
+    def test_nested_numpy_labels(self, LiFePO4, tmp_path):
+        labels = {"forces": [np.zeros((len(LiFePO4), 3))]}
+        converter = Structure2Graph(element_types=("Li", "Fe", "P", "O"), cutoff=4.0)
+        dataset = MGLDataset(structures=[LiFePO4], converter=converter, labels=labels, root=str(tmp_path))
+        assert isinstance(labels["forces"][0], np.ndarray), "caller's labels must not be mutated"
+        assert np.allclose(dataset[0][3]["forces"].numpy(), 0.0)
+
+    def test_fingerprint_without_cutoff_is_stable(self):
+        converter = SimpleNamespace(element_types=("Li", "O"))  # a converter with no ``cutoff`` attribute
+        fingerprint = _compute_cache_fingerprint(converter, False, False)
+        assert fingerprint["cutoff"] is None
+        # Round-trips through JSON (as stored on disk) and still compares equal; NaN would not.
+        assert json.loads(json.dumps(fingerprint)) == _compute_cache_fingerprint(converter, False, False)

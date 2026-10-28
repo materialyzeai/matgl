@@ -39,7 +39,7 @@ repos:
       - id: trailing-whitespace
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.1.0
+    rev: v2.4.0
     hooks:
       - id: mypy
         # mypy is given the explicit file list by pre-commit, which makes
