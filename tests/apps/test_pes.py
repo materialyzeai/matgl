@@ -144,6 +144,24 @@ class TestPotential:
         fd = (e_plus - e_minus) / (2 * 0.01)
         assert np.allclose(fd.detach().numpy(), grad_dx_zero[0][0].detach().numpy(), atol=1e-05)
 
+    def test_repulsion_contributes_forces_and_stresses(self, model_tensornet):
+        """ZBL must be differentiated w.r.t. positions and strain, on graphs straight from the converter."""
+        p2g = Structure2Graph(element_types=("Mo", "S"), cutoff=5.0)
+        delta = 0.002
+        structs = [
+            Structure(Lattice.cubic(6.0), ["Mo", "S"], [[0, 0, 0], [0.25 + dx, 0.0, 0.0]]) for dx in (-delta, 0, delta)
+        ]
+        graphs = [p2g.get_graph(s) for s in structs]
+        torch.manual_seed(0)
+        ff = Potential(model=model_tensornet, calc_repuls=True, debug_mode=True).double()
+        ff_no_repuls = Potential(model=model_tensornet, debug_mode=True).double()
+        (e_minus, _, _), (_, de_dx, de_deps), (e_plus, _, _) = [ff(g, lat, state) for g, lat, state in graphs]
+        fd = (e_plus - e_minus) / (2 * delta * 6.0)
+        np.testing.assert_allclose(de_dx[1][0].item(), fd.item(), rtol=1e-3)
+        _, de_dx_no_repuls, de_deps_no_repuls = ff_no_repuls(*graphs[1])
+        assert not torch.allclose(de_dx, de_dx_no_repuls)
+        assert not torch.allclose(de_deps, de_deps_no_repuls)
+
     def test_forward_does_not_mutate_input_graph(self, graph_MoS, model_tensornet):
         """``Potential.forward`` must shallow-clone ``g`` so the caller's graph keeps
         its original attribute set and ``frac_coords``/``edge_index`` tensors are

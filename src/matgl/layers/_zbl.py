@@ -59,18 +59,18 @@ class NuclearRepulsion(MessagePassing):
 
         Args:
             element_types: A tuple of element types defined in the model class.
-            graph: PyG graph.
+            graph: PyG graph. Must carry ``bond_dist`` computed from the positions that forces and
+                stresses are differentiated against (``Potential`` sets this before calling the layer).
 
         Returns:
             energy: Pairwise ZBL nuclear repulsive energy.
         """
-        z_list = torch.tensor([atomic_numbers[i] for i in element_types], dtype=matgl.float_th)
+        r_ij = graph.bond_dist
+        z_list = torch.tensor([atomic_numbers[i] for i in element_types], dtype=r_ij.dtype, device=r_ij.device)
         z = z_list[graph.node_type]
 
         idx_i = graph.edge_index[0]
         idx_j = graph.edge_index[1]
-
-        r_ij = graph.bond_dist
 
         # Construct screening function
         a = z ** F.softplus(self.a_pow)
@@ -86,7 +86,7 @@ class NuclearRepulsion(MessagePassing):
         eij_repuls = (z[idx_i] * z[idx_j]) * polynomial_cutoff(r_ij, self.r_cut) * screening / r_ij
 
         # Aggregate edge contributions to nodes
-        e_repuls = scatter(eij_repuls, idx_i.to(torch.long))
+        e_repuls = scatter(eij_repuls, idx_i.to(torch.long), dim=0, dim_size=graph.node_type.shape[0])
 
         # Global summation of node energies
         energy = 0.5 * self.ke * global_add_pool(e_repuls, graph.batch)

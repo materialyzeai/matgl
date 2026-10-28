@@ -316,6 +316,29 @@ class M3GNetCalculator(PESCalculator):
         super().__init__(potential=potential, state_attr=state_attr, stress_weight=stress_weight, **kwargs)
 
 
+def _strainable_axes(atoms: Atoms) -> np.ndarray | None:
+    """Cartesian axes along which a partially periodic cell may strain, or None if no default mask applies.
+
+    Cell-filter and NPT masks act on Cartesian strain components, so the pbc flags only translate into a mask when
+    each non-periodic cell vector lies along its own Cartesian axis and the periodic vectors have no component
+    along it (e.g. a slab with its vacuum along z).
+    """
+    pbc = np.asarray(atoms.pbc, dtype=bool)
+    if pbc.all() or not pbc.any():
+        return None
+    cell = atoms.cell.array
+    for i in np.flatnonzero(~pbc):
+        if not (np.allclose(np.delete(cell[i], i), 0) and np.allclose(cell[pbc, i], 0)):
+            warnings.warn(
+                "Non-periodic cell vectors are not aligned with Cartesian axes, so the cell will also deform along "
+                "vacuum directions. Pass an explicit strain mask to prevent this.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return None
+    return pbc
+
+
 class Relaxer:
     """Relaxer is a class for structural relaxation."""
 
@@ -383,14 +406,22 @@ class Relaxer:
             verbose (bool): Whether to have verbose output.
             params_asecellfilter (dict): Parameters to be passed to FrechetCellFilter. Allows
                 setting of constant pressure or constant volume relaxations, for example. Refer to
-                https://wiki.fysik.dtu.dk/ase/ase/filters.html#FrechetCellFilter for more information
+                https://wiki.fysik.dtu.dk/ase/ase/filters.html#FrechetCellFilter for more information.
+                For partially periodic cells (e.g. slabs with pbc=(T, T, F)), ``mask`` defaults to fixing the
+                strain components along non-periodic directions.
             **kwargs: Kwargs pass-through to optimizer.
         """
         if isinstance(atoms, Structure | Molecule):
             atoms = self.ase_adaptor.get_atoms(atoms)
         atoms.set_calculator(self.calculator)
         stream = sys.stdout if verbose else io.StringIO()
-        params_asecellfilter = params_asecellfilter or {}
+        params_asecellfilter = dict(params_asecellfilter or {})
+        if self.relax_cell and "mask" not in params_asecellfilter:
+            # The stress along a non-periodic direction is the response to stretching the vacuum, so keep those
+            # strain components fixed (e.g. a z-slab may only relax xx, yy and xy).
+            axes = _strainable_axes(atoms)
+            if axes is not None:
+                params_asecellfilter["mask"] = np.outer(axes, axes).astype(int)
         with contextlib.redirect_stdout(stream):
             obs = TrajectoryObserver(atoms)
             if self.relax_cell:
@@ -552,7 +583,9 @@ class MolecularDynamics:
             loginterval (int): write to log file every interval steps
             append_trajectory (bool): Whether to append to prev trajectory.
             mask (np.array): either a tuple of 3 numbers (0 or 1) or a symmetric 3x3 array indicating,
-                which strain values may change for NPT simulations
+                which strain values may change for NPT simulations. Only used by ``npt_nose_hoover``. Defaults to
+                the identity, or for partially periodic cells (e.g. slabs) to fixing the non-periodic directions.
+                Other NPT ensembles cannot mask strain, so they also deform the cell along vacuum directions.
             **kwargs: Kwargs pass-through to molecular dynamics.
         """
         # Detect user-provided stress_weight
@@ -576,7 +609,9 @@ class MolecularDynamics:
             taup = 1000 * timestep * units.fs
 
         if mask is None:
-            mask = np.array([(1, 0, 0), (0, 1, 0), (0, 0, 1)])
+            # Keep vacuum directions of partially periodic cells fixed; the identity otherwise.
+            axes = _strainable_axes(self.atoms) if ensemble.lower() == "npt_nose_hoover" else None
+            mask = np.diag(axes).astype(int) if axes is not None else np.eye(3, dtype=int)
         if external_stress is None:
             external_stress = pressure
         if ensemble.lower() in ("npt", "npt_berendsen") and compressibility_au is None:

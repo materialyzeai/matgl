@@ -118,6 +118,10 @@ class IOMixIn:
     implements and supports PyTorch's state_dict and load_state_dict methods.
     """
 
+    # IOMixIn modules can be submodules of TorchScript-compiled models (e.g. ``BondExpansion`` in the LAMMPS export);
+    # keep TorchScript from compiling this Python-only property.
+    __jit_unused_properties__ = ["num_parameters"]  # noqa: RUF012
+
     def save_args(self, locals: dict, kwargs: dict | None = None) -> None:
         """Save the arguments passed to the class initializer.
 
