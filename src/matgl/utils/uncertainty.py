@@ -158,22 +158,12 @@ class MCDropoutWrapper:
     ) -> tuple:
         """Convert a structure to a (graph, state_feats) pair.
 
-        Replicates the graph-setup boilerplate shared by all MatGL
-        ``predict_structure`` implementations so we can convert each structure
-        once and reuse the graph across all N forward passes.
+        Uses the same conversion as ``MatGLModel.predict_structure`` so each structure
+        is converted once and the graph reused across all N forward passes.
         """
-        if graph_converter is None:
-            from matgl.ext.pymatgen import Structure2Graph
+        from matgl.models._core import structure_to_graph
 
-            graph_converter = Structure2Graph(
-                element_types=self.model.element_types,  # type: ignore[attr-defined, arg-type]
-                cutoff=self.model.cutoff,  # type: ignore[attr-defined, arg-type]
-            )
-
-        g, lat, state_feats_default = graph_converter.get_graph(structure)
-        g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
-        g.pos = g.frac_coords @ lat[0]
-        state_feats = torch.tensor(state_feats_default)
+        g, state_feats = structure_to_graph(self.model, structure, graph_converter)
         return g, state_feats
 
     def predict_uncertainty(

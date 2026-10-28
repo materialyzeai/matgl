@@ -45,8 +45,6 @@ if TYPE_CHECKING:
 
     from torch_geometric.data import Data
 
-    from matgl.graph._converters import GraphConverter
-
 logger = logging.getLogger(__name__)
 
 # Extend default elements with Po, At, Rn, Fr, Ra.
@@ -160,6 +158,10 @@ class CHGNet(MatGLModel):
 
         element_types = element_types or DEFAULT_ELEMENTS
         self.use_bond_graph = threebody_cutoff > 0
+        if dim_state_embedding is not None and dim_state_feats is None:
+            raise ValueError(
+                "CHGNet dim_state_embedding requires dim_state_feats (the number of state labels) to be set."
+            )
         if not self.use_bond_graph and readout_field == "angle_feat":
             raise ValueError(
                 f"Angle readout requires threebody_cutoff > 0, but got threebody_cutoff={threebody_cutoff}"
@@ -261,7 +263,11 @@ class CHGNet(MatGLModel):
 
         # --- final readout MLP ---
         # _EmbedMLP (_MLPNorm) stores only Linear layers at consecutive indices in self.layers.
-        input_dim = dim_atom_embedding if readout_field == "atom_feat" else dim_bond_embedding
+        input_dim = {
+            "atom_feat": dim_atom_embedding,
+            "bond_feat": dim_bond_embedding,
+            "angle_feat": dim_angle_embedding,
+        }[readout_field]
         _act = activation if activation is not None else nn.SiLU()
         if final_mlp_type == "mlp":
             self.final_layer = _EmbedMLP(
@@ -504,53 +510,3 @@ class CHGNet(MatGLModel):
     # ------------------------------------------------------------------
     # Convenience method
     # ------------------------------------------------------------------
-    def predict_structure(  # type: ignore[override]
-        self,
-        structure,
-        state_feats: torch.Tensor | None = None,
-        graph_converter: GraphConverter | None = None,
-        return_features: bool = False,
-        output_layers: list | None = None,
-    ) -> torch.Tensor | dict:
-        """Predict property directly from a Pymatgen Structure.
-
-        Args:
-            structure: Pymatgen Structure or Molecule.
-            state_feats: Optional state attributes.
-            graph_converter: Graph converter. Defaults to ``Structure2Graph``.
-            return_features: **Deprecated.** Use ``model.feature_dict`` after calling
-                ``predict_structure`` instead. Will be removed in matgl v5.
-            output_layers: Layer names to return (used when return_features=True).
-
-        Returns:
-            Predicted property tensor, or feature dict.
-        """
-        if return_features:
-            _warn_feature_dict_kwarg("return_features")
-        allowed_output_layers = ["bond_expansion", "angle_expansion", "embedding", "magmom", "final"] + [
-            f"gc_{i + 1}" for i in range(self.n_blocks)
-        ]
-
-        if not return_features:
-            output_layers = ["final"]
-        elif output_layers is None:
-            output_layers = allowed_output_layers
-        elif not isinstance(output_layers, list) or set(output_layers).difference(allowed_output_layers):
-            raise ValueError(f"Invalid output_layers. Must be a sublist of {allowed_output_layers}.")
-
-        if graph_converter is None:
-            from matgl.ext.pymatgen import Structure2Graph
-
-            graph_converter = Structure2Graph(element_types=self.element_types, cutoff=self.cutoff)  # type: ignore[arg-type]
-
-        g, lat, state_feats_default = graph_converter.get_graph(structure)
-        g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
-        g.pos = g.frac_coords @ lat[0]
-        if state_feats is None:
-            state_feats = torch.tensor(state_feats_default)
-
-        if return_features:
-            self(g=g, state_attr=state_feats)
-            return {k: v for k, v in self.feature_dict.items() if k in output_layers}
-
-        return self(g=g, state_attr=state_feats).detach()

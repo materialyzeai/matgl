@@ -10,7 +10,8 @@ please refer to::
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+import warnings
+from typing import Any, Literal
 
 import torch
 from torch import nn
@@ -43,8 +44,25 @@ try:
 except ImportError:
     _warp_available = False
 
-if TYPE_CHECKING:
-    from matgl.graph._converters import GraphConverter
+
+def _warn_ignored_tensornet_options(include_state: bool, readout_type: str, field: str, is_intensive: bool) -> None:
+    """Warn about TensorNet options that are accepted for API compatibility but have no effect."""
+    if include_state:
+        warnings.warn(
+            "TensorNet does not use state attributes; include_state / ntypes_state / dim_state_* are ignored.",
+            UserWarning,
+            stacklevel=3,
+        )
+    if is_intensive and readout_type not in ("weighted_atom", "reduce_atom"):
+        warnings.warn(
+            f"TensorNet readout_type={readout_type!r} is not supported and falls back to a mean ('reduce_atom').",
+            UserWarning,
+            stacklevel=3,
+        )
+    if field != "node_feat":
+        warnings.warn(
+            f"TensorNet always reads out node features; field={field!r} is ignored.", UserWarning, stacklevel=3
+        )
 
 
 class TensorNet(MatGLModel):
@@ -111,7 +129,7 @@ class TensorNet(MatGLModel):
                 (default :obj:`"O(3)"`)
             dtype (torch.dtype): data type for all variables
             width (float): the width of Gaussian radial basis functions
-            readout_type (str): Readout function type, `set2set`, `weighted_atom` (default) or `reduce_atom`.
+            readout_type (str): Readout function type, `weighted_atom` (default) or `reduce_atom`.
             task_type (str): `classification` or `regression` (default).
             field (str): Using either "node_feat" or "edge_feat" for Set2Set and Reduced readout
             is_intensive (bool): Whether the prediction is intensive
@@ -132,6 +150,8 @@ class TensorNet(MatGLModel):
             raise ValueError(
                 f"Invalid activation type, please try using one of {[af.name for af in ActivationFunction]}"
             ) from None
+
+        _warn_ignored_tensornet_options(include_state, readout_type, field, is_intensive)
 
         if use_warp and not _warp_available:
             raise ImportError(
@@ -373,58 +393,3 @@ class TensorNet(MatGLModel):
         if return_all_layer_output:
             return fea_dict
         return output
-
-    def predict_structure(
-        self,
-        structure,
-        state_feats: torch.Tensor | None = None,
-        graph_converter: GraphConverter | None = None,
-        output_layers: list | None = None,
-        return_features: bool = False,
-    ):
-        """Convenience method to directly predict property from structure.
-
-        Args:
-            structure: An input crystal/molecule.
-            state_feats (torch.tensor): Graph attributes
-            graph_converter: Object that implements a get_graph_from_structure.
-            output_layers: List of names for the layer of GNN as output.
-            return_features (bool): **Deprecated.** Use ``model.feature_dict`` after
-                calling ``predict_structure`` instead. Will be removed in matgl v5.
-                If True, return specified layer outputs. If False, only return final output.
-
-        Returns:
-            output (torch.tensor): output property
-        """
-        if return_features:
-            _warn_feature_dict_kwarg("return_features")
-        allowed_output_layers = ["edge_attr", "embedding", "readout", "final"] + [
-            f"gc_{i + 1}" for i in range(self.num_layers)
-        ]
-
-        if not return_features:
-            output_layers = ["final"]
-        elif output_layers is None:
-            output_layers = allowed_output_layers
-        elif not isinstance(output_layers, list) or set(output_layers).difference(allowed_output_layers):
-            raise ValueError(f"Invalid output_layers, it must be a sublist of {allowed_output_layers}.")
-
-        if graph_converter is None:
-            from matgl.ext.pymatgen import Structure2Graph
-
-            graph_converter = Structure2Graph(element_types=self.element_types, cutoff=self.cutoff)  # type: ignore
-        g, lat, state_feats_default = graph_converter.get_graph(structure)
-        g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
-        g.pos = g.frac_coords @ lat[0]
-        if state_feats is None:
-            state_feats = torch.tensor(state_feats_default)
-
-        if return_features:
-            self(g=g, state_attr=state_feats)
-            return {
-                k: v.detach() if isinstance(v, torch.Tensor) else v
-                for k, v in self.feature_dict.items()
-                if k in output_layers
-            }
-
-        return self(g=g, state_attr=state_feats).detach()
