@@ -86,7 +86,7 @@ class NuclearRepulsion(MessagePassing):
         eij_repuls = (z[idx_i] * z[idx_j]) * polynomial_cutoff(r_ij, self.r_cut) * screening / r_ij
 
         # Aggregate edge contributions to nodes
-        e_repuls = scatter(eij_repuls, idx_i.to(torch.long), dim=0, dim_size=graph.num_nodes)
+        e_repuls = scatter(eij_repuls, idx_i.to(torch.long), dim=0, dim_size=graph.node_type.shape[0])
 
         # Global summation of node energies
         energy = 0.5 * self.ke * global_add_pool(e_repuls, graph.batch)

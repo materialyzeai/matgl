@@ -38,5 +38,6 @@ def test_nuclear_repulsion_trailing_isolated_atom():
     data.bond_dist = torch.tensor([1.0, 1.0], dtype=matgl.float_th)
     data.batch = torch.tensor([0, 0, 0], dtype=torch.long)
     energy = NuclearRepulsion(r_cut=3.0)(("H",), data)
-    expected = NuclearRepulsion(r_cut=3.0)(("H",), Data(**{**data.to_dict(), "num_nodes": 2, "batch": data.batch[:2]}))
+    pair = Data(**{**data.to_dict(), "num_nodes": 2, "node_type": data.node_type[:2], "batch": data.batch[:2]})
+    expected = NuclearRepulsion(r_cut=3.0)(("H",), pair)
     assert torch.allclose(energy, expected)
