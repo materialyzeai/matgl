@@ -16,6 +16,7 @@ from torch.autograd import grad
 from torch_geometric.data import Batch, Data
 
 import matgl
+from matgl.graph._compute import compute_pair_vector_and_distance
 from matgl.layers._atom_ref import AtomRef
 from matgl.layers._zbl import NuclearRepulsion
 from matgl.utils.constants import EV_PER_ANG3_TO_GPA
@@ -319,6 +320,9 @@ class Potential(nn.Module, IOMixIn):
             total_energies = self.data_std * total_energies + self.data_mean
 
             if self.calc_repuls:
+                # Recompute distances from the strained, grad-tracked positions so the ZBL term
+                # contributes to forces and stresses, not only to the energy.
+                _, g.bond_dist = compute_pair_vector_and_distance(g.pos, g.edge_index, g.pbc_offshift)
                 total_energies += self.repuls(self.model.element_types, g)  # type: ignore[attr-defined]
 
             if self.element_refs is not None:
