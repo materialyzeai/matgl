@@ -619,14 +619,16 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         e_label_per_atom = valid_labels[0] / valid_num_atoms
         e_pred_per_atom = valid_preds[0] / valid_num_atoms
 
-        e_loss = self.loss(e_label_per_atom, e_pred_per_atom, **self.loss_params)
-        f_loss = self.loss(valid_labels[1], valid_preds[1], **self.loss_params)
+        def _terms(loss_fn: nn.Module, label: torch.Tensor, pred: torch.Tensor) -> tuple[torch.Tensor, ...]:
+            # With allow_missing_labels, a batch may have no valid entries for a component; the mean over an
+            # empty tensor is NaN, so return zeros (kept on the autograd graph via pred) instead.
+            if label.numel() == 0:
+                zero = pred.sum() * 0.0
+                return zero, zero.detach(), zero.detach()
+            return loss_fn(label, pred, **self.loss_params), self.mae(label, pred), self.rmse(label, pred)
 
-        e_mae = self.mae(e_label_per_atom, e_pred_per_atom)
-        f_mae = self.mae(valid_labels[1], valid_preds[1])
-
-        e_rmse = self.rmse(e_label_per_atom, e_pred_per_atom)
-        f_rmse = self.rmse(valid_labels[1], valid_preds[1])
+        e_loss, e_mae, e_rmse = _terms(self.loss, e_label_per_atom, e_pred_per_atom)
+        f_loss, f_mae, f_rmse = _terms(self.loss, valid_labels[1], valid_preds[1])
 
         dev = valid_labels[0].device
         s_mae = torch.zeros(1, device=dev)
@@ -641,12 +643,10 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         total_loss = self.energy_weight * e_loss + self.force_weight * f_loss
 
         if self.model.calc_stresses:
-            s_loss = loss(valid_labels[2], valid_preds[2], **self.loss_params)
-            s_mae = self.mae(valid_labels[2], valid_preds[2])
-            s_rmse = self.rmse(valid_labels[2], valid_preds[2])
+            s_loss, s_mae, s_rmse = _terms(loss, valid_labels[2], valid_preds[2])
             total_loss = total_loss + self.stress_weight * s_loss
 
-        if self.model.calc_magmom and labels[3].numel() > 0:
+        if self.model.calc_magmom and valid_labels[3].numel() > 0:
             if self.magmom_target == "symbreak":
                 # Each metric was being recomputed twice for the +/- predictions; cache
                 # the four tensors and pick the per-element minimum at the end.
@@ -659,15 +659,11 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
                 m_rmse = torch.min(self.rmse(valid_labels[3], valid_preds[3]), self.rmse(valid_labels[3], neg_pred))
             else:
                 labels_3 = torch.abs(valid_labels[3]) if self.magmom_target == "absolute" else valid_labels[3]
-                m_loss = loss(labels_3, valid_preds[3], **self.loss_params)
-                m_mae = self.mae(labels_3, valid_preds[3])
-                m_rmse = self.rmse(labels_3, valid_preds[3])
+                m_loss, m_mae, m_rmse = _terms(loss, labels_3, valid_preds[3])
             total_loss = total_loss + self.magmom_weight * m_loss
 
         if self.model.calc_charge:
-            q_loss = loss(labels[3], preds[3])
-            q_mae = self.mae(labels[3], preds[3])
-            q_rmse = self.rmse(labels[3], preds[3])
+            q_loss, q_mae, q_rmse = _terms(loss, valid_labels[3], valid_preds[3])
             total_loss = total_loss + self.charge_weight * q_loss
 
         return {
@@ -802,7 +798,7 @@ def xavier_init(model: nn.Module, gain: float = 1.0, distribution: Literal["unif
             if distribution == "uniform":
                 param.data.uniform_(-bound, bound)
             else:
-                param.data.normal_(0, bound**2)
+                param.data.normal_(0, bound / math.sqrt(3))  # std of U(-bound, bound)
         else:
             init_fn(param.data, gain=gain)
 

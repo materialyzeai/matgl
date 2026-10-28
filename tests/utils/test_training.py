@@ -497,6 +497,43 @@ def test_potential_lightning_loss_fn_allow_missing_labels():
     assert torch.allclose(out["Total_Loss"], torch.tensor(0.0), atol=1e-6)
 
 
+def test_potential_lightning_loss_fn_component_all_missing():
+    """A batch where every label of one component is NaN must not turn the total loss into NaN."""
+    model = TensorNet(use_warp=False)
+    lit = PotentialLightningModule(model=model, stress_weight=1.0, allow_missing_labels=True)
+    energies, forces, stresses, _, num_atoms = _make_efs_batch()
+    preds = (energies.clone(), forces.clone().requires_grad_(), stresses.clone())
+    labels = (energies, forces, torch.full_like(stresses, float("nan")))
+    out = lit.loss_fn(loss=lit.loss, labels=labels, preds=preds, num_atoms=num_atoms)
+    assert torch.isfinite(out["Total_Loss"])
+    assert out["Total_Loss"].requires_grad
+    assert torch.isfinite(out["Stress_MAE"]).all()
+    assert torch.isfinite(out["Stress_RMSE"]).all()
+
+
+def test_potential_lightning_loss_fn_charge_uses_valid_labels_and_loss_params():
+    """The charge term must honour allow_missing_labels and loss_params like the other components."""
+    lit = PotentialLightningModule(
+        model=QET(element_types=("Li", "O")),
+        stress_weight=0.0,
+        charge_weight=1.0,
+        loss="huber_loss",
+        loss_params={"delta": 0.01},
+        allow_missing_labels=True,
+    )
+    assert lit.model.calc_charge
+    energies, forces, stresses, _, num_atoms = _make_efs_batch()
+    charge_labels = torch.zeros(9)
+    charge_labels[0] = float("nan")
+    charge_preds = torch.full((9,), 0.1)
+    preds = (energies.clone(), forces.clone(), stresses.clone(), charge_preds)
+    labels = (energies, forces, stresses, charge_labels)
+    out = lit.loss_fn(loss=lit.loss, labels=labels, preds=preds, num_atoms=num_atoms)
+    expected = torch.nn.functional.huber_loss(charge_preds[1:], charge_labels[1:], delta=0.01)
+    assert torch.allclose(out["Total_Loss"], expected)
+    assert torch.allclose(out["Charge_MAE"], torch.tensor(0.1))
+
+
 @pytest.mark.parametrize("magmom_target", ["absolute", "symbreak"])
 def test_potential_lightning_loss_fn_magmom_branches(magmom_target):
     """`magmom_weight > 0` enables calc_magmom and exercises both magmom_target branches."""
@@ -756,3 +793,13 @@ def test_xavier_init(distribution):
         print(w)
         assert not torch.allclose(w, model.linear.get_parameter("weight"))
         assert torch.allclose(torch.tensor(0.0), model.linear.get_parameter("bias"))
+
+
+def test_xavier_init_normal_1d_std():
+    """1-D parameters drawn from the normal branch must have the Xavier std, gain * sqrt(2 / (2 * n))."""
+    torch.manual_seed(0)
+    n = 100_000
+    module = torch.nn.Module()
+    module.scale = torch.nn.Parameter(torch.zeros(n))
+    xavier_init(module, gain=2.0, distribution="normal")
+    assert module.scale.std().item() == pytest.approx(2.0 * (1 / n) ** 0.5, rel=0.02)
