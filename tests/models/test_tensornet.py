@@ -309,6 +309,48 @@ def test_warp_pyg_parity_pretrained(structure_fixture, request):
     )
 
 
+def test_warp_pyg_parity_so3_chiral():
+    """SO(3) TensorNet must give the same energy with Warp and PyG on a chiral structure (#861).
+
+    The Warp radial kernel used to build the transposed antisymmetric edge tensor, so the Warp path evaluated the
+    mirror image of the input. O(3) is insensitive to this; SO(3) is not.
+    """
+    _skip_if_no_warp()
+    from pymatgen.core import Lattice, Structure
+
+    from matgl.ext.pymatgen import Structure2Graph
+
+    lattice = Lattice.cubic(5.0)
+    species = ["Mo", "S", "S", "Mo", "S"]
+    frac_coords = np.array(
+        [[0.0, 0.0, 0.0], [0.31, 0.12, 0.05], [0.08, 0.37, 0.21], [0.27, 0.19, 0.43], [0.52, 0.61, 0.17]]
+    )
+    structure = Structure(lattice, species, frac_coords)
+    mirror = Structure(lattice, species, -frac_coords)  # inversion = mirror image up to a proper rotation
+
+    torch.manual_seed(0)
+    init_args = {"element_types": ("Mo", "S"), "is_intensive": False, "equivariance_invariance_group": "SO(3)"}
+    model_pyg = TensorNet(**init_args, use_warp=False)
+    model_warp = TensorNet(**init_args, use_warp=True)
+    model_warp.load_state_dict(model_pyg.state_dict(), strict=False)
+    model_pyg.eval()
+    model_warp.eval()
+
+    converter = Structure2Graph(element_types=("Mo", "S"), cutoff=model_pyg.cutoff)
+
+    def energy(model, struct):
+        g, lat, _ = converter.get_graph(struct)
+        _set_pos_and_pbc(g, lat)
+        with torch.no_grad():
+            return model(g=g).item()
+
+    e_pyg = energy(model_pyg, structure)
+    chirality_gap = abs(e_pyg - energy(model_pyg, mirror))
+    # Sanity check that the test is sensitive: an SO(3) model distinguishes a chiral structure from its mirror image.
+    assert chirality_gap > 1e-5
+    assert abs(energy(model_warp, structure) - e_pyg) < 0.01 * chirality_gap
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [{"is_intensive": False}, {"is_intensive": True}, {"is_intensive": True, "readout_type": "reduce_atom"}],
