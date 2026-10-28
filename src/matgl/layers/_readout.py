@@ -7,63 +7,104 @@ Public exports re-exported from :mod:`matgl.layers`:
 * :class:`ReduceReadOut` -- ``sum``/``mean``/``max`` pooling;
 * :class:`WeightedReadOut` and :class:`WeightedAtomReadOut` -- learned
   per-atom weighting.
+
+The graph-level readouts take per-node features plus a ``batch`` index and an
+optional ``num_graphs``. Pass ``num_graphs`` whenever it is known: inferring it
+from ``batch.max() + 1`` drops rows for trailing graphs that contribute no
+nodes. For backwards compatibility, ``ReduceReadOut`` and
+``WeightedAtomReadOut`` also accept a PyG ``Data``/``Batch`` carrying
+``node_feat`` (and ``batch``) in place of the feature tensor.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 from torch import nn
 from torch.nn import LSTM
-from torch_geometric.nn import global_add_pool, global_max_pool, global_mean_pool
 from torch_geometric.nn.aggr import Set2Set as PyGSet2Set
 from torch_geometric.utils import softmax as pyg_softmax
 
-from matgl.layers import MLP, GatedMLP
+from matgl.utils.maths import scatter_add
+
+from ._core import MLP, GatedMLP
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from torch_geometric.data import Data
+
+def _resolve_inputs(
+    node_feat: Any, batch: torch.Tensor | None, num_graphs: int | None
+) -> tuple[torch.Tensor, torch.Tensor, int]:
+    """Normalise readout inputs to ``(node_feat, batch, num_graphs)``.
+
+    Accepts either a feature tensor or a PyG graph carrying ``node_feat`` (legacy call style). A missing ``batch``
+    means all nodes belong to a single graph.
+    """
+    if not isinstance(node_feat, torch.Tensor):
+        graph = node_feat
+        node_feat = graph.node_feat
+        if node_feat is None:
+            raise ValueError("Data object must contain node features (graph.node_feat)")
+        if batch is None:
+            batch = getattr(graph, "batch", None)
+        if num_graphs is None and batch is not None:
+            num_graphs = getattr(graph, "num_graphs", None)
+    if batch is None:
+        batch = torch.zeros(node_feat.size(0), dtype=torch.long, device=node_feat.device)
+        num_graphs = 1 if num_graphs is None else num_graphs
+    else:
+        batch = batch.to(device=node_feat.device, dtype=torch.long)
+    if num_graphs is None:
+        num_graphs = int(batch.max().item()) + 1 if batch.numel() > 0 else 1
+    return node_feat, batch, int(num_graphs)
 
 
 class ReduceReadOut(nn.Module):
-    """Reduce node or edge attributes into lower dimensional tensors as readout in PyTorch Geometric.
-
-    This could be summing up the nodes or edges, or taking the mean, etc.
-    """
+    """Reduce node (or edge) features into graph-level representations by ``sum``/``mean``/``max`` pooling."""
 
     def __init__(self, op: str = "mean", field: str = "node_feat"):
         """Initialize the ReduceReadOut.
 
         Args:
             op (str): Operation for the reduction ('mean', 'sum', or 'max').
-            field (str): Field to perform the reduction ('node_feat' or 'edge_feat').
+            field (str): Name of the field being reduced. Informational; the caller passes the tensor to reduce.
         """
         super().__init__()
         self.op = op
         self.field = field
         if op not in ["mean", "sum", "max"]:
             raise ValueError("op must be 'mean', 'sum', or 'max'")
-        if field not in ["node_feat"]:
-            raise ValueError("field must be 'node_feat'")
 
-        # Map operation to PyG pooling function
-        self.pool_fn = {"mean": global_mean_pool, "sum": global_add_pool, "max": global_max_pool}[op]
-
-    def forward(self, graph: Data) -> torch.Tensor:
-        """Forward pass.
+    def forward(
+        self,
+        node_feat: torch.Tensor,
+        batch: torch.Tensor | None = None,
+        num_graphs: int | None = None,
+    ) -> torch.Tensor:
+        """Pool per-node features into per-graph features.
 
         Args:
-            graph (Data): PyG Data object containing x, edge_attr, edge_index, and batch.
+            node_feat: Per-node features, shape ``(num_nodes, feature_dim)``, or a PyG graph with ``node_feat``.
+            batch: Per-node graph index, shape ``(num_nodes,)``. ``None`` treats all nodes as one graph.
+            num_graphs: Number of graphs in the batch. Inferred from ``batch`` if ``None``.
 
         Returns:
-            torch.Tensor: Pooled features, shape (num_graphs, feature_dim).
+            Pooled features, shape ``(num_graphs, feature_dim)``. Graphs without nodes give zeros.
         """
-        if not hasattr(graph, "node_feat") or graph.node_feat is None:
-            raise ValueError("Data object must contain node features (graph.node_feat)")
-        return self.pool_fn(graph.node_feat, graph.batch)
+        node_feat, batch, num_graphs = _resolve_inputs(node_feat, batch, num_graphs)
+        shape = (num_graphs, node_feat.size(1))
+        if self.op == "max":
+            out = torch.full(shape, float("-inf"), device=node_feat.device, dtype=node_feat.dtype)
+            out = out.index_reduce(0, batch, node_feat, "amax", include_self=False)
+            counts = torch.bincount(batch, minlength=num_graphs)
+            return torch.where(counts.unsqueeze(1) > 0, out, torch.zeros_like(out))
+        out = torch.zeros(shape, device=node_feat.device, dtype=node_feat.dtype).index_add(0, batch, node_feat)
+        if self.op == "mean":
+            counts = torch.bincount(batch, minlength=num_graphs).clamp(min=1)
+            out = out / counts.unsqueeze(1).to(out.dtype)
+        return out
 
 
 class WeightedReadOut(nn.Module):
@@ -97,7 +138,7 @@ class WeightedReadOut(nn.Module):
 
 
 class WeightedAtomReadOut(nn.Module):
-    """Weighted atom readout for graph properties in PyTorch Geometric.
+    """Weighted atom readout for graph properties.
 
     This follows the TensorFlow WeightedReadout implementation:
 
@@ -140,25 +181,23 @@ class WeightedAtomReadOut(nn.Module):
         )
         self.weight_activation = nn.Sigmoid()
 
-    def forward(self, graph: Data) -> torch.Tensor:
-        """Run the weighted atom readout.
+    def forward(
+        self,
+        node_feat: torch.Tensor,
+        batch: torch.Tensor | None = None,
+        num_graphs: int | None = None,
+    ) -> torch.Tensor:
+        """Aggregate weighted node features into graph-level representations.
 
         Args:
-            graph: PyG graph Data object with ``graph.node_feat`` and ``graph.batch``.
+            node_feat: Node features, shape ``(num_nodes, in_feats)``, or a PyG graph with ``node_feat``.
+            batch: Per-node graph index, shape ``(num_nodes,)``. ``None`` treats all nodes as one graph.
+            num_graphs: Number of graphs in the batch. Inferred from ``batch`` if ``None``.
 
         Returns:
-            atomic_properties: Tensor of shape ``[num_graphs, output_dim]``.
+            Graph-level tensor with shape ``(num_graphs, output_dim)``. Graphs without nodes give zeros.
         """
-        node_feat = graph.node_feat
-
-        if hasattr(graph, "batch") and graph.batch is not None:
-            batch = graph.batch
-        else:
-            batch = torch.zeros(
-                node_feat.shape[0],
-                dtype=torch.long,
-                device=node_feat.device,
-            )
+        node_feat, batch, num_graphs = _resolve_inputs(node_feat, batch, num_graphs)
 
         # updated_field = self.mlp(field)
         updated_field = self.mlp(node_feat)  # [num_nodes, output_dim]
@@ -167,13 +206,13 @@ class WeightedAtomReadOut(nn.Module):
         weights = self.weight_activation(self.weight(node_feat))  # [num_nodes, 1]
 
         # sum_j w_j for each graph
-        weight_sum = global_add_pool(weights, batch)  # [num_graphs, 1]
+        weight_sum = scatter_add(weights, batch, dim_size=num_graphs, dim=0)  # [num_graphs, 1]
 
         # factor_i = w_i / sum_j w_j
         factor = weights / weight_sum[batch].clamp(min=1e-8)  # [num_nodes, 1]
 
         # sum_i factor_i * updated_field_i
-        return global_add_pool(factor * updated_field, batch)
+        return scatter_add(factor * updated_field, batch, dim_size=num_graphs, dim=0)  # [num_graphs, output_dim]
 
 
 class Set2SetReadOut(PyGSet2Set):
