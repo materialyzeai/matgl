@@ -69,11 +69,12 @@ jobs:
         run: |
           uv run python -c "import torch; print(torch.__version__)"
           uv run pytest --cov=matgl --cov-report=xml --cov-report=term tests --color=yes
+      # ops and alchmtk exercise different optional backends; upload both so Codecov merges their coverage.
       - name: Upload coverage artifacts
-        if: matrix.config.optionals == 'ops'
+        if: matrix.config.optionals == 'ops' || matrix.config.optionals == 'alchmtk'
         uses: actions/upload-artifact@v5
         with:
-          name: coverage
+          name: coverage-${{ matrix.config.optionals }}
           path: coverage.xml
           if-no-files-found: error
 
@@ -85,13 +86,12 @@ jobs:
       - name: Download coverage
         uses: actions/download-artifact@v5
         with:
-          name: coverage
-          path: .
-          merge-multiple: true
+          pattern: coverage-*
+          path: coverage
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: coverage.xml
+          files: coverage/coverage-ops/coverage.xml,coverage/coverage-alchmtk/coverage.xml
           fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
