@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -32,7 +31,7 @@ def _check_scalar_output(output):
     assert torch.isfinite(output).all()
 
 
-def test_model(graph_MoS):
+def test_model(graph_MoS, tmp_path):
     torch.manual_seed(0)
 
     _, graph, _ = graph_MoS
@@ -44,11 +43,8 @@ def test_model(graph_MoS):
         output = model(g=graph)
         _check_scalar_output(output)
 
-    model.save(".")
-    TensorNet.load(".")
-    os.remove("model.pt")
-    os.remove("model.json")
-    os.remove("state.pt")
+    model.save(tmp_path)
+    TensorNet.load(tmp_path)
 
     model = _make_tensornet(is_intensive=False, equivariance_invariance_group="SO(3)")
     model.to(_device_of(graph))
@@ -311,3 +307,25 @@ def test_warp_pyg_parity_pretrained(structure_fixture, request):
     assert torch.allclose(out_warp, out_pyg, atol=1e-5, rtol=1e-5), (
         f"{structure_fixture}: warp={out_warp.detach().cpu()} vs pyg={out_pyg.detach().cpu()}"
     )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"is_intensive": False}, {"is_intensive": True}, {"is_intensive": True, "readout_type": "reduce_atom"}],
+    ids=["extensive", "weighted_atom", "reduce_atom"],
+)
+def test_float64_dtype(graph_MoS, kwargs, tmp_path):
+    """``dtype=torch.float64`` must apply to every layer, including the readout, and survive save/load."""
+    structure, graph, _ = graph_MoS
+    lat = torch.tensor(structure.lattice.matrix, dtype=torch.float64)
+    graph = graph.clone()
+    graph.pos = graph.frac_coords.double() @ lat
+    graph.pbc_offshift = graph.pbc_offset.double() @ lat
+    model = TensorNet(element_types=["Mo", "S"], dtype=torch.float64, use_warp=False, **kwargs)
+    assert {p.dtype for p in model.parameters()} == {torch.float64}
+    output = model(g=graph)
+    assert output.dtype == torch.float64
+    model.save(tmp_path)
+    loaded = TensorNet.load(tmp_path)
+    assert {p.dtype for p in loaded.parameters()} == {torch.float64}
+    assert torch.allclose(loaded(g=graph), output)

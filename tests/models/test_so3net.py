@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 import numpy as np
 import pytest
 import torch
@@ -16,17 +14,14 @@ def _set_pos_and_pbc(graph, lat):
     graph.pos = graph.frac_coords @ lat[0]
 
 
-def test_model(graph_MoS):
+def test_model(graph_MoS, tmp_path):
     _, graph, _ = graph_MoS
     for act in ["swish", "tanh", "sigmoid", "softplus2", "softexp"]:
         model = SO3Net(is_intensive=False, activation_type=act)
         output = model(g=graph)
         assert torch.numel(output) == 1
-    model.save(".")
-    SO3Net.load(".")
-    os.remove("model.pt")
-    os.remove("model.json")
-    os.remove("state.pt")
+    model.save(tmp_path)
+    SO3Net.load(tmp_path)
 
 
 def test_exceptions():

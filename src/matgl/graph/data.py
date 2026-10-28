@@ -38,11 +38,65 @@ logger = logging.getLogger(__name__)
 _CACHE_FORMAT_VERSION = 2
 
 
+def _json_default(obj: Any) -> Any:
+    """JSON fallback for numpy arrays/scalars nested inside label lists."""
+    if isinstance(obj, np.ndarray | np.generic):
+        return obj.tolist()
+    if isinstance(obj, torch.Tensor):
+        return obj.tolist()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _hash_structure(hasher: Any, structure: Any) -> None:
+    """Fold the geometry and species of a pymatgen Structure/Molecule or ASE Atoms into ``hasher``."""
+    if hasattr(structure, "get_positions"):  # ASE Atoms
+        hasher.update(np.asarray(structure.get_atomic_numbers(), dtype=np.int64).tobytes())
+        hasher.update(np.ascontiguousarray(structure.get_positions(), dtype=np.float64).tobytes())
+        hasher.update(np.ascontiguousarray(structure.cell.array, dtype=np.float64).tobytes())
+        hasher.update(np.asarray(structure.pbc, dtype=np.int8).tobytes())
+        return
+    hasher.update("|".join(site.species_string for site in structure).encode("utf-8"))
+    if hasattr(structure, "lattice"):  # pymatgen Structure
+        hasher.update(np.ascontiguousarray(structure.lattice.matrix, dtype=np.float64).tobytes())
+        hasher.update(np.asarray(structure.lattice.pbc, dtype=np.int8).tobytes())
+        hasher.update(np.ascontiguousarray(structure.frac_coords, dtype=np.float64).tobytes())
+    else:  # pymatgen Molecule
+        hasher.update(np.ascontiguousarray(structure.cart_coords, dtype=np.float64).tobytes())
+        hasher.update(f"{structure.charge}|{structure.spin_multiplicity}".encode())
+
+
+def _compute_data_hash(structures: list, labels: dict) -> str:
+    """Content hash of the input structures and labels.
+
+    Stored in the cache fingerprint so that a cache built from different structures or labels (e.g. two datasets
+    sharing the default ``root``) is never silently reused.
+    """
+    hasher = hashlib.sha256()
+    hasher.update(str(len(structures)).encode("utf-8"))
+    for structure in structures:
+        _hash_structure(hasher, structure)
+    for key in sorted(labels):
+        hasher.update(f"\x00{key}\x00".encode())
+        for value in labels[key]:
+            if isinstance(value, str):
+                hasher.update(value.encode("utf-8"))
+                continue
+            try:
+                arr = np.asarray(value, dtype=np.float64)
+            except (TypeError, ValueError):
+                hasher.update(json.dumps(value, sort_keys=True, default=_json_default).encode("utf-8"))
+                continue
+            hasher.update(str(arr.shape).encode("utf-8"))
+            hasher.update(np.ascontiguousarray(arr).tobytes())
+    return hasher.hexdigest()[:32]
+
+
 def _compute_cache_fingerprint(
     converter: GraphConverter | None,
     include_line_graph: bool,
     include_ref_charge: bool,
     graph_labels: list | None = None,
+    data_hash: str | None = None,
 ) -> dict[str, object]:
     """Build a small, JSON-serializable fingerprint of the active dataset config.
 
@@ -50,6 +104,8 @@ def _compute_cache_fingerprint(
     config drift (changed cutoff, different element list, swapped converter
     class, or a change in the ``graph_labels`` that back the state attributes)
     and trigger reprocessing rather than silently returning stale data.
+    ``data_hash`` (see :func:`_compute_data_hash`) does the same for the input
+    structures and labels.
     """
     if converter is None:
         converter_class = None
@@ -57,7 +113,9 @@ def _compute_cache_fingerprint(
         element_hash: str | None = None
     else:
         converter_class = type(converter).__name__
-        cutoff = float(getattr(converter, "cutoff", float("nan")))
+        # None (not NaN) when absent: NaN != NaN would make the fingerprint never match.
+        raw_cutoff = getattr(converter, "cutoff", None)
+        cutoff = None if raw_cutoff is None else float(raw_cutoff)
         element_types = getattr(converter, "element_types", None)
         if element_types is None:
             element_hash = None
@@ -79,6 +137,7 @@ def _compute_cache_fingerprint(
         "graph_labels_hash": graph_labels_hash,
         "include_line_graph": include_line_graph,
         "include_ref_charge": include_ref_charge,
+        "data_hash": data_hash,
     }
 
 
@@ -410,13 +469,12 @@ class MGLDataset(Dataset):
         self.include_ref_charge = include_ref_charge
         self.converter = converter
         self.structures = structures or []
-        self.labels = labels or {}
-        for k, v in self.labels.items():
-            self.labels[k] = v.tolist() if isinstance(v, np.ndarray) else v
+        self.labels = {k: v.tolist() if isinstance(v, np.ndarray) else v for k, v in (labels or {}).items()}
         self.graph_labels = graph_labels
         self.clear_processed = clear_processed
         self.save_cache = save_cache
         self.root = root
+        self._fingerprint: dict[str, object] | None = None
 
         super().__init__(root, transform, pre_transform, pre_filter)
 
@@ -462,9 +520,7 @@ class MGLDataset(Dataset):
         if self.converter is None:
             return True
 
-        expected = _compute_cache_fingerprint(
-            self.converter, self.include_line_graph, self.include_ref_charge, self.graph_labels
-        )
+        expected = self._expected_fingerprint()
         fingerprint_path = root / self.filename_fingerprint
         if not fingerprint_path.exists():
             logger.warning(
@@ -477,16 +533,29 @@ class MGLDataset(Dataset):
         except (json.JSONDecodeError, OSError) as err:
             logger.warning("Unreadable MGLDataset cache fingerprint at %s (%s); reprocessing.", fingerprint_path, err)
             return False
+        if expected["data_hash"] is None:
+            # No structures supplied (load from an existing cache with a converter): only the converter
+            # config can be checked.
+            stored = {**stored, "data_hash": None}
         if stored != expected:
             logger.warning(
-                "MGLDataset cache at %s was built with a different converter config "
-                "(stored=%s, expected=%s); reprocessing.",
+                "MGLDataset cache at %s was built with a different converter config or different "
+                "structures/labels (stored=%s, expected=%s); reprocessing.",
                 self.root,
                 stored,
                 expected,
             )
             return False
         return True
+
+    def _expected_fingerprint(self) -> dict[str, object]:
+        """Fingerprint of the current config and inputs, computed once (hashing the inputs is O(dataset))."""
+        if self._fingerprint is None:
+            data_hash = _compute_data_hash(self.structures, self.labels) if self.structures else None
+            self._fingerprint = _compute_cache_fingerprint(
+                self.converter, self.include_line_graph, self.include_ref_charge, self.graph_labels, data_hash
+            )
+        return self._fingerprint
 
     def process(self) -> None:
         """Convert Pymatgen structures into PyG Data objects."""
@@ -537,9 +606,9 @@ class MGLDataset(Dataset):
         root = Path(self.root)
         root.mkdir(parents=True, exist_ok=True)
 
-        if self.labels:
-            with (root / self.filename_labels).open("w") as file:
-                json.dump(self.labels, file)
+        # Always write labels (possibly empty) so a stale labels file from an earlier dataset is never reused.
+        with (root / self.filename_labels).open("w") as file:
+            json.dump(self.labels, file, default=_json_default)
 
         torch.save(self.graphs, root / self.filename)
         torch.save(self.lattices, root / self.filename_lattice)
@@ -547,9 +616,7 @@ class MGLDataset(Dataset):
 
         # Write the fingerprint last so a partial cache (e.g. crash mid-save)
         # is detected as stale on the next run.
-        fingerprint = _compute_cache_fingerprint(
-            self.converter, self.include_line_graph, self.include_ref_charge, self.graph_labels
-        )
+        fingerprint = self._expected_fingerprint()
         (root / self.filename_fingerprint).write_text(json.dumps(fingerprint, indent=2, sort_keys=True))
 
     def load(self) -> None:

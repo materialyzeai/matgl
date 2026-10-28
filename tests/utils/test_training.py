@@ -4,8 +4,6 @@ import os
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # Required for deterministic CUDA operations
 
-import contextlib
-import shutil
 from functools import partial
 
 # This function is used for M3GNet property dataset
@@ -107,8 +105,6 @@ class TestModelTrainer:
         assert torch.all(pred_LFP_energy < 0)
         assert torch.all(pred_BNO_energy < 0)
 
-        self.teardown_class()
-
     def test_qet_training(self, LiFePO4, BaNiO3):
         torch.manual_seed(0)
         structures = [LiFePO4, BaNiO3] * 5
@@ -159,13 +155,6 @@ class TestModelTrainer:
         # Loose check: energies should be finite after a 2-epoch run.
         assert torch.isfinite(pred_LFP_energy).all()
         assert torch.isfinite(pred_BNO_energy).all()
-
-        self.teardown_class()
-
-    @classmethod
-    def teardown_class(cls):
-        with contextlib.suppress(FileNotFoundError):
-            shutil.rmtree("lightning_logs")
 
 
 def test_prediction_logger_train_and_val(LiFePO4, BaNiO3, tmp_path):
@@ -242,9 +231,6 @@ def test_prediction_logger_train_and_val(LiFePO4, BaNiO3, tmp_path):
     on_disk = torch.load(log_path, weights_only=True)
     assert torch.equal(on_disk["train_energy_preds"], log["train_energy_preds"])
     assert torch.equal(on_disk["val_energy_preds"], log["val_energy_preds"])
-
-    with contextlib.suppress(FileNotFoundError):
-        shutil.rmtree("lightning_logs")
 
 
 def test_prediction_logger_with_stress_and_charge(LiFePO4, BaNiO3, tmp_path):
@@ -349,9 +335,6 @@ def test_prediction_logger_with_stress_and_charge(LiFePO4, BaNiO3, tmp_path):
     assert "train_stress_preds" not in log_off
     assert "train_charge_preds" not in log_off
 
-    with contextlib.suppress(FileNotFoundError):
-        shutil.rmtree("lightning_logs")
-
 
 def test_prediction_logger_requires_indices(LiFePO4, BaNiO3):
     """PredictionLogger raises a clear error when add_sample_indices wasn't called."""
@@ -393,9 +376,6 @@ def test_prediction_logger_requires_indices(LiFePO4, BaNiO3):
     )
     with pytest.raises(RuntimeError, match="add_sample_indices"):
         trainer.fit(model=lit_model, train_dataloaders=train_loader, val_dataloaders=val_loader)
-
-    with contextlib.suppress(FileNotFoundError):
-        shutil.rmtree("lightning_logs")
 
 
 def _make_efs_batch():

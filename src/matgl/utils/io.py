@@ -16,6 +16,7 @@ from typing import cast
 import numpy as np
 import torch
 from huggingface_hub import HfApi, create_repo, hf_hub_download
+from monty.json import MSONable
 from numpy._core.multiarray import _reconstruct as _np_reconstruct
 
 from matgl.config import MATGL_CACHE
@@ -141,7 +142,8 @@ class IOMixIn:
         if kwargs is not None:
             d.update(kwargs)
 
-        # If one of the args is a subclass of IOMixIn, we will serialize that class.
+        # If one of the args is a subclass of IOMixIn, we will serialize that class. Other MSONable args (e.g. target
+        # transformers) are stored via ``as_dict()``, since ``load`` only unpickles tensors and plain containers.
         for k, v in d.items():
             if issubclass(v.__class__, IOMixIn):
                 d[k] = {
@@ -150,6 +152,8 @@ class IOMixIn:
                     "@model_version": getattr(v, "__version__", 0),
                     "init_args": v._init_args,
                 }
+            elif isinstance(v, MSONable):
+                d[k] = v.as_dict()
         self._init_args = d
 
     def save(self, path: str | Path = ".", metadata: dict | None = None, makedirs: bool = True):
@@ -236,8 +240,13 @@ class IOMixIn:
                 classname = v["@class"]
                 mod = __import__(modname, globals(), locals(), [classname], 0)
                 cls_ = getattr(mod, classname)
-                _check_ver(cls_, v)  # Check version of any subclasses too.
-                d[k] = cls_(**v["init_args"])
+                if "init_args" in v:  # IOMixIn subclass
+                    _check_ver(cls_, v)  # Check version of any subclasses too.
+                    d[k] = cls_(**v["init_args"])
+                elif isinstance(cls_, type) and issubclass(cls_, MSONable):
+                    d[k] = cast("type[MSONable]", cls_).from_dict(v)
+                else:
+                    raise ValueError(f"Cannot deserialize argument {k!r} of unsupported type {modname}.{classname}.")
         d = {k: v for k, v in d.items() if not k.startswith("@")}
         model = cls(**d)
         result = model.load_state_dict(state, strict=False)  # type: ignore
