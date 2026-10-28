@@ -25,7 +25,7 @@ from matgl.layers import (
 )
 from matgl.layers._embedding import TensorEmbedding as TensorEmbeddingPyG
 from matgl.layers._graph_convolution import TensorNetInteraction as TensorNetInteractionPyG
-from matgl.layers._readout_torch import (
+from matgl.layers._readout import (
     ReduceReadOut,
     WeightedAtomReadOut,
     WeightedReadOut,
@@ -353,7 +353,7 @@ class TensorNet(MatGLModel):
         num_graphs = getattr(g, "num_graphs", None)
 
         if self.is_intensive:
-            node_vec = self.readout(x, batch)
+            node_vec = self.readout(x, batch, num_graphs=num_graphs)
             output = self.final_layer(node_vec)
             if self.task_type == "classification":
                 output = self.sigmoid(output)
