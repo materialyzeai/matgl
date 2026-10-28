@@ -56,11 +56,12 @@ class _EpochErrorMetric(torchmetrics.Metric):
             value: Per-batch MAE, or RMSE when ``squared=True``.
             count: Number of labelled elements the batch value was averaged over.
         """
+        # No .item() / Python branching on device tensors: avoids a host-device sync per metric per step.
         count = torch.as_tensor(count, dtype=torch.float64, device=self.count.device)
-        if count.item() == 0:
-            return
-        value = value.detach().reshape(-1)[0].to(torch.float64)
-        self.total += (value**2 if self.squared else value) * count
+        value = value.detach().reshape(-1)[0].to(device=self.total.device, dtype=torch.float64)
+        contribution = (value**2 if self.squared else value) * count
+        # A component with no labelled elements may report NaN; it must not poison the epoch sum.
+        self.total += torch.where(count > 0, contribution, torch.zeros_like(contribution))
         self.count += count
 
     def compute(self) -> torch.Tensor:
