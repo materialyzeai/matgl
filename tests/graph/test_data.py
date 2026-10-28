@@ -1,16 +1,26 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 
 # This function is used for M3GNet property dataset
 from functools import partial
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from pymatgen.core import Molecule
 
 from matgl.ext.pymatgen import Molecule2Graph, Structure2Graph, get_element_list
-from matgl.graph.data import MGLDataLoader, MGLDataset, collate_fn_graph, collate_fn_pes, split_dataset
+from matgl.graph.data import (
+    MGLDataLoader,
+    MGLDataset,
+    _compute_cache_fingerprint,
+    collate_fn_graph,
+    collate_fn_pes,
+    split_dataset,
+)
 
 module_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -471,3 +481,56 @@ def test_mgl_dataloader_autodetect_collate_fn(LiFePO4, BaNiO3):
     assert mag_batch[6].ndim == 2
     assert mag_batch[6].shape[1] == 1
     assert mag_batch[6].shape[0] == mag_batch[0].num_nodes
+
+
+class TestMGLDatasetCache:
+    """The on-disk cache must never be reused for different structures or labels."""
+
+    @staticmethod
+    def _dataset(structures, energies, root, save_cache=True, **kwargs):
+        converter = Structure2Graph(element_types=("Li", "Fe", "P", "O", "Ba", "Ni"), cutoff=4.0)
+        labels = {"energies": energies} if energies is not None else {}
+        return MGLDataset(
+            structures=structures, converter=converter, labels=labels, root=str(root), save_cache=save_cache, **kwargs
+        )
+
+    @pytest.mark.parametrize("save_cache", [True, False])
+    def test_different_structures_same_root(self, LiFePO4, BaNiO3, tmp_path, save_cache):
+        self._dataset([LiFePO4] * 5, [1.0] * 5, tmp_path)
+        dataset = self._dataset([BaNiO3] * 3, [2.0] * 3, tmp_path, save_cache=save_cache)
+        assert len(dataset) == 3
+        assert dataset.labels == {"energies": [2.0] * 3}
+        assert dataset[0][0].num_nodes == len(BaNiO3)
+
+    def test_different_labels_same_structures(self, LiFePO4, tmp_path):
+        self._dataset([LiFePO4] * 2, [1.0, 1.0], tmp_path)
+        dataset = self._dataset([LiFePO4] * 2, [3.0, 4.0], tmp_path)
+        assert dataset.labels == {"energies": [3.0, 4.0]}
+
+    def test_identical_inputs_reuse_cache(self, LiFePO4, BaNiO3, tmp_path):
+        self._dataset([LiFePO4, BaNiO3], [1.0, 2.0], tmp_path)
+        dataset = self._dataset([LiFePO4, BaNiO3], [1.0, 2.0], tmp_path)
+        assert dataset.has_cache()
+        # Loading with a converter but no structures still uses the cache.
+        loaded = self._dataset(None, None, tmp_path)
+        assert len(loaded) == 2
+        assert loaded.labels == {"energies": [1.0, 2.0]}
+
+    def test_stale_labels_not_reused(self, LiFePO4, tmp_path):
+        self._dataset([LiFePO4] * 2, [1.0, 1.0], tmp_path)
+        dataset = self._dataset([LiFePO4] * 2, None, tmp_path, include_line_graph=True)
+        assert dataset.labels == {}
+
+    def test_nested_numpy_labels(self, LiFePO4, tmp_path):
+        labels = {"forces": [np.zeros((len(LiFePO4), 3))]}
+        converter = Structure2Graph(element_types=("Li", "Fe", "P", "O"), cutoff=4.0)
+        dataset = MGLDataset(structures=[LiFePO4], converter=converter, labels=labels, root=str(tmp_path))
+        assert isinstance(labels["forces"][0], np.ndarray), "caller's labels must not be mutated"
+        assert np.allclose(dataset[0][3]["forces"].numpy(), 0.0)
+
+    def test_fingerprint_without_cutoff_is_stable(self):
+        converter = SimpleNamespace(element_types=("Li", "O"))  # a converter with no ``cutoff`` attribute
+        fingerprint = _compute_cache_fingerprint(converter, False, False)
+        assert fingerprint["cutoff"] is None
+        # Round-trips through JSON (as stored on disk) and still compares equal; NaN would not.
+        assert json.loads(json.dumps(fingerprint)) == _compute_cache_fingerprint(converter, False, False)
