@@ -69,12 +69,13 @@ jobs:
         run: |
           uv run python -c "import torch; print(torch.__version__)"
           uv run pytest --cov=matgl --cov-report=xml --cov-report=term tests --color=yes
-      # ops and alchmtk exercise different optional backends; upload both so Codecov merges their coverage.
+      # Jobs with and without nvalchemiops take different converter paths (and jax adds ext/jax.py);
+      # upload every Ubuntu job's report so Codecov merges them.
       - name: Upload coverage artifacts
-        if: matrix.config.optionals == 'ops' || matrix.config.optionals == 'alchmtk'
+        if: matrix.config.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v5
         with:
-          name: coverage-${{ matrix.config.optionals }}
+          name: coverage-${{ matrix.config.optionals || 'base' }}
           path: coverage.xml
           if-no-files-found: error
 
@@ -91,7 +92,7 @@ jobs:
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: coverage/coverage-ops/coverage.xml,coverage/coverage-alchmtk/coverage.xml
+          files: coverage/coverage-base/coverage.xml,coverage/coverage-ops/coverage.xml,coverage/coverage-alchmtk/coverage.xml,coverage/coverage-jax/coverage.xml
           fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
