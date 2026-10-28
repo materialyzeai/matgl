@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import itertools
-import os
 from pathlib import Path
 
 import numpy as np
@@ -30,18 +29,15 @@ def _prep_graph(graph, structure):
     return graph
 
 
-def test_model(graph_MoS):
+def test_model(graph_MoS, tmp_path):
     structure, graph, _ = graph_MoS
     graph = _prep_graph(graph, structure)
     for act in ["swish", "tanh", "sigmoid", "softplus2", "softexp"]:
         model = M3GNet(is_intensive=False, activation_type=act)
         output = model(g=graph)
         assert torch.numel(output) == 1
-    model.save(".")
-    M3GNet.load(".")
-    os.remove("model.pt")
-    os.remove("model.json")
-    os.remove("state.pt")
+    model.save(tmp_path)
+    M3GNet.load(tmp_path)
 
 
 def test_exceptions():
@@ -135,13 +131,8 @@ def test_predict_structure(graph_MoS):
 
 def test_save_load(tmp_path):
     model = M3GNet(element_types=("Mo", "S"), is_intensive=True)
-    cwd = os.getcwd()
-    try:
-        os.chdir(tmp_path)
-        model.save(".")
-        M3GNet.load(".")
-    finally:
-        os.chdir(cwd)
+    model.save(tmp_path)
+    M3GNet.load(tmp_path)
 
 
 @pytest.fixture(scope="module")

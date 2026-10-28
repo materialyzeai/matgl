@@ -25,9 +25,9 @@ from matgl.layers import (
     build_gated_equivariant_mlp,
 )
 from matgl.layers._basis import RadialBesselFunction
-from matgl.layers._readout import Set2SetReadOut
-from matgl.layers._readout_torch import (
+from matgl.layers._readout import (
     ReduceReadOut,
+    Set2SetReadOut,
     WeightedAtomReadOut,
     WeightedReadOut,
 )
@@ -313,9 +313,9 @@ class SO3Net(MatGLModel):
         if self.target_property == "graph":
             if self.is_intensive:
                 if isinstance(self.readout, Set2SetReadOut):
-                    node_vec = self.readout(scalar_representation, batch)
+                    node_vec = self.readout(scalar_representation, batch, dim_size=num_graphs)
                 else:
-                    node_vec = self.readout(scalar_representation, batch)  # type: ignore[operator]
+                    node_vec = self.readout(scalar_representation, batch, num_graphs=num_graphs)  # type: ignore[operator]
                 fea_dict["readout"] = node_vec
                 output = self.final_layer(node_vec)
                 if self.task_type == "classification":

@@ -30,7 +30,7 @@ from matgl.layers import (
     SphericalBesselWithHarmonics,
     ThreeBodyInteractions,
 )
-from matgl.layers._readout_torch import ReduceReadOut, WeightedAtomReadOut, WeightedReadOut
+from matgl.layers._readout import ReduceReadOut, WeightedAtomReadOut, WeightedReadOut
 from matgl.utils.cutoff import polynomial_cutoff
 
 from ._core import MatGLModel, _warn_feature_dict_kwarg
@@ -200,12 +200,18 @@ class M3GNet(MatGLModel):
         self.field = field
         self.readout_type = readout_type
 
-    def _readout(self, node_feat: torch.Tensor, edge_feat: torch.Tensor, batch: torch.Tensor | None) -> torch.Tensor:
+    def _readout(
+        self,
+        node_feat: torch.Tensor,
+        edge_feat: torch.Tensor,
+        batch: torch.Tensor | None,
+        num_graphs: int | None = None,
+    ) -> torch.Tensor:
         """Dispatch the configured readout on the right field tensor."""
         x = node_feat if self.field == "node_feat" else edge_feat
-        if isinstance(self.readout, ReduceReadOut):
-            return self.readout(x, batch)
-        return self.readout(x, batch)
+        if isinstance(self.readout, Set2SetReadOut):
+            return self.readout(x, batch, dim_size=num_graphs)
+        return self.readout(x, batch, num_graphs=num_graphs)
 
     def forward(
         self,
@@ -301,7 +307,7 @@ class M3GNet(MatGLModel):
             }
 
         if self.is_intensive:
-            field_vec = self._readout(node_feat, edge_feat, batch)
+            field_vec = self._readout(node_feat, edge_feat, batch, num_graphs)
             if self.include_state and state_feat is not None:
                 state_view = state_feat.view(num_graphs, -1)
                 readout_vec = torch.hstack([field_vec, state_view])

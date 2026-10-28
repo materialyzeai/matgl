@@ -177,6 +177,7 @@ class QET(TensorNet):
         self.final_layer = WeightedReadOut(  # type: ignore[assignment]
             in_feats=units + extra_feats, dims=[units, units], num_targets=ntargets
         )
+        self.to(dtype)
 
     def forward(  # type: ignore[override]
         self,
