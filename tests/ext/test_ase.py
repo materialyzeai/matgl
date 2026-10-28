@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 from ase import units
-from ase.build import molecule
+from ase.build import fcc111, molecule
 from pymatgen.io.ase import AseAtomsAdaptor
 
 import matgl
@@ -159,6 +159,34 @@ def test_Relaxer(MoS, tmp_path):
     assert traj_file.exists()
 
 
+def test_relaxer_keeps_slab_vacuum_fixed():
+    """relax_cell=True on a z-slab relaxes the in-plane cell but must not stretch the vacuum direction."""
+    pot = matgl.load_model("materialyze/TensorNet-PES-MatPES-PBE-2025.2")
+    slab = fcc111("Cu", size=(2, 2, 3), vacuum=6.0)
+    slab.set_cell(slab.cell.array * [[1.04], [1.04], [1.0]], scale_atoms=True)  # in-plane strain to relax
+    cell0 = slab.cell.array.copy()
+    final = Relaxer(pot).relax(slab, steps=20)["final_structure"].lattice.matrix
+    np.testing.assert_allclose(final[2], cell0[2], atol=1e-8)
+    np.testing.assert_allclose(final[:2, 2], 0, atol=1e-8)
+    assert not np.allclose(final[:2], cell0[:2])
+
+
+def test_strainable_axes():
+    from matgl.ext.ase import _strainable_axes
+
+    slab = fcc111("Cu", size=(2, 2, 2), vacuum=6.0)
+    assert _strainable_axes(slab).tolist() == [True, True, False]
+    bulk = slab.copy()
+    bulk.pbc = True
+    assert _strainable_axes(bulk) is None
+    tilted = slab.copy()
+    cell = slab.cell.array.copy()
+    cell[2, 0] = 1.0  # vacuum vector no longer along z
+    tilted.set_cell(cell)
+    with pytest.warns(UserWarning, match="not aligned"):
+        assert _strainable_axes(tilted) is None
+
+
 def test_relaxer_accepts_custom_optimizer_class():
     class CustomOptimizer:
         pass
@@ -199,6 +227,52 @@ def test_get_graph_from_atoms_mol():
     assert np.allclose(graph.num_edges, 20)
     # check the state features
     assert np.allclose(state, [0.0, 0.0])
+
+
+def test_get_graph_from_atoms_partial_pbc():
+    """Slabs with pbc=(T, T, F) keep in-plane periodic images and get no images along the vacuum direction."""
+    slab = fcc111("Cu", size=(2, 2, 3), vacuum=8.0)
+    assert list(slab.pbc) == [True, True, False]
+    a2g = Atoms2Graph(element_types=["Cu"], cutoff=5.0)
+    graph, lat, _ = a2g.get_graph(slab)
+    assert lat.shape == (1, 3, 3)
+    assert torch.all(graph.pbc_offset[:, 2] == 0)
+    # Vacuum (16 A) exceeds the cutoff, so full pbc must give the same neighbour count.
+    slab_full_pbc = slab.copy()
+    slab_full_pbc.pbc = True
+    graph_full, _, _ = a2g.get_graph(slab_full_pbc)
+    assert graph.num_edges == graph_full.num_edges
+    # Thin box along z: the non-periodic direction must not create bonds through the cell boundary.
+    thin = slab.copy()
+    thin.center(vacuum=0.5, axis=2)
+    graph_thin, _, _ = a2g.get_graph(thin)
+    # Recentering shifts every atom by the same z offset, so in-cell and in-plane image pairs are unchanged; with
+    # only 1 A of vacuum, any extra edge here could only be a bond through the non-periodic z boundary.
+    assert graph_thin.num_edges == graph.num_edges
+    assert torch.all(graph_thin.pbc_offset[:, 2] == 0)
+
+
+@pytest.mark.parametrize("pbc", [True, (True, True, False), False], ids=["bulk", "slab", "molecule"])
+def test_atoms2graph_lattice_shape(pbc):
+    """Both neighbour-list backends (pymatgen, and nvalchemiops when installed) must return a (1, 3, 3) lattice;
+    JAXPESCalculator and structure_to_graph index it as a batch."""
+    atoms = fcc111("Cu", size=(2, 2, 2), vacuum=6.0)
+    atoms.pbc = pbc
+    graph, lat, _ = Atoms2Graph(element_types=["Cu"], cutoff=4.0).get_graph(atoms)
+    assert lat.shape == (1, 3, 3)
+    if not np.any(pbc):
+        assert torch.equal(lat[0], torch.eye(3, dtype=lat.dtype, device=lat.device))
+    assert graph.num_edges > 0
+
+
+def test_npt_nose_hoover_default_mask_fixes_slab_vacuum():
+    slab = fcc111("Cu", size=(2, 2, 2), vacuum=6.0)
+    md = MolecularDynamics(slab, potential=MagicMock(), ensemble="npt_nose_hoover")
+    np.testing.assert_array_equal(md.dyn.mask, np.diag([1, 1, 0]))
+    bulk = slab.copy()
+    bulk.pbc = True
+    md = MolecularDynamics(bulk, potential=MagicMock(), ensemble="npt_nose_hoover")
+    np.testing.assert_array_equal(md.dyn.mask, np.eye(3))
 
 
 def test_molecular_dynamics(MoS2):
