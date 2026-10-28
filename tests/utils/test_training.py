@@ -521,6 +521,50 @@ def test_potential_lightning_loss_fn_magmom_branches(magmom_target):
     assert torch.isfinite(out["Total_Loss"])
 
 
+def test_epoch_metrics_weight_by_labelled_elements(tmp_path):
+    """Epoch MAE/RMSE must equal the global values over all labelled elements, not a mean of per-batch values
+    weighted by the number of structures. Two batches with very different atom counts expose the difference."""
+    torch.manual_seed(0)
+    big = Structure(Lattice.cubic(3.5), ["Li"] * 2, [[0, 0, 0], [0.5, 0.5, 0.5]]) * (3, 3, 3)  # 54 atoms
+    small = Structure(Lattice.cubic(6.0), ["Li", "Li"], [[0, 0, 0], [0.3, 0.1, 0.0]])  # 2 atoms
+    structures = [big, small]
+    rng = np.random.default_rng(0)
+    forces = [rng.normal(size=(len(s), 3)) for s in structures]
+    forces[0] *= 5  # large errors on the big structure
+    dataset = MGLDataset(
+        structures=structures,
+        converter=Structure2Graph(element_types=("Li",), cutoff=4.0),
+        labels={
+            "energies": [-1.0 * len(s) for s in structures],
+            "forces": [f.tolist() for f in forces],
+            "stresses": [np.zeros((3, 3)).tolist()] * 2,
+        },
+        save_cache=False,
+        root=str(tmp_path / "MGLDataset"),
+    )
+    _, val_loader = MGLDataLoader(train_data=dataset, val_data=dataset, batch_size=1, num_workers=0)
+    lit = PotentialLightningModule(
+        model=TensorNet(element_types=("Li",), is_intensive=False, use_warp=False, cutoff=4.0), stress_weight=0.1
+    )
+    trainer = pl.Trainer(
+        accelerator="cpu", inference_mode=False, logger=False, enable_progress_bar=False, enable_model_summary=False
+    )
+    logged = trainer.validate(lit, dataloaders=val_loader, verbose=False)[0]
+
+    e_err, f_err = [], []
+    for g, lat, state_attr, energies, f_labels, _ in val_loader:
+        out = lit(g=g, lat=lat, state_attr=state_attr)
+        e_err.append(((out[0] - energies) / g.num_nodes).detach())
+        f_err.append((out[1] - f_labels).detach())
+    e_err, f_err = torch.cat(e_err), torch.cat(f_err)
+    assert logged["val_Force_MAE"] == pytest.approx(f_err.abs().mean().item(), rel=1e-5)
+    assert logged["val_Force_RMSE"] == pytest.approx(f_err.pow(2).mean().sqrt().item(), rel=1e-5)
+    assert logged["val_Energy_MAE"] == pytest.approx(e_err.abs().mean().item(), rel=1e-5)
+    assert logged["val_Energy_RMSE"] == pytest.approx(e_err.pow(2).mean().sqrt().item(), rel=1e-5)
+    # Accumulator states are not persisted, so checkpoints keep their previous keys.
+    assert not any("epoch_metrics" in key for key in lit.state_dict())
+
+
 def test_potential_lightning_on_load_checkpoint_fills_missing_keys():
     """on_load_checkpoint should populate keys that are missing from the checkpoint."""
     model = TensorNet(use_warp=False)
