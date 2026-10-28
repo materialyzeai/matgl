@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -32,7 +31,7 @@ def _check_scalar_output(output):
     assert torch.isfinite(output).all()
 
 
-def test_model(graph_MoS):
+def test_model(graph_MoS, tmp_path):
     torch.manual_seed(0)
 
     _, graph, _ = graph_MoS
@@ -44,11 +43,8 @@ def test_model(graph_MoS):
         output = model(g=graph)
         _check_scalar_output(output)
 
-    model.save(".")
-    TensorNet.load(".")
-    os.remove("model.pt")
-    os.remove("model.json")
-    os.remove("state.pt")
+    model.save(tmp_path)
+    TensorNet.load(tmp_path)
 
     model = _make_tensornet(is_intensive=False, equivariance_invariance_group="SO(3)")
     model.to(_device_of(graph))

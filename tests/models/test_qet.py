@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
 import torch
 from pymatgen.core import Lattice, Structure
@@ -33,7 +31,7 @@ def _single_atom_graph(cutoff=5.0):
     return element_types, graph, state
 
 
-def test_qet(graph_MoS):
+def test_qet(graph_MoS, tmp_path):
     """Forward across activations + save/load + SO(3) variant."""
     torch.manual_seed(0)
     torch.use_deterministic_algorithms(True)
@@ -47,10 +45,8 @@ def test_qet(graph_MoS):
         output = model(g=graph, total_charge=torch.tensor([0.0]))
         assert torch.numel(output) == 1
 
-    model.save(".")
-    QET.load(".")
-    for fname in ("model.pt", "model.json", "state.pt"):
-        os.remove(fname)
+    model.save(tmp_path)
+    QET.load(tmp_path)
 
     model = _make_qet(is_intensive=False, equivariance_invariance_group="SO(3)")
     output = model(g=graph, total_charge=torch.tensor([0.0]))

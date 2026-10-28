@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -68,13 +67,8 @@ def test_megnet_isolated_atom():
 
 def test_save_load(tmp_path):
     model = _make_megnet(dropout=0.1)
-    cwd = os.getcwd()
-    try:
-        os.chdir(tmp_path)
-        model.save(".", metadata={"description": "forme model"})
-        MEGNet.load(".")
-    finally:
-        os.chdir(cwd)
+    model.save(tmp_path, metadata={"description": "forme model"})
+    MEGNet.load(tmp_path)
 
 
 def test_save_load_custom_bond_expansion(tmp_path, graph_MoS):

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -94,16 +93,15 @@ def test_iomixin_num_parameters():
     assert model.num_parameters == 5 * 3 + 3
 
 
-def test_model_versioning():
+def test_model_versioning(tmp_path):
     model = OldModel(1, k=2)
-    model.save("OldModel")
+    model.save(tmp_path / "OldModel")
     with pytest.warns(UserWarning, match="Incompatible model version detected!"):
-        model2 = NewModel.load("OldModel")
+        model2 = NewModel.load(tmp_path / "OldModel")
     # Model will still load since there are no incompatibilities. Check the properties are reloaded.
     assert isinstance(model2, NewModel)
     assert model2.n == 1
     assert model2._init_args["k"] == 2
-    shutil.rmtree("OldModel")
 
 
 @pytest.mark.skipif(os.getenv("CI") == "true", reason="Unreliable in CI environments.")
@@ -266,19 +264,16 @@ def test_load_bad_model():
     with pytest.raises(ValueError, match=r"Bad serialized model or bad model name."):
         load_model("badbadmodelname")
 
-    try:
-        os.makedirs("bad_serialized_model")
-        with open("bad_serialized_model/model.json", "w") as f:
-            f.write("hello")
-        with open("bad_serialized_model/model.pt", "w") as f:
-            f.write("hello")
-        with open("bad_serialized_model/state.pt", "w") as f:
-            f.write("hello")
+    os.makedirs("bad_serialized_model")
+    with open("bad_serialized_model/model.json", "w") as f:
+        f.write("hello")
+    with open("bad_serialized_model/model.pt", "w") as f:
+        f.write("hello")
+    with open("bad_serialized_model/state.pt", "w") as f:
+        f.write("hello")
 
-        with pytest.raises(ValueError, match="Bad serialized model"):
-            load_model("bad_serialized_model")
-    finally:
-        shutil.rmtree("bad_serialized_model")
+    with pytest.raises(ValueError, match="Bad serialized model"):
+        load_model("bad_serialized_model")
 
 
 def test_load_model_wraps_unknown_error_as_runtime_error(tmp_path):
