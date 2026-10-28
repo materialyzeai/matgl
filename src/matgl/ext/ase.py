@@ -107,13 +107,14 @@ class Atoms2Graph(GraphConverter):
             )
             self.max_neighbors = max_neighbors
             if periodic:
-                lattice_matrix = torch.as_tensor(atoms.cell.array, dtype=torch.float32, device=src_id.device)
+                # float64 here; the converter casts to ``matgl.float_th`` once, so float64 mode loses no precision.
+                lattice_matrix = torch.as_tensor(atoms.cell.array, dtype=torch.float64, device=src_id.device)
                 # Convert Cartesian positions to fractional coordinates
                 # The model expects fractional coords and computes: g.pos = g.frac_coords @ lattice
-                frac_coords = positions @ torch.linalg.inv(lattice_matrix)
+                frac_coords = torch.linalg.solve(lattice_matrix.T, positions.to(torch.float64).T).T
                 lattice_matrix = lattice_matrix.unsqueeze(0)
             else:
-                lattice_matrix = torch.eye(3, dtype=torch.float32, device=src_id.device).unsqueeze(0)
+                lattice_matrix = torch.eye(3, dtype=torch.float64, device=src_id.device).unsqueeze(0)
                 # For molecules (non-periodic), use Cartesian positions directly
                 cart_coords = positions
         # use pymatgen neighbor list

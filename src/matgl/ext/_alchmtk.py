@@ -42,6 +42,12 @@ if TYPE_CHECKING:
 
 _default_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Geometry is kept in float64 end to end; only the neighbour-search kernel input is cast to this dtype.
+# Edge membership near the cutoff is insensitive to float32 rounding, but the positions/fractional
+# coordinates handed to the graph are not, so they are always returned in float64 and cast to
+# ``matgl.float_th`` once, by the graph converter.
+_SEARCH_DTYPE = torch.float32
+
 
 def neighbor_list_from_structure(
     structure: Structure,
@@ -53,14 +59,14 @@ def neighbor_list_from_structure(
     """Get the neighbor list from the PyMatGen Structure using the nvalchemi-toolkit-ops package."""
     device = torch.device(device) if device is not None else _default_device
     pbc = torch.tensor(structure.lattice.pbc, dtype=torch.bool, device=device)
-    cell = torch.as_tensor(structure.lattice.matrix.copy(), dtype=torch.float32, device=device)
-    frac_coords = torch.as_tensor(structure.frac_coords, dtype=torch.float32, device=device)
+    cell = torch.as_tensor(structure.lattice.matrix.copy(), dtype=torch.float64, device=device)
+    frac_coords = torch.as_tensor(structure.frac_coords, dtype=torch.float64, device=device)
     positions = frac_coords @ cell
 
     nblist, _, unit_shifts, _ = _safe_nl(
-        positions=positions,
+        positions=positions.to(_SEARCH_DTYPE),
         cutoff=cutoff,
-        cell=cell,
+        cell=cell.to(_SEARCH_DTYPE),
         pbc=pbc,
         density_guess=density_guess,
     )
@@ -90,10 +96,10 @@ def neighbor_list_from_molecule(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor]:
     """Get the neighbor list from the PyMatGen Structure using the nvalchemi-toolkit-ops package."""
     device = torch.device(device) if device is not None else _default_device
-    positions = torch.as_tensor(molecule.cart_coords, dtype=torch.float32, device=device)
+    positions = torch.as_tensor(molecule.cart_coords, dtype=torch.float64, device=device)
 
     nblist, _, _, _ = _safe_nl(
-        positions=positions,
+        positions=positions.to(_SEARCH_DTYPE),
         cutoff=cutoff,
         cell=None,
         pbc=None,
@@ -124,18 +130,18 @@ def neighbor_list_from_ase(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor, int]:
     """Get the neighbor list from the ASE Atoms using the nvalchemi-toolkit-ops package."""
     device = torch.device(device) if device is not None else _default_device
-    positions = torch.as_tensor(atoms.get_positions(), dtype=torch.float32, device=device)
+    positions = torch.as_tensor(atoms.get_positions(), dtype=torch.float64, device=device)
     if atoms.get_pbc().any():
-        cell = torch.as_tensor(atoms.get_cell(), dtype=torch.float32, device=device)
+        cell = torch.as_tensor(atoms.get_cell().array, dtype=torch.float64, device=device)
         pbc = torch.as_tensor(atoms.get_pbc(), dtype=torch.bool, device=device)
     else:
         cell = None
         pbc = None
 
     nblist, _, unit_shifts, max_neighbors = _safe_nl(
-        positions=positions,
+        positions=positions.to(_SEARCH_DTYPE),
         cutoff=cutoff,
-        cell=cell,
+        cell=None if cell is None else cell.to(_SEARCH_DTYPE),
         pbc=pbc,
         density_guess=density_guess,
     )
@@ -151,7 +157,7 @@ def neighbor_list_from_ase(
     else:
         distances = None
     if unit_shifts is None:
-        unit_shifts = torch.zeros(src_id.shape[0], 3, dtype=torch.float32, device=device)
+        unit_shifts = torch.zeros(src_id.shape[0], 3, dtype=torch.float64, device=device)
     return (src_id, dst_id, distances, unit_shifts, positions, max_neighbors)
 
 
