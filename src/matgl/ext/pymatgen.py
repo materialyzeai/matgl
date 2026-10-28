@@ -163,7 +163,7 @@ class Structure2Graph(GraphConverter):
             from pymatgen.optimization.neighbors import find_points_in_spheres
 
             numerical_tol = 1.0e-8
-            pbc = np.array([1, 1, 1], dtype=np.int64)
+            pbc = np.array(structure.lattice.pbc, dtype=np.int64)
             lattice_matrix = structure.lattice.matrix  # type: ignore[assignment]
             cart_coords = structure.cart_coords
             src_id, dst_id, images, bond_dist = find_points_in_spheres(

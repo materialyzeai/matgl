@@ -52,7 +52,7 @@ def neighbor_list_from_structure(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor]:
     """Get the neighbor list from the PyMatGen Structure using the nvalchemi-toolkit-ops package."""
     device = torch.device(device) if device is not None else _default_device
-    pbc = torch.tensor([True, True, True], device=device)
+    pbc = torch.tensor(structure.lattice.pbc, dtype=torch.bool, device=device)
     cell = torch.as_tensor(structure.lattice.matrix.copy(), dtype=torch.float32, device=device)
     frac_coords = torch.as_tensor(structure.frac_coords, dtype=torch.float32, device=device)
     positions = frac_coords @ cell

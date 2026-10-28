@@ -118,3 +118,12 @@ def test_molecule2graph_without_alchmtk(CH4, monkeypatch):
     # state_attr is [molecular_weight_per_atom, mean_bonds_per_atom]
     assert len(state) == 2
     assert np.allclose(state, [3.208492, 2])
+
+
+def test_structure2graph_partial_pbc():
+    """Lattice.pbc must be honoured: no images along non-periodic directions."""
+    lattice = Lattice(np.diag([3.0, 3.0, 4.0]), pbc=(True, True, False))
+    structure = Structure(lattice, ["Cu", "Cu"], [[0, 0, 0.1], [0.5, 0.5, 0.9]])
+    graph, _, _ = Structure2Graph(element_types=("Cu",), cutoff=4.5).get_graph(structure)
+    assert torch.all(graph.pbc_offset[:, 2] == 0)
+    assert graph.num_edges == len(structure.get_neighbor_list(4.5)[0])
