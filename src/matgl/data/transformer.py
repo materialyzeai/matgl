@@ -5,10 +5,15 @@ from __future__ import annotations
 import abc
 
 import torch
+from monty.json import MSONable
 
 
-class Transformer(metaclass=abc.ABCMeta):
-    """Abstract base class defining a data transformer."""
+class Transformer(MSONable, metaclass=abc.ABCMeta):
+    """Abstract base class defining a data transformer.
+
+    Transformers are MSONable so that models wrapping them (e.g. ``TransformedTargetModel``) can be saved and
+    loaded through :class:`matgl.utils.io.IOMixIn` without pickling arbitrary Python objects.
+    """
 
     @abc.abstractmethod
     def transform(self, data: torch.Tensor):
