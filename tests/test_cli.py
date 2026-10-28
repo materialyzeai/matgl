@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 import torch
-from ase import Atoms
+from ase import Atoms, units
 from ase.io import read, write
 from pymatgen.core import Lattice, Molecule, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
@@ -311,6 +311,8 @@ def test_molecular_dynamics(tiny_cif):
         mock_adaptor_cls.return_value.get_atoms.return_value = MagicMock(name="atoms")
         assert cli.molecular_dynamics(args) == 0
     mock_md_cls.assert_called_once()
+    # CLI pressure is in bar; MolecularDynamics expects eV/A^3.
+    assert mock_md_cls.call_args.kwargs["pressure"] == pytest.approx(1.0 * units.bar)
     mock_boltz.assert_called_once()
     fake_md.run.assert_called_once_with(2)
 

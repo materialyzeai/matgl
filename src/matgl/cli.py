@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 import torch
+from ase import units
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 from pymatgen.core.structure import Molecule, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
@@ -264,7 +265,7 @@ def molecular_dynamics(args: argparse.Namespace) -> int:
                 atoms,
                 potential=potential,
                 ensemble=args.ensemble,
-                pressure=args.pressure,
+                pressure=args.pressure * units.bar,
                 timestep=args.stepsize,
                 trajectory=name + ".traj",
                 logfile=name + ".log",
@@ -753,7 +754,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="ttime",
         type=float,
         default=25.0,
-        help="Characteristic timescale of the thermostat in ASE internal units. Default is 25.0.",
+        help="Characteristic timescale of the thermostat for npt_nose_hoover in fs. Default is 25.0.",
     )
 
     p_md.add_argument(
@@ -761,7 +762,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="pfactor",
         type=float,
         default=75.0**2.0,
-        help="A constant in the barostat differential equation. Default is 25.0 in eV/A$^{3}$.",
+        help="A constant in the barostat differential equation for npt_nose_hoover. Default is 75.0**2.",
     )
 
     p_md.add_argument(
@@ -777,7 +778,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="compressibility_au",
         type=float,
         default=None,
-        help="Compressibility of the material in eV/A^{3}. Default is None.",
+        help="Compressibility of the material in A^{3}/eV. Required for npt and npt_berendsen. Default is None.",
     )
 
     p_md.add_argument(

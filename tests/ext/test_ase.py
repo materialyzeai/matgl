@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 import torch
+from ase import units
 from ase.build import molecule
 from pymatgen.io.ase import AseAtomsAdaptor
 
@@ -223,3 +224,9 @@ def test_molecular_dynamics(MoS2):
     md.run(10)
     with pytest.raises(ValueError, match="Ensemble not supported"):
         MolecularDynamics(MoS2, potential=pot, ensemble="notanensemble")
+    for ensemble in ["npt", "npt_berendsen"]:
+        with pytest.raises(ValueError, match="compressibility_au"):
+            MolecularDynamics(MoS2, potential=pot, ensemble=ensemble)
+    pressure = 10 * units.GPa
+    md = MolecularDynamics(MoS2, potential=pot, ensemble="npt_nose_hoover", pressure=pressure)
+    assert np.allclose(md.dyn.externalstress, [-pressure] * 3 + [0] * 3)
