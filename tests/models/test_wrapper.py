@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 import torch.nn
 
-from matgl.data.transformer import Normalizer
+from matgl.data.transformer import LogTransformer, Normalizer
+from matgl.models import TensorNet
 from matgl.models._wrappers import TransformedTargetModel
 
 
@@ -20,14 +21,33 @@ class DummyModel(torch.nn.Module):
 
 def test_forward():
     model = TransformedTargetModel(DummyModel(), Normalizer(1, 2))
-    assert float(model.forward()), pytest.approx(3)
+    assert float(model.forward()) == pytest.approx(3)
 
 
 def test_predict_structure(LiFePO4):
     model = TransformedTargetModel(DummyModel(), Normalizer(1, 2))
-    assert float(model.predict_structure(LiFePO4)), pytest.approx(3)
+    assert float(model.predict_structure(LiFePO4)) == pytest.approx(3)
 
 
 def test_repr():
     model = TransformedTargetModel(DummyModel(), Normalizer(1, 2))
     assert repr(model) == "TransformedTargetModel:\n\tModel: DummyModel()\n\tTransformer: Normalizer(mean=1, std=2)"
+
+
+@pytest.mark.parametrize(
+    "transformer",
+    [Normalizer(torch.tensor(1.5), torch.tensor(2.0)), Normalizer(-1.0, 0.5), LogTransformer()],
+    ids=["normalizer-tensor", "normalizer-float", "log"],
+)
+def test_save_load_roundtrip(tmp_path, graph_MoS, transformer):
+    """``save`` must produce files that ``load`` (restricted unpickler) accepts, with identical predictions."""
+    structure, graph, _ = graph_MoS
+    lat = torch.tensor(structure.lattice.matrix, dtype=torch.float32)
+    graph.pbc_offshift = graph.pbc_offset @ lat
+    graph.pos = graph.frac_coords @ lat
+    torch.manual_seed(0)
+    model = TransformedTargetModel(TensorNet(element_types=("Mo", "S"), use_warp=False), transformer)
+    model.save(tmp_path)
+    loaded = TransformedTargetModel.load(tmp_path)
+    assert type(loaded.transformer) is type(transformer)
+    assert torch.allclose(loaded(g=graph), model(g=graph))
