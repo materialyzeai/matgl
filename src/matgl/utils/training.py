@@ -48,8 +48,9 @@ class _EpochErrorMetric(torchmetrics.Metric):
     def __init__(self, squared: bool = False, **kwargs):
         super().__init__(**kwargs)
         self.squared = squared
-        self.add_state("total", default=torch.tensor(0.0, dtype=torch.float64), dist_reduce_fx="sum")
-        self.add_state("count", default=torch.tensor(0.0, dtype=torch.float64), dist_reduce_fx="sum")
+        # float32 sum and int64 count, as in torchmetrics' own MeanAbsoluteError: MPS has no float64.
+        self.add_state("total", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("count", default=torch.tensor(0, dtype=torch.long), dist_reduce_fx="sum")
 
     def update(self, value: torch.Tensor, count: torch.Tensor | int) -> None:
         """Add one batch.
@@ -59,8 +60,8 @@ class _EpochErrorMetric(torchmetrics.Metric):
             count: Number of labelled elements the batch value was averaged over.
         """
         # No .item() / Python branching on device tensors: avoids a host-device sync per metric per step.
-        count = torch.as_tensor(count, dtype=torch.float64, device=self.count.device)
-        value = value.detach().reshape(-1)[0].to(device=self.total.device, dtype=torch.float64)
+        count = torch.as_tensor(count, dtype=torch.long, device=self.count.device)
+        value = value.detach().reshape(-1)[0].to(device=self.total.device, dtype=self.total.dtype)
         contribution = (value**2 if self.squared else value) * count
         # A component with no labelled elements may report NaN; it must not poison the epoch sum.
         self.total += torch.where(count > 0, contribution, torch.zeros_like(contribution))
@@ -68,14 +69,16 @@ class _EpochErrorMetric(torchmetrics.Metric):
 
     def compute(self) -> torch.Tensor:
         """Return the epoch MAE (or RMSE); zero if no labelled elements were seen."""
-        if self.count == 0:
-            return torch.zeros((), dtype=torch.float64, device=self.count.device)
-        mean = self.total / self.count
+        # total is zero whenever count is, so clamping avoids 0/0 without a host-device sync.
+        mean = self.total / self.count.clamp_min(1)
         return torch.sqrt(mean) if self.squared else mean
 
 
 class MatglLightningModuleMixin:
     """Mix-in class implementing common functions for training."""
+
+    # Element counts behind each MAE/RMSE of the latest step(); consumed by _log_results.
+    _last_metric_counts: dict[str, Any] | None = None
 
     def _init_epoch_metrics(self, keys: Sequence[str]) -> None:
         """Create per-split epoch accumulators for the ``*MAE`` / ``*RMSE`` keys returned by ``loss_fn``."""
@@ -90,7 +93,9 @@ class MatglLightningModuleMixin:
     def _log_results(self, split: str, results: dict[str, Any], batch_size: int) -> None:
         """Log step results; MAE/RMSE go through exact epoch accumulators when their element counts are known."""
         epoch_metrics = getattr(self, "epoch_metrics", None)
-        counts: dict[str, Any] = getattr(self, "_last_metric_counts", None) or {}
+        counts = self._last_metric_counts or {}
+        # Consume the counts so a later step that does not set them can never reuse stale ones.
+        self._last_metric_counts = None
         per_batch = {}
         for key, val in results.items():
             name = f"{split}_{key}"

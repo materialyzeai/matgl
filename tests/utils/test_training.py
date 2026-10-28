@@ -20,6 +20,7 @@ from matgl.utils.training import (
     MGLPotentialTrainer,
     ModelLightningModule,
     PotentialLightningModule,
+    _EpochErrorMetric,
     fit_element_refs,
     xavier_init,
 )
@@ -538,9 +539,11 @@ def test_potential_lightning_loss_fn_magmom_branches(magmom_target):
     assert torch.isfinite(out["Total_Loss"])
 
 
-def test_epoch_metrics_weight_by_labelled_elements(tmp_path):
+@pytest.mark.parametrize("missing", [False, True], ids=["all-labelled", "partial-nan-forces"])
+def test_epoch_metrics_weight_by_labelled_elements(tmp_path, missing):
     """Epoch MAE/RMSE must equal the global values over all labelled elements, not a mean of per-batch values
-    weighted by the number of structures. Two batches with very different atom counts expose the difference."""
+    weighted by the number of structures. Two batches with very different atom counts expose the difference.
+    With ``missing``, individual force components are NaN and must be excluded from both value and weight."""
     torch.manual_seed(0)
     big = Structure(Lattice.cubic(3.5), ["Li"] * 2, [[0, 0, 0], [0.5, 0.5, 0.5]]) * (3, 3, 3)  # 54 atoms
     small = Structure(Lattice.cubic(6.0), ["Li", "Li"], [[0, 0, 0], [0.3, 0.1, 0.0]])  # 2 atoms
@@ -548,6 +551,9 @@ def test_epoch_metrics_weight_by_labelled_elements(tmp_path):
     rng = np.random.default_rng(0)
     forces = [rng.normal(size=(len(s), 3)) for s in structures]
     forces[0] *= 5  # large errors on the big structure
+    if missing:
+        forces[0][:20, 1] = np.nan  # element-wise gaps, so a per-row mask would miscount
+        forces[1][0, 0] = np.nan
     dataset = MGLDataset(
         structures=structures,
         converter=Structure2Graph(element_types=("Li",), cutoff=4.0),
@@ -561,7 +567,9 @@ def test_epoch_metrics_weight_by_labelled_elements(tmp_path):
     )
     _, val_loader = MGLDataLoader(train_data=dataset, val_data=dataset, batch_size=1, num_workers=0)
     lit = PotentialLightningModule(
-        model=TensorNet(element_types=("Li",), is_intensive=False, use_warp=False, cutoff=4.0), stress_weight=0.1
+        model=TensorNet(element_types=("Li",), is_intensive=False, use_warp=False, cutoff=4.0),
+        stress_weight=0.1,
+        allow_missing_labels=missing,
     )
     trainer = pl.Trainer(
         accelerator="cpu", inference_mode=False, logger=False, enable_progress_bar=False, enable_model_summary=False
@@ -572,7 +580,7 @@ def test_epoch_metrics_weight_by_labelled_elements(tmp_path):
     for g, lat, state_attr, energies, f_labels, _ in val_loader:
         out = lit(g=g, lat=lat, state_attr=state_attr)
         e_err.append(((out[0] - energies) / g.num_nodes).detach())
-        f_err.append((out[1] - f_labels).detach())
+        f_err.append((out[1] - f_labels)[~torch.isnan(f_labels)].detach())
     e_err, f_err = torch.cat(e_err), torch.cat(f_err)
     assert logged["val_Force_MAE"] == pytest.approx(f_err.abs().mean().item(), rel=1e-5)
     assert logged["val_Force_RMSE"] == pytest.approx(f_err.pow(2).mean().sqrt().item(), rel=1e-5)
@@ -580,6 +588,23 @@ def test_epoch_metrics_weight_by_labelled_elements(tmp_path):
     assert logged["val_Energy_RMSE"] == pytest.approx(e_err.pow(2).mean().sqrt().item(), rel=1e-5)
     # Accumulator states are not persisted, so checkpoints keep their previous keys.
     assert not any("epoch_metrics" in key for key in lit.state_dict())
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
+def test_epoch_error_metric_on_mps():
+    """MPS has no float64, so the accumulator states must not use it."""
+    metric = _EpochErrorMetric(squared=True).to("mps")
+    metric.update(torch.tensor(2.0, device="mps"), torch.tensor(3, device="mps"))
+    metric.update(torch.tensor(1.0, device="mps"), 1)
+    assert metric.compute().item() == pytest.approx(((4.0 * 3 + 1.0) / 4) ** 0.5)
+
+
+def test_epoch_error_metric_empty_and_nan():
+    metric = _EpochErrorMetric()
+    assert metric.compute().item() == 0.0
+    metric.update(torch.tensor(float("nan")), 0)  # component with no labelled elements
+    metric.update(torch.tensor(0.5), 4)
+    assert metric.compute().item() == pytest.approx(0.5)
 
 
 def test_potential_lightning_on_load_checkpoint_fills_missing_keys():
