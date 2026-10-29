@@ -6,6 +6,20 @@ nav_order: 3
 
 # Change Log
 
+## Unreleased
+- **Fix: exact epoch MAE/RMSE in training logs.** `PotentialLightningModule` and `ModelLightningModule` averaged
+  per-batch metrics weighted by the number of structures, so force/stress/magmom/charge MAE under-weighted batches
+  with many atoms, and every `*_RMSE` was a mean of per-batch RMSEs rather than `sqrt(epoch MSE)`. Epoch values are
+  now computed over all labelled elements (also exact under DDP). **Behavior change:** logged `*_MAE` / `*_RMSE`
+  differ from earlier versions whenever batches differ in atom count, so `ModelCheckpoint` / `EarlyStopping`
+  thresholds tuned on the old numbers may need re-tuning. (#855)
+- **Fix: NaN losses with `allow_missing_labels=True`.** A batch with no valid labels for one component, or a NaN
+  charge label, no longer makes the loss and metrics NaN. The charge loss now also honours `loss_params` (e.g.
+  Huber `delta`). (#855)
+- **Fix: `xavier_init(distribution="normal")`** drew 1-D parameters with roughly the variance passed as the std.
+  It now uses `bound / sqrt(3)`, matching the uniform variant's variance. **Behavior change:** seeded runs using
+  the normal distribution get different initial weights. (#855)
+
 ## 4.1.2
 - **Fix: LR scheduler stepped twice per epoch.** `MatglLightningModuleMixin.on_train_epoch_end` manually called
   `scheduler.step()` on top of Lightning's automatic epoch-interval step, so schedules ran at twice the intended
