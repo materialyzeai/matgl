@@ -7,7 +7,7 @@ line graph from ``matgl.graph._compute.create_line_graph``.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 import torch
 from torch import nn
@@ -34,9 +34,6 @@ from matgl.layers._readout import ReduceReadOut, WeightedAtomReadOut, WeightedRe
 from matgl.utils.cutoff import polynomial_cutoff
 
 from ._core import MatGLModel, _warn_feature_dict_kwarg
-
-if TYPE_CHECKING:
-    from matgl.graph._converters import GraphConverter
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +84,16 @@ class M3GNet(MatGLModel):
                 f"Invalid activation type, please try using one of {[af.name for af in ActivationFunction]}"
             ) from None
 
+        if rbf_type.lower() != "sphericalbessel":
+            raise ValueError(
+                f"M3GNet only supports rbf_type='SphericalBessel' (got {rbf_type!r}): the embedding and graph "
+                "blocks are sized for the spherical Bessel basis."
+            )
+        if is_intensive and field == "edge_feat" and readout_type != "set2set":
+            raise ValueError(
+                f"M3GNet readout_type={readout_type!r} does not support field='edge_feat'; use field='node_feat'."
+            )
+
         self.element_types = element_types or DEFAULT_ELEMENTS
 
         self.bond_expansion = BondExpansion(max_l, max_n, cutoff, rbf_type=rbf_type, smooth=use_smooth)
@@ -127,7 +134,12 @@ class M3GNet(MatGLModel):
             ]
         )
 
-        dim_state_feats_used = dim_state_embedding
+        # Width of the state features produced by the embedding block: an nn.Embedding for categorical states,
+        # a Linear projection to ``dim_state_feats`` for continuous states, else the raw state attributes.
+        if include_state and not (ntypes_state and dim_state_embedding) and dim_state_feats is not None:
+            dim_state_feats_used = dim_state_feats
+        else:
+            dim_state_feats_used = dim_state_embedding
 
         self.graph_layers = nn.ModuleList(
             [
@@ -308,11 +320,12 @@ class M3GNet(MatGLModel):
         else:
             atomic = self.final_layer(node_feat)  # (num_nodes, ntargets)
             fea_dict["readout"] = atomic
-            atomic = atomic.view(-1)
+            if atomic.shape[-1] == 1:
+                atomic = atomic.view(-1)
             if batch is None:
-                output = atomic.sum().view(1)
+                output = atomic.sum(dim=0, keepdim=True)
             else:
-                output = torch.zeros(num_graphs, dtype=atomic.dtype, device=atomic.device)
+                output = torch.zeros((num_graphs, *atomic.shape[1:]), dtype=atomic.dtype, device=atomic.device)
                 output = output.index_add(0, batch.to(torch.long), atomic)
 
         fea_dict["final"] = output
@@ -320,40 +333,3 @@ class M3GNet(MatGLModel):
         if return_all_layer_output:
             return fea_dict
         return torch.squeeze(output)
-
-    def predict_structure(
-        self,
-        structure,
-        state_feats: torch.Tensor | None = None,
-        graph_converter: GraphConverter | None = None,
-        output_layers: list | None = None,
-        return_features: bool = False,
-    ):
-        """Convenience method to predict a property from a structure (PyG).
-
-        Args:
-            structure: An input crystal/molecule.
-            state_feats: Optional state attributes.
-            graph_converter: Graph converter. Defaults to ``Structure2Graph``.
-            output_layers: Currently unused; kept for API symmetry with other models.
-            return_features: **Deprecated.** Use ``model.feature_dict`` after calling
-                ``predict_structure`` instead. Will be removed in matgl v5.
-        """
-        import matgl
-
-        if return_features:
-            _warn_feature_dict_kwarg("return_features")
-
-        if graph_converter is None:
-            from matgl.ext.pymatgen import Structure2Graph
-
-            graph_converter = Structure2Graph(element_types=self.element_types, cutoff=self.cutoff)
-        g, lat, state_attr_default = graph_converter.get_graph(structure)
-        g.pbc_offshift = torch.matmul(g.pbc_offset, lat[0])
-        g.pos = g.frac_coords @ lat[0]
-        if state_feats is None:
-            state_feats = torch.tensor(state_attr_default, dtype=matgl.float_th)
-        if return_features:
-            self(g=g, state_attr=state_feats)
-            return self.feature_dict
-        return self(g=g, state_attr=state_feats).detach()

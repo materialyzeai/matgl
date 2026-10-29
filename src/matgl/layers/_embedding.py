@@ -121,7 +121,8 @@ class EmbeddingBlock(nn.Module):
             if self.ntypes_state is not None and self.dim_state_embedding is not None:
                 state_feat = self.layer_state_embedding(state_attr.long())
             elif self.dim_state_feats is not None:
-                state_attr = torch.unsqueeze(state_attr, 0)
+                if state_attr.dim() == 1:
+                    state_attr = torch.unsqueeze(state_attr, 0)
                 state_feat = self.layer_state_embedding(state_attr.to(self._float_dtype()))
             else:
                 state_feat = state_attr

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 from pymatgen.core import Structure
-from torch_geometric.data import Data
+from torch_geometric.data import Batch, Data
 
 import matgl
 from matgl.ext.pymatgen import Structure2Graph, get_element_list
@@ -262,3 +262,29 @@ def test_three_body_update_permutation_equivariant(LiFePO4):
     ref = _per_atom_three_body_update(model, LiFePO4, element_types)
     out = _per_atom_three_body_update(model, permuted, element_types)
     torch.testing.assert_close(out, ref[torch.as_tensor(perm)], atol=1e-8, rtol=1e-4)
+
+
+def test_extensive_multitarget_batched(graph_MoS):
+    """Extensive readout with ntargets > 1 must give one row of targets per graph."""
+    structure, graph, _ = graph_MoS
+    graph = _prep_graph(graph, structure)
+    torch.manual_seed(0)
+    model = M3GNet(element_types=["Mo", "S"], is_intensive=False, ntargets=2)
+    single = model(g=graph)
+    assert single.shape == (2,)
+    batched = model(g=Batch.from_data_list([graph, graph]))
+    assert batched.shape == (2, 2)
+    assert torch.allclose(batched, single.expand(2, 2), atol=1e-5)
+
+
+def test_continuous_state_batched(graph_MoS):
+    """Continuous state features (dim_state_feats) must work for a batch of graphs."""
+    structure, graph, _ = graph_MoS
+    graph = _prep_graph(graph, structure)
+    torch.manual_seed(0)
+    model = M3GNet(element_types=["Mo", "S"], is_intensive=False, include_state=True, dim_state_feats=8)
+    state = torch.tensor([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
+    batched = model(g=Batch.from_data_list([graph, graph]), state_attr=state)
+    assert batched.shape == (2,)
+    singles = torch.stack([model(g=graph, state_attr=state[i : i + 1]) for i in range(2)])
+    assert torch.allclose(batched, singles, atol=1e-5)

@@ -368,6 +368,23 @@ def test_warp_pyg_parity_so3_chiral():
     torch.testing.assert_close(f_warp, f_pyg, atol=1e-8, rtol=1e-5)
 
 
+def test_extensive_multitarget_batched(graph_MoS):
+    """Extensive readout with ntargets > 1 must give one row of targets per graph."""
+    from torch_geometric.data import Batch
+
+    structure, graph, _ = graph_MoS
+    lat = torch.tensor(np.array([structure.lattice.matrix]), dtype=matgl.float_th)
+    graph.pbc_offshift = torch.matmul(graph.pbc_offset, lat[0])
+    graph.pos = graph.frac_coords @ lat[0]
+    torch.manual_seed(0)
+    model = TensorNet(element_types=["Mo", "S"], is_intensive=False, ntargets=2, use_warp=False)
+    single = model(g=graph)
+    assert single.shape == (2,)
+    batched = model(g=Batch.from_data_list([graph, graph]))
+    assert batched.shape == (2, 2)
+    assert torch.allclose(batched, single.expand(2, 2), atol=1e-5)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [{"is_intensive": False}, {"is_intensive": True}, {"is_intensive": True, "readout_type": "reduce_atom"}],
