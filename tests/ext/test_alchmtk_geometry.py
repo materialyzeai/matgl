@@ -171,3 +171,29 @@ def test_double_potential_forces_match_finite_differences(alchmtk, float64_mode)
         minus.positions[atom_idx, axis] -= step
         fd = -(energy_and_forces(plus)[0] - energy_and_forces(minus)[0]) / (2 * step)
         assert forces[atom_idx, axis] == pytest.approx(fd, rel=1e-5, abs=1e-10)
+
+
+@pytest.mark.parametrize("compute_distances", [False, True])
+@pytest.mark.parametrize("kind", ["structure", "molecule", "ase"])
+def test_float64_cutoff_filters_rounded_candidates(alchmtk, kind, compute_distances):
+    """A distance rounded down to the cutoff in float32 must not become an out-of-cutoff graph edge."""
+    coords = [[0, 0, 0], [1.0 + 3e-8, 0, 0]]
+    if kind == "structure":
+        obj = Structure(Lattice.cubic(10), ["H", "H"], coords, coords_are_cartesian=True)
+    elif kind == "molecule":
+        obj = Molecule(["H", "H"], coords)
+    else:
+        from ase import Atoms
+
+        obj = Atoms("H2", positions=coords)
+    result = getattr(alchmtk, f"neighbor_list_from_{kind}")(obj, 1.0, compute_distances=compute_distances)
+    assert result[0].numel() == result[1].numel() == 0
+    if compute_distances:
+        assert result[2].numel() == 0
+    else:
+        assert result[2] is None
+
+
+def test_neighbor_helpers_reject_unsupported_device(alchmtk):
+    with pytest.raises(ValueError, match="CPU and CUDA"):
+        alchmtk.neighbor_list_from_molecule(Molecule(["H"], [[0, 0, 0]]), 1.0, device="mps")
