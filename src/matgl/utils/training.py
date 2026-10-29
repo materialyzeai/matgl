@@ -219,7 +219,13 @@ class MatglLightningModuleMixin:
 
 
 class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
-    """A PyTorch.LightningModule for training MatGL structure-wise property models."""
+    """A PyTorch.LightningModule for training MatGL structure-wise property models.
+
+    ``data_std * prediction + data_mean`` is applied when computing the loss.
+    Saving ``lit.model`` alone saves the raw model without this transform. To
+    export predictions in target units, save a ``TransformedTargetModel`` wrapping
+    ``lit.model`` with ``Normalizer(lit.data_mean, lit.data_std)``.
+    """
 
     def __init__(
         self,
@@ -398,8 +404,9 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             stress_weight: relative importance of stress
             magmom_weight: relative importance of additional magmom predictions.
             charge_weight: relative importance of additional charge predictions.
-            data_mean: average of training data
-            data_std: standard deviation of training data
+            data_mean: Constant energy offset added once per structure, not per atom.
+                Keep 0.0 for extensivity; use element_refs for atomic energy offsets.
+            data_std: Multiplicative scale on total energies and their derivatives.
             loss: loss function used for training
             loss_params: parameters for loss function
             optimizer: optimizer for training
@@ -1701,10 +1708,11 @@ class MGLPotentialTrainer:
                 ``"smooth_l1_loss"``, or ``"l1_loss"``.
             loss_params: Optional kwargs forwarded to the loss function (e.g.
                 ``{"delta": 0.1}`` for Huber).
-            data_mean: Per-atom energy mean used by the inner ``Potential`` to
-                rescale predictions before the loss is computed. Forwarded to
-                :class:`PotentialLightningModule`. Default ``0.0``.
-            data_std: Per-atom energy / force scale used by the inner
+            data_mean: Constant energy offset added once per structure by the inner
+                ``Potential``, independent of atom count. Keep ``0.0`` for an extensive
+                potential, including when ``element_refs`` supplies atomic energy offsets.
+                Forwarded to :class:`PotentialLightningModule`. Default ``0.0``.
+            data_std: Multiplicative scale on total energies, forces and stresses used by the inner
                 ``Potential`` to rescale predictions before the loss is
                 computed. Typical recipe for foundation-potential training:
                 pass the RMS of all force components in the training set so

@@ -39,7 +39,8 @@ class Potential(nn.Module, IOMixIn):
     additionally ``total_charge`` and ``ext_pot``), and return a scalar
     energy tensor of shape ``(num_graphs,)``.
 
-    Outputs are denormalised with ``data_std * E_pred + data_mean`` and,
+    Outputs are denormalised with ``data_std * E_pred + data_mean``, where
+    ``data_mean`` is added once per structure, independent of its atom count, and,
     if ``element_refs`` is supplied, shifted by a per-atomic-number
     reference summed over the structure (see :class:`AtomRef`). The ZBL
     repulsion (:class:`NuclearRepulsion`) is optionally added when
@@ -92,8 +93,9 @@ class Potential(nn.Module, IOMixIn):
 
         Args:
             model: Model for predicting energies.
-            data_mean: Mean of target.
-            data_std: Std dev of target.
+            data_mean: Constant energy offset added once per structure (not per atom).
+                Use 0.0 to preserve extensivity; supply per-element energy offsets via element_refs.
+            data_std: Multiplicative scale on the predicted total energy and its derivatives.
             element_refs: Element reference values for each element.
             calc_forces: Enable force calculations.
             calc_stresses: Enable stress calculations.

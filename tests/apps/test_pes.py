@@ -230,3 +230,26 @@ class TestPotential:
         ff.save(tmp_path)
         loaded = Potential.load(tmp_path)
         assert torch.allclose(loaded.element_refs.property_offset, ff.element_refs.property_offset)
+
+
+def test_energy_mean_is_per_structure_and_roundtrips(MoS, tmp_path):
+    """Pin the legacy per-structure offset without changing existing checkpoint energies (#862)."""
+    torch.manual_seed(0)
+    converter = Structure2Graph(element_types=("Mo", "S"), cutoff=5.0)
+    structures = [MoS, MoS * (2, 1, 1)]
+    converted = [converter.get_graph(structure) for structure in structures]
+    graph = Batch.from_data_list([item[0] for item in converted])
+    lattice = torch.cat([item[1] for item in converted])
+    model = TensorNet(element_types=("Mo", "S"), is_intensive=False, use_warp=False)
+    raw = Potential(model, calc_stresses=False)
+    shifted = Potential(model, data_mean=-5.0, data_std=2.5, calc_stresses=False)
+    raw_energy, raw_forces, *_ = raw(graph.clone(), lattice)
+    energy, forces, *_ = shifted(graph.clone(), lattice)
+    torch.testing.assert_close(energy, 2.5 * raw_energy - 5.0)
+    torch.testing.assert_close(forces, 2.5 * raw_forces)
+    assert (energy[1] - 2 * energy[0]).item() == pytest.approx(5.0, abs=1e-4)
+    shifted.save(tmp_path)
+    loaded = Potential.load(tmp_path)
+    loaded_energy, loaded_forces, *_ = loaded(graph.clone(), lattice)
+    torch.testing.assert_close(loaded_energy, energy)
+    torch.testing.assert_close(loaded_forces, forces)
