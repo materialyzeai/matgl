@@ -7,6 +7,10 @@ nav_order: 3
 # Change Log
 
 ## Unreleased
+- **Fix: TensorNet SO(3) Warp/PyG parity.** Warp's radial embedding used the transposed antisymmetric tensor.
+  The embedding now follows the PyG convention. SO(3) models evaluated with Warp change; checkpoints trained
+  with the former Warp convention need validation before reuse. O(3) predictions are unaffected. The regression
+  compares chiral energies, readout features and forces using real Warp kernels. (#861, #872)
 - **Fix: exact epoch MAE/RMSE in training logs.** `PotentialLightningModule` and `ModelLightningModule` averaged
   per-batch metrics weighted by the number of structures, so force/stress/magmom/charge MAE under-weighted batches
   with many atoms, and every `*_RMSE` was a mean of per-batch RMSEs rather than `sqrt(epoch MSE)`. Epoch values are
