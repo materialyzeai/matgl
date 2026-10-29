@@ -78,6 +78,21 @@ def test_structure_to_graph_molecule(CH4):
     assert isinstance(CH4, Molecule)
 
 
+def test_chgnet_positional_feature_arguments(MoS):
+    model = CHGNet(element_types=ELEMENTS)
+    with pytest.warns(DeprecationWarning, match="return_features"):
+        features = model.predict_structure(MoS, None, None, True, ["final"])
+    assert set(features) == {"final"}
+
+
+def test_m3gnet_case_insensitive_basis(MoS, tmp_path):
+    model = M3GNet(element_types=ELEMENTS, rbf_type="sphericalbessel")
+    expected = model.predict_structure(MoS)
+    model.save(tmp_path)
+    loaded = M3GNet.load(tmp_path)
+    torch.testing.assert_close(loaded.predict_structure(MoS), expected)
+
+
 @pytest.mark.parametrize(
     ("factory", "match"),
     [

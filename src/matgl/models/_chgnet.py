@@ -510,3 +510,30 @@ class CHGNet(MatGLModel):
     # ------------------------------------------------------------------
     # Convenience method
     # ------------------------------------------------------------------
+    def predict_structure(  # type: ignore[override]
+        self,
+        structure,
+        state_feats: torch.Tensor | None = None,
+        graph_converter=None,
+        return_features: bool = False,
+        output_layers: list | None = None,
+    ):
+        """Predict a property, preserving CHGNet's positional feature arguments.
+
+        Args:
+            structure: Input crystal, molecule or ASE Atoms.
+            state_feats: Optional state attributes.
+            graph_converter: Optional custom graph converter.
+            return_features: Deprecated flag returning intermediate features.
+            output_layers: Feature names to return.
+
+        Returns:
+            Predicted property or requested feature dictionary.
+        """
+        return super().predict_structure(
+            structure,
+            state_feats=state_feats,
+            graph_converter=graph_converter,
+            return_features=return_features,
+            output_layers=output_layers,
+        )

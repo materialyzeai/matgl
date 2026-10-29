@@ -84,7 +84,7 @@ class M3GNet(MatGLModel):
                 f"Invalid activation type, please try using one of {[af.name for af in ActivationFunction]}"
             ) from None
 
-        if rbf_type != "SphericalBessel":
+        if rbf_type.lower() != "sphericalbessel":
             raise ValueError(
                 f"M3GNet only supports rbf_type='SphericalBessel' (got {rbf_type!r}): the embedding and graph "
                 "blocks are sized for the spherical Bessel basis."
