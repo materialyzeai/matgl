@@ -85,8 +85,8 @@ class Molecule2Graph(GraphConverter):
                 compute_distances=False,
             )
             nbonds = len(src_id) / (2 * natoms)
-            lattice_matrix = torch.eye(3, dtype=torch.float32, device=src_id.device).unsqueeze(0)
-            images = torch.zeros(len(src_id), 3, dtype=torch.float32, device=src_id.device)
+            lattice_matrix = torch.eye(3, dtype=torch.float64, device=src_id.device).unsqueeze(0)
+            images = torch.zeros(len(src_id), 3, dtype=torch.float64, device=src_id.device)
         else:
             cart_coords = mol.cart_coords
             dist = np.linalg.norm(cart_coords[:, None, :] - cart_coords[None, :, :], axis=-1)
@@ -155,10 +155,11 @@ class Structure2Graph(GraphConverter):
                 cutoff=self.cutoff,
                 compute_distances=False,
             )
+            # float64 here; the converter casts to ``matgl.float_th`` once, so float64 mode loses no precision.
             lattice_matrix = torch.as_tensor(
-                structure.lattice.matrix.copy(), dtype=torch.float32, device=src_id.device
+                structure.lattice.matrix.copy(), dtype=torch.float64, device=src_id.device
             ).unsqueeze(0)
-            frac_coords = torch.as_tensor(structure.frac_coords, dtype=torch.float32, device=src_id.device)
+            frac_coords = torch.as_tensor(structure.frac_coords, dtype=torch.float64, device=src_id.device)
         else:
             from pymatgen.optimization.neighbors import find_points_in_spheres
 
