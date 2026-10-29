@@ -347,6 +347,23 @@ In the PES training, the unit of energies, forces and stresses (optional) in the
 
 Note: For stresses, we use the convention that compressive stress gives negative values. Stresses obtained from VASP calculations (default unit is kBar) should be multiplied by -0.1 to work directly with the model.
 
+`Potential` and `MGLPotentialTrainer` apply `E = data_std * E_model + data_mean + E_element_refs`.
+`data_mean` is a constant added once per structure, independent of atom count. Keep it at `0.0` for an
+extensive potential and supply atomic energy offsets through `element_refs`. `data_std` scales total
+energies and their derivatives, including forces and stresses.
+
+For structure-property training, `ModelLightningModule` applies its `data_mean` and `data_std` in the loss.
+Calling `lit.model.save(...)` saves the raw model. To retain that normalization in an inference model, save
+the existing target-transform wrapper:
+
+```python
+from matgl.data.transformer import Normalizer
+from matgl.models import TransformedTargetModel
+
+exported = TransformedTargetModel(lit.model, Normalizer(lit.data_mean, lit.data_std))
+exported.save("property-model")
+```
+
 ### `MGLPotentialTrainer`
 
 `matgl.utils.training.MGLPotentialTrainer` is a high-level wrapper around `PotentialLightningModule` and `pl.Trainer` with sensible MatPES-tuned defaults (Huber loss, stress weight 0.1, Adam + CosineAnnealingLR). Dataset construction is delegated to a sibling `MGLDatasetLoader` factory; the trainer itself only consumes pre-built `MGLDataset`s.

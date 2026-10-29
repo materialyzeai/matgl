@@ -51,3 +51,19 @@ def test_save_load_roundtrip(tmp_path, graph_MoS, transformer):
     loaded = TransformedTargetModel.load(tmp_path)
     assert type(loaded.transformer) is type(transformer)
     assert torch.allclose(loaded(g=graph), model(g=graph))
+
+
+def test_property_training_normalization_export(MoS, tmp_path):
+    """Export the loss-space predictions with their normalization rather than saving a raw model (#862)."""
+    from matgl.utils.training import ModelLightningModule
+
+    model = TensorNet(element_types=("Mo", "S"), use_warp=False)
+    lit = ModelLightningModule(model, data_mean=-5.0, data_std=2.5)
+    raw = model.predict_structure(MoS)
+    target = 2.5 * raw - 5.0
+    losses = lit.loss_fn(torch.nn.functional.mse_loss, target.reshape(1), raw.reshape(1))
+    assert losses["Total_Loss"].item() == pytest.approx(0.0)
+    exported = TransformedTargetModel(lit.model, Normalizer(lit.data_mean, lit.data_std))
+    exported.save(tmp_path)
+    loaded = TransformedTargetModel.load(tmp_path)
+    torch.testing.assert_close(loaded.predict_structure(MoS), target)
