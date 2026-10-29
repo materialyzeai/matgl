@@ -309,6 +309,65 @@ def test_warp_pyg_parity_pretrained(structure_fixture, request):
     )
 
 
+def test_warp_pyg_parity_so3_chiral():
+    """SO(3) TensorNet must give the same energy with Warp and PyG on a chiral structure (#861).
+
+    The Warp radial kernel used to build the transposed antisymmetric edge tensor, so the Warp path evaluated the
+    mirror image of the input. O(3) is insensitive to this; SO(3) is not.
+    """
+    _skip_if_no_warp()
+    from pymatgen.core import Lattice, Structure
+
+    from matgl.ext.pymatgen import Structure2Graph
+
+    lattice = Lattice.cubic(5.0)
+    species = ["Mo", "S", "S", "Mo", "S"]
+    frac_coords = np.array(
+        [[0.0, 0.0, 0.0], [0.31, 0.12, 0.05], [0.08, 0.37, 0.21], [0.27, 0.19, 0.43], [0.52, 0.61, 0.17]]
+    )
+    structure = Structure(lattice, species, frac_coords)
+    mirror = Structure(lattice, species, -frac_coords)  # inversion = mirror image up to a proper rotation
+
+    # A small double-precision model gives a reproducible chirality signal well
+    # above rounding noise; random scalar readouts can nearly cancel that signal.
+    torch.manual_seed(2)
+    init_args = {
+        "element_types": ("Mo", "S"),
+        "is_intensive": False,
+        "equivariance_invariance_group": "SO(3)",
+        "units": 16,
+        "nblocks": 3,
+        "dtype": torch.float64,
+    }
+    model_pyg = TensorNet(**init_args, use_warp=False)
+    model_warp = TensorNet(**init_args, use_warp=True)
+    model_warp.load_state_dict(model_pyg.state_dict(), strict=False)
+    model_pyg.eval()
+    model_warp.eval()
+
+    converter = Structure2Graph(element_types=("Mo", "S"), cutoff=model_pyg.cutoff)
+
+    def evaluate(model, struct):
+        g, lat, _ = converter.get_graph(struct)
+        g.frac_coords = g.frac_coords.double()
+        g.pbc_offset = g.pbc_offset.double()
+        lat = lat.double()
+        _set_pos_and_pbc(g, lat)
+        g.pos.requires_grad_(True)
+        output = model(g=g)
+        forces = -torch.autograd.grad(output, g.pos)[0]
+        return output.item(), forces, model.feature_dict["readout"].detach().clone()
+
+    e_pyg, f_pyg, features_pyg = evaluate(model_pyg, structure)
+    chirality_gap = abs(e_pyg - evaluate(model_pyg, mirror)[0])
+    # Sanity check that the test is sensitive: an SO(3) model distinguishes a chiral structure from its mirror image.
+    assert chirality_gap > 1e-8
+    e_warp, f_warp, features_warp = evaluate(model_warp, structure)
+    assert abs(e_warp - e_pyg) < 0.01 * chirality_gap
+    torch.testing.assert_close(features_warp, features_pyg, atol=5e-8, rtol=1e-6)
+    torch.testing.assert_close(f_warp, f_pyg, atol=1e-8, rtol=1e-5)
+
+
 def test_extensive_multitarget_batched(graph_MoS):
     """Extensive readout with ntargets > 1 must give one row of targets per graph."""
     from torch_geometric.data import Batch

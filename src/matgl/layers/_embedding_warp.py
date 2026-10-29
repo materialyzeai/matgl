@@ -153,7 +153,10 @@ class TensorEmbedding(nn.Module):
         edge_attr_processed = edge_attr.view(-1, 3, self.units) * C.view(-1, 1, 1) * Zij.view(-1, 1, self.units)
 
         edge_vec_norm = edge_vec / torch.norm(edge_vec, dim=1, keepdim=True).clamp(min=1e-6)
-        I, A, S = fn_radial_message_passing(edge_vec_norm, edge_attr_processed, row_data, row_indptr)  # noqa: E741
+        # The radial kernel fills the antisymmetric components (01, 02, 12) as (+r_z, -r_y, +r_x), the transpose of
+        # ``vector_to_skewtensor`` used by the PyG and JAX paths. I and S are even in r, so negating the input flips
+        # only A and restores the PyG convention; without it SO(3) models evaluate the mirror image of the structure.
+        I, A, S = fn_radial_message_passing(-edge_vec_norm, edge_attr_processed, row_data, row_indptr)  # noqa: E741
 
         X = fn_compose_tensor(I, A, S)  # (num_nodes, 3, 3, units)
 
