@@ -6,7 +6,7 @@ nav_order: 3
 
 # Change Log
 
-## Unreleased
+## 4.1.3
 - **Fix: TensorNet SO(3) Warp/PyG parity.** Warp's radial embedding used the transposed antisymmetric tensor.
   The embedding now follows the PyG convention. SO(3) models evaluated with Warp change; checkpoints trained
   with the former Warp convention need validation before reuse. O(3) predictions are unaffected. The regression
@@ -23,6 +23,56 @@ nav_order: 3
 - **Fix: `xavier_init(distribution="normal")`** drew 1-D parameters with roughly the variance passed as the std.
   It now uses `bound / sqrt(3)`, matching the uniform variant's variance. **Behavior change:** seeded runs using
   the normal distribution get different initial weights. (#855)
+- **Fix: `mgl md` pressure units and NPT inputs.** `mgl md -p` is documented in bar but was passed unconverted as
+  eV/Å³, so NPT runs targeted ~160x the requested pressure (default 1 atm became ~162 GPa). It is now converted.
+  `npt`/`npt_berendsen` without `compressibility_au` raise a clear `ValueError` instead of a `TypeError` inside
+  ASE, and `npt_nose_hoover` now defaults `external_stress` to `pressure` instead of zero. (#853)
+- **Fix: ZBL repulsion forces and stresses.** With `calc_repuls=True`, `Potential` never set `bond_dist`, so
+  converter graphs crashed and precomputed-`bond_dist` graphs got the ZBL energy without its forces or stresses.
+  `bond_dist` is now recomputed from the strained positions. `NuclearRepulsion` also works on GPU and with
+  trailing atoms that have no neighbours. (#854)
+- **Fix: `set_default_dtype("int", n)`** no longer changes torch's default float dtype, and invalid calls no longer
+  mutate globals before raising. (#856)
+- **Fix: partial periodic boundary conditions in graph converters.** `Atoms2Graph` treated slabs
+  (`pbc=(T, T, F)`) as molecules, dropping in-plane periodic neighbours (and raising on the alchmtk path), and
+  `Structure2Graph` ignored `Lattice.pbc`, creating bonds through the vacuum of thin slabs. Both now honour
+  per-direction PBC, and the alchmtk path returns a `(1, 3, 3)` lattice. (#857)
+- **Fix: alchmtk-path geometry precision.** The alchmtk branches of `Structure2Graph`, `Molecule2Graph` and
+  `Atoms2Graph` built positions and cells in float32 regardless of `matgl.float_th`, limiting `.double()` models to
+  ~1e-7 relative geometry. Geometry is now float64 until the final cast; default float32 graphs are unchanged.
+  (#868)
+- **Fix: multi-target readouts, continuous state and multi-state `AtomRef`.** M3GNet/TensorNet extensive
+  readouts with several targets crashed on batches and summed all targets into one scalar for single graphs.
+  M3GNet with continuous `dim_state_feats` crashed for any batch. Multi-state `AtomRef` returned `(B, B)` offsets
+  instead of each graph's offset under its own state. (#858)
+- **Shared `predict_structure`.** `MatGLModel` now implements `predict_structure` once, picking
+  `Molecule2Graph` / `Atoms2Graph` / `Structure2Graph` from the input type and moving the graph to the model's
+  device and dtype, so `predict_structure(Molecule)` and `predict_structure(Atoms)` work for all models. (#869)
+- **Unsupported model configurations fail at construction.** Combinations that previously failed at forward time
+  with shape errors (e.g. M3GNet `rbf_type="Gaussian"`, MEGNet without state, SO3Net graph targets with
+  `is_intensive=False`) now raise `ValueError` in `__init__`. TensorNet options that are accepted but have no effect
+  warn instead, so existing checkpoints still load. CHGNet's angle readout is now sized from
+  `dim_angle_embedding`. (#870)
+- **Fix: stale `MGLDataset` caches.** The cache fingerprint covered only the converter config, so a dataset built
+  in the same root (default `./MGLDataset`) with different structures or labels silently reused the previous
+  graphs and labels. A content hash of structures and labels is now part of the fingerprint, and `labels.json` is
+  always rewritten. (#860)
+- **Fix: save/load round-trips.** `TransformedTargetModel` (transformers are now MSONable) and MEGNet with a custom
+  `bond_expansion` previously failed to load under `torch.load(weights_only=True)`. (#864, #866)
+- **Fix: `TensorNet(dtype=torch.float64)` and `QET(dtype=torch.float64)`** crashed with a dtype mismatch because
+  the readout and QET heads stayed float32. (#865)
+- **Readout consolidation.** The duplicate tensor-based readouts in `layers/_readout_torch.py` are merged into
+  `matgl.layers.ReduceReadOut` / `WeightedReadOut` / `WeightedAtomReadOut`, which accept both graph and tensor
+  call styles and an optional `num_graphs`. Trailing empty graphs are no longer dropped, and
+  `ReduceReadOut("max")` returns zeros instead of `-inf` for them. (#867)
+- **MC dropout on hidden features.** `MCDropoutWrapper` now injects dropout before the last `Linear` of the readout
+  rather than on the scalar output (which made the uncertainty a fixed fraction of the prediction), and works on a
+  private copy so the caller's model is untouched. **Behavior change:** uncertainty estimates differ from earlier
+  versions. (#876)
+- **Docs: energy offset semantics.** `data_mean` in `Potential`, `PotentialLightningModule` and
+  `MGLPotentialTrainer` is a constant added once per structure, not per atom; keep it 0.0 for an extensive
+  potential and use `element_refs` for atomic offsets. `ModelLightningModule` documents how to export normalized
+  predictions via `TransformedTargetModel`. (#875)
 
 ## 4.1.2
 - **Fix: LR scheduler stepped twice per epoch.** `MatglLightningModuleMixin.on_train_epoch_end` manually called
