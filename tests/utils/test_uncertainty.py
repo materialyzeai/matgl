@@ -41,10 +41,11 @@ class TestMCDropoutWrapperConstruction:
     def test_chgnet_identity_replaced(self, mos_structure):
         """CHGNet with default final_dropout=0 (nn.Identity) should have Identity replaced."""
         model = CHGNet(element_types=("Mo", "S"), final_dropout=0.0)
-        MCDropoutWrapper(model, dropout_p=0.1)
+        wrapper = MCDropoutWrapper(model, dropout_p=0.1)
         # The Identity should have been replaced with a real Dropout.
-        assert isinstance(model.final_dropout, torch.nn.Dropout)
-        assert model.final_dropout.p == pytest.approx(0.1)
+        assert isinstance(model.final_dropout, torch.nn.Identity)
+        assert isinstance(wrapper.model.final_dropout, torch.nn.Dropout)
+        assert wrapper.model.final_dropout.p == pytest.approx(0.1)
 
     def test_m3gnet_wraps(self):
         """M3GNet with is_intensive=True uses an MLP final_layer that Dropout can be injected into."""
@@ -115,7 +116,7 @@ class TestPredictUncertainty:
         model = CHGNet(element_types=("Mo", "S"), final_dropout=0.1)
         wrapper = MCDropoutWrapper(model, dropout_p=0.1)
         wrapper.predict_uncertainty(mos_structure, n_passes=3)
-        for m in model.modules():
+        for m in wrapper.model.modules():
             assert not m.training, f"{m} still in training mode after predict_uncertainty"
 
     def test_m3gnet_uncertainty(self, mos_structure):
@@ -191,3 +192,66 @@ class TestCacheBackbone:
         assert s_fast.shape == s_slow.shape == torch.Size([2])
         assert torch.isfinite(m_fast).all()
         assert (s_fast >= 0).all()
+
+
+@pytest.mark.parametrize("model_type", ["M3GNet", "TensorNet"])
+@pytest.mark.parametrize("cache_backbone", [False, True])
+def test_hidden_dropout_is_not_output_scaling(model_type, cache_backbone):
+    """Equal deterministic outputs can have different uncertainty from hidden features."""
+    from matgl.layers import MLP
+    from matgl.models import TensorNet
+    from matgl.utils.uncertainty import _inject_dropout
+
+    torch.manual_seed(0)
+    factory = M3GNet if model_type == "M3GNet" else TensorNet
+    kwargs = {} if model_type == "M3GNet" else {"use_warp": False}
+    model = factory(element_types=("Mo", "S"), is_intensive=True, **kwargs)
+    wrapper = MCDropoutWrapper(model, dropout_p=0.5)
+    layers = wrapper.model.final_layer.layers
+    last_linear = max(i for i, layer in enumerate(layers) if isinstance(layer, torch.nn.Linear))
+    assert isinstance(layers[last_linear - 1], torch.nn.Dropout)
+    assert not any(isinstance(layer, torch.nn.Dropout) for layer in model.final_layer.layers)
+
+    # The same sum (and thus deterministic prediction) with different hidden-feature norms.
+    head = MLP([2, 1], bias_last=False)
+    drop = _inject_dropout(head, 0.5)
+    assert drop is not None
+    with torch.no_grad():
+        head.layers[-1].weight.fill_(1.0)
+    x = torch.tensor([[1.0, 0.0], [0.5, 0.5]])
+    torch.manual_seed(0)
+    samples = torch.stack([head(x).squeeze(-1) for _ in range(2000)])
+    assert torch.allclose(samples.mean(0), torch.ones(2), atol=0.05)
+    ratios = samples.std(0) / samples.mean(0).abs()
+    assert ratios[0] > ratios[1] + 0.15
+
+    # Exercise the full model and both replay paths with identical random draws.
+    structure = Structure(Lattice.cubic(4.0), ["Mo", "S"], [[0, 0, 0], [0.5, 0.5, 0.5]])
+    torch.manual_seed(42)
+    mean, std = wrapper.predict_uncertainty(structure, n_passes=20, cache_backbone=cache_backbone)
+    torch.manual_seed(42)
+    other_mean, other_std = wrapper.predict_uncertainty(structure, n_passes=20, cache_backbone=not cache_backbone)
+    assert torch.allclose(mean, other_mean, atol=1e-6)
+    assert torch.allclose(std, other_std, atol=1e-6)
+
+    structures = [Structure(Lattice.cubic(a), ["Mo", "S"], [[0, 0, 0], [0.5, 0.5, 0.5]]) for a in (3.0, 4.0, 5.0)]
+    mean, std = wrapper.predict_uncertainty(structures, n_passes=1000, cache_backbone=True)
+    ratios = std / mean.abs().clamp_min(1e-8)
+    assert (ratios.max() - ratios.min()).item() > 0.001
+    assert not torch.allclose(ratios, torch.ones_like(ratios), atol=0.1)
+
+
+def test_wrapper_preserves_used_model_and_training_mode(mos_structure):
+    model = M3GNet(element_types=("Mo", "S"), is_intensive=True).train()
+    # A grad-connected feature_dict from an earlier call must not prevent copying.
+    model.predict_structure(mos_structure)
+    original_features = model.feature_dict
+    original_state = {key: value.clone() for key, value in model.state_dict().items()}
+    original_modules = list(model.modules())
+    wrapper = MCDropoutWrapper(model)
+    wrapper.predict_uncertainty(mos_structure, n_passes=3)
+    assert model.training
+    assert list(model.modules()) == original_modules
+    assert model.feature_dict is original_features
+    assert all(torch.equal(model.state_dict()[key], value) for key, value in original_state.items())
+    assert wrapper.model is not model
