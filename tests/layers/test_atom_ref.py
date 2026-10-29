@@ -45,3 +45,11 @@ def test_atom_ref_with_states(graph_MoSH):
     element_ref = AtomRef(torch.tensor([[0.5, 1.0, 2.0], [2.0, 3.0, 5.0]]))
     state_label = torch.tensor([1])
     assert element_ref(g1, state_label) == 10
+
+
+def test_atom_ref_with_states_batched(graph_MoSH):
+    _, g1, _ = graph_MoSH
+    element_ref = AtomRef(torch.tensor([[0.5, 1.0, 2.0], [2.0, 3.0, 5.0]]))
+    out = element_ref(_batch([g1, g1]), torch.tensor([0, 1]))
+    assert out.shape == (2,)
+    assert torch.allclose(out, torch.tensor([3.5, 10.0]))
