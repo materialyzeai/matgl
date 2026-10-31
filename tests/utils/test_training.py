@@ -852,3 +852,16 @@ def test_xavier_init_normal_1d_std():
     module.scale = torch.nn.Parameter(torch.zeros(n))
     xavier_init(module, gain=2.0, distribution="normal")
     assert module.scale.std().item() == pytest.approx(2.0 * (1 / n) ** 0.5, rel=0.02)
+
+
+def test_configure_optimizers_returns_plateau_with_monitor():
+    """ReduceLROnPlateau needs Lightning's dict form so it can step on the monitored metric."""
+    model = TensorNet(element_types=("Li",), is_intensive=False, use_warp=False, units=8, nblocks=1)
+    lit = PotentialLightningModule(model=model)
+    lit.optimizer = torch.optim.Adam(lit.parameters(), lr=1e-3)
+    lit.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(lit.optimizer)
+    lit.lr_scheduler_monitor = "val_Energy_MAE"
+
+    config = lit.configure_optimizers()
+    assert config["optimizer"] is lit.optimizer
+    assert config["lr_scheduler"] == {"scheduler": lit.scheduler, "monitor": "val_Energy_MAE"}

@@ -563,6 +563,34 @@ def test_train_potential_fine_tunes_saved_potential(tmp_path):
     np.testing.assert_allclose(trainer.fit.call_args.kwargs["atomrefs"], [1.0, 2.0])
 
 
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        (["--cutoff", "6.0"], r"Ignoring --cutoff when fine-tuning"),
+        (["--model-kwargs", '{"units": 16}'], r"Ignoring --model-kwargs when fine-tuning"),
+        (["--cutoff", "6.0", "--model-kwargs", '{"units": 16}'], r"Ignoring --cutoff and --model-kwargs when"),
+    ],
+)
+def test_train_potential_fine_tune_warns_on_scratch_only_options(tmp_path, extra, message):
+    dataset = MagicMock(element_types=("Li",), labels={"energies": [], "forces": []})
+    potential = MagicMock()
+    potential.model.element_types = ("Li",)
+    potential.model.cutoff = 4.5
+    potential.data_mean = torch.tensor(0.0)
+    potential.data_std = torch.tensor(1.0)
+    args = cli.build_parser().parse_args(["train", "-i", "data.jsonl", "-m", "./saved-model", *extra])
+
+    with (
+        patch.object(cli, "_load_potential", return_value=potential),
+        patch("matgl.utils.training.MGLDatasetLoader.from_json", return_value=dataset) as load_data,
+        patch("matgl.utils.training.MGLPotentialTrainer"),
+        pytest.warns(UserWarning, match=message),
+    ):
+        assert cli.train_potential(args) == 0
+
+    assert load_data.call_args.kwargs["cutoff"] == 4.5  # the pre-trained cutoff still wins
+
+
 def test_train_potential_rejects_weight_for_missing_label(tmp_path):
     dataset = MagicMock(element_types=("Li", "O"), labels={"energies": [], "forces": []})
     args = cli.build_parser().parse_args(
@@ -632,3 +660,55 @@ def test_evaluate_potential_keeps_force_stress_autograd_enabled():
     assert module_class.call_args.kwargs["stress_weight"] == 1.0
     assert trainer_class.call_args.kwargs["inference_mode"] is False
     lightning_trainer.test.assert_called_once_with(model=module_class.return_value, dataloaders=evaluation_loader)
+
+
+def test_train_config_sets_defaults_and_flags_override(tmp_path):
+    config = tmp_path / "train.yaml"
+    config.write_text(
+        "infile: data.jsonl\n"
+        "model: M3GNet\n"
+        "epochs: 3\n"
+        "lr: 1.0e-3\n"
+        "optimizer: AdamW\n"
+        "optimizer_args: {weight_decay: 0.01}\n"
+        "scheduler: CosineAnnealingWarmRestarts\n"
+        "scheduler-args: {T_0: 10, T_mult: 2}\n"
+        "warmup_epochs: 2\n"
+    )
+    dataset = MagicMock()
+    dataset.element_types = ("Li",)
+    dataset.labels = {"energies": [], "forces": []}
+    with (
+        patch("matgl.utils.training.MGLDatasetLoader.from_json", return_value=dataset) as load_data,
+        patch("matgl.models.M3GNet"),
+        patch("matgl.utils.training.MGLPotentialTrainer") as trainer_class,
+    ):
+        assert cli.main(["train", "--config", str(config), "--epochs", "5", "-o", str(tmp_path / "model")]) == 0
+
+    assert load_data.call_args.args == ("data.jsonl",)
+    kwargs = trainer_class.call_args.kwargs
+    assert kwargs["max_epochs"] == 5  # the explicit flag wins over the config
+    assert kwargs["lr"] == pytest.approx(1e-3)
+    assert kwargs["optimizer"] == "AdamW"
+    assert kwargs["optimizer_args"] == {"weight_decay": 0.01}
+    assert kwargs["scheduler"] == "CosineAnnealingWarmRestarts"
+    assert kwargs["scheduler_args"] == {"T_0": 10, "T_mult": 2}
+    assert kwargs["warmup_epochs"] == 2
+    assert kwargs["decay_steps"] == 1000  # untouched options keep their CLI defaults
+    # Plain types only: YAML-library subclasses would break weights_only checkpoint loading.
+    assert type(kwargs["lr"]) is float
+    assert type(kwargs["scheduler_args"]) is dict
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        ("infile: data.jsonl\nlearning_rate: 0.1\n", "Unknown mgl train config key 'learning_rate'"),
+        ("infile: data.jsonl\nloss: bogus\n", "Invalid value 'bogus' for config key 'loss'"),
+    ],
+)
+def test_train_config_rejects_bad_options(tmp_path, contents, message):
+    config = tmp_path / "train.yaml"
+    config.write_text(contents)
+    with pytest.raises(ValueError, match=message):
+        cli.main(["train", "-c", str(config)])
