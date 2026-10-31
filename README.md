@@ -379,6 +379,27 @@ mgl evaluate -i test.extxyz -m TensorNet-local
 
 For Extended XYZ, the default fields are `energy`, `forces`, `stress`, `charges`, and `magmoms`; override them with `--energy-key`, `--forces-key`, and the corresponding key options. Energies and forces are expected in eV and eV/Å. Stress defaults to ASE's eV/Å³ convention and is converted to matgl's GPa convention. Periodic frames use `Structure2Graph`, while fully nonperiodic frames use `Molecule2Graph`; one file cannot mix the two. Use `--model-kwargs '{"units": 128, "nblocks": 3}'` for architecture options, or pass a saved potential instead of `TensorNet` to fine-tune it.
 
+Options can also be collected in a YAML (or JSON) file keyed by option name and passed with `--config`; flags given on the command line override the file. `--optimizer` and `--scheduler` take any `torch.optim` / `torch.optim.lr_scheduler` class name, with options in `--optimizer-args` / `--scheduler-args`. Schedulers step once per epoch, so their arguments are in epochs. Without `--scheduler`, training uses `CosineAnnealingLR` from `--decay-steps` / `--decay-alpha`. `--warmup-epochs` prepends a linear warmup to any scheduler except `ReduceLROnPlateau`, which steps on `--scheduler-monitor` (default `val_Total_Loss`).
+
+```yaml
+# train.yaml -- run with: mgl train --config train.yaml
+infile: training.extxyz
+model: TensorNet
+output: TensorNet-local
+epochs: 200
+lr: 1.0e-3
+optimizer: AdamW
+optimizer_args: {weight_decay: 0.01}
+scheduler: CosineAnnealingWarmRestarts
+scheduler_args: {T_0: 20, T_mult: 2, eta_min: 1.0e-5}
+warmup_epochs: 5
+log_dir: logs
+# For plateau decay, replace the three scheduler lines above with (no warmup):
+# scheduler: ReduceLROnPlateau
+# scheduler_args: {factor: 0.5, patience: 10}
+# warmup_epochs: 0
+```
+
 The geometry commands also accept multi-frame `.xyz` and `.extxyz` files. `mgl predict` reports one result per frame; `mgl relax -s _relaxed` writes all relaxed frames back to Extended XYZ; and `mgl md` starts one simulation per frame, using `_0`, `_1`, and so on in trajectory/log names. Nonperiodic molecular relaxation requires `--no-relax-cell`.
 
 #### Train a TensorNet on MatPES

@@ -6,6 +6,16 @@ nav_order: 3
 
 # Change Log
 
+## Unreleased
+- **`mgl train` config files and LR schedules.** `mgl train --config train.yaml` reads options from a YAML or
+  JSON file keyed by option name; command-line flags override it. New `--optimizer` / `--optimizer-args`,
+  `--scheduler` / `--scheduler-args` (any `torch.optim` / `torch.optim.lr_scheduler` class, e.g.
+  `CosineAnnealingWarmRestarts` or `ReduceLROnPlateau`), `--warmup-epochs` (linear warmup) and
+  `--scheduler-monitor`, mirrored as `MGLPotentialTrainer` arguments. The default stays `Adam` +
+  `CosineAnnealingLR` from `decay_steps` / `decay_alpha`. `configure_optimizers` now hands a
+  `ReduceLROnPlateau` scheduler to Lightning with the metric it monitors (`lr_scheduler_monitor`,
+  default `val_Total_Loss`).
+
 ## 4.1.3
 - **Fix: TensorNet SO(3) Warp/PyG parity.** Warp's radial embedding used the transposed antisymmetric tensor.
   The embedding now follows the PyG convention. SO(3) models evaluated with Warp change; checkpoints trained

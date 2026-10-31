@@ -20,7 +20,7 @@ import matgl
 from matgl.ext.ase import MolecularDynamics, Relaxer
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Sequence
+    from collections.abc import Callable, Iterable, Mapping, Sequence
 
     from pymatgen.core.sites import PeriodicSite
 
@@ -412,6 +412,12 @@ def train_potential(args: argparse.Namespace) -> int:
         lr=args.lr,
         decay_steps=args.decay_steps,
         decay_alpha=args.decay_alpha,
+        optimizer=args.optimizer,
+        optimizer_args=args.optimizer_args,
+        scheduler=args.scheduler,
+        scheduler_args=args.scheduler_args,
+        warmup_epochs=args.warmup_epochs,
+        scheduler_monitor=args.scheduler_monitor,
         batch_size=args.batch_size,
         max_epochs=args.epochs,
         accelerator=args.accelerator,
@@ -548,8 +554,29 @@ def _add_pes_input_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dataset-root", default=None, help="Processed-dataset cache directory.")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Build the command-line parser without performing network access."""
+def _apply_train_config(parser: argparse.ArgumentParser, config: Mapping[str, Any]) -> None:
+    """Set ``mgl train --config`` values as parser defaults, so explicit flags still override them."""
+    actions = {action.dest: action for action in parser._actions if action.dest not in {"help", "config"}}
+    defaults = {}
+    for key, value in config.items():
+        dest = str(key).replace("-", "_")
+        action = actions.get(dest)
+        if action is None:
+            raise ValueError(f"Unknown mgl train config key {key!r}.")
+        if action.choices is not None and value not in action.choices:
+            raise ValueError(f"Invalid value {value!r} for config key {key!r}; choose from {list(action.choices)}.")
+        # A required option such as --infile is satisfied by the config.
+        action.required = False
+        defaults[dest] = value
+    parser.set_defaults(**defaults)
+
+
+def build_parser(train_config: Mapping[str, Any] | None = None) -> argparse.ArgumentParser:
+    """Build the command-line parser without performing network access.
+
+    Args:
+        train_config: Option values from ``mgl train --config``, used as ``train`` defaults.
+    """
     parser = argparse.ArgumentParser(
         description="""
     This script works based on several sub-commands with their own options. To see the options for the
@@ -875,6 +902,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_train.add_argument("--lr", type=float, default=1e-3)
     p_train.add_argument("--decay-steps", type=int, default=1000)
     p_train.add_argument("--decay-alpha", type=float, default=0.01)
+    p_train.add_argument("--optimizer", default="Adam", help="torch.optim optimizer class name (default: Adam).")
+    p_train.add_argument(
+        "--optimizer-args",
+        type=_parse_json_object,
+        default={},
+        help="Optimizer options as JSON, e.g. '{\"weight_decay\": 0.01}'.",
+    )
+    p_train.add_argument(
+        "--scheduler",
+        default=None,
+        help="torch.optim.lr_scheduler class name, e.g. CosineAnnealingWarmRestarts or ReduceLROnPlateau "
+        "(default: CosineAnnealingLR from --decay-steps and --decay-alpha). Steps once per epoch.",
+    )
+    p_train.add_argument(
+        "--scheduler-args",
+        type=_parse_json_object,
+        default={},
+        help='Scheduler options as JSON, in epochs, e.g. \'{"T_0": 10, "T_mult": 2}\'.',
+    )
+    p_train.add_argument(
+        "--warmup-epochs",
+        type=int,
+        default=0,
+        help="Epochs of linear LR warmup (default: 0); not supported with ReduceLROnPlateau.",
+    )
+    p_train.add_argument(
+        "--scheduler-monitor",
+        default="val_Total_Loss",
+        help="Metric ReduceLROnPlateau monitors (default: val_Total_Loss).",
+    )
     p_train.add_argument("--accelerator", default="auto")
     p_train.add_argument("--devices", type=_parse_devices, default="auto")
     p_train.add_argument("--num-workers", type=int, default=0)
@@ -884,7 +941,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_train.add_argument("--checkpoint", default=None, help="Lightning checkpoint path, or 'last', to resume.")
     p_train.add_argument("--log-dir", default=None, help="Enable Lightning CSV logging in this directory.")
     p_train.add_argument("-v", "--verbose", action="store_true")
+    p_train.add_argument(
+        "-c",
+        "--config",
+        default=None,
+        help="YAML or JSON file of train options keyed by option name (e.g. 'warmup_epochs: 5'); "
+        "flags given on the command line override it.",
+    )
     p_train.set_defaults(func=train_potential)
+    if train_config:
+        _apply_train_config(p_train, train_config)
 
     p_evaluate = subparsers.add_parser("evaluate", help="Evaluate a saved PyG potential on local PES data.")
     p_evaluate.add_argument("-i", "--infile", required=True, help="JSON/JSONL or Extended XYZ evaluation data.")
@@ -962,6 +1028,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None):
     """Parse command-line arguments and dispatch the selected command."""
-    args = build_parser().parse_args(argv)
+    # Read `mgl train --config` first so its values become defaults that explicit flags override.
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument("command", nargs="?")
+    config_parser.add_argument("-c", "--config")
+    known, _ = config_parser.parse_known_args(argv)
+    train_config = None
+    if known.command == "train" and known.config:
+        from monty.serialization import loadfn
+
+        train_config = loadfn(known.config)
+        if not isinstance(train_config, dict):
+            raise ValueError(f"{known.config} must contain a mapping of mgl train options.")
+        # ruamel.yaml returns float/dict subclasses that would leak into checkpoints and break
+        # torch.load(weights_only=True) on resume; round-trip to plain Python types.
+        train_config = json.loads(json.dumps(train_config))
+    args = build_parser(train_config).parse_args(argv)
 
     return args.func(args)
