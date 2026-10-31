@@ -563,6 +563,34 @@ def test_train_potential_fine_tunes_saved_potential(tmp_path):
     np.testing.assert_allclose(trainer.fit.call_args.kwargs["atomrefs"], [1.0, 2.0])
 
 
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        (["--cutoff", "6.0"], r"Ignoring --cutoff when fine-tuning"),
+        (["--model-kwargs", '{"units": 16}'], r"Ignoring --model-kwargs when fine-tuning"),
+        (["--cutoff", "6.0", "--model-kwargs", '{"units": 16}'], r"Ignoring --cutoff and --model-kwargs when"),
+    ],
+)
+def test_train_potential_fine_tune_warns_on_scratch_only_options(tmp_path, extra, message):
+    dataset = MagicMock(element_types=("Li",), labels={"energies": [], "forces": []})
+    potential = MagicMock()
+    potential.model.element_types = ("Li",)
+    potential.model.cutoff = 4.5
+    potential.data_mean = torch.tensor(0.0)
+    potential.data_std = torch.tensor(1.0)
+    args = cli.build_parser().parse_args(["train", "-i", "data.jsonl", "-m", "./saved-model", *extra])
+
+    with (
+        patch.object(cli, "_load_potential", return_value=potential),
+        patch("matgl.utils.training.MGLDatasetLoader.from_json", return_value=dataset) as load_data,
+        patch("matgl.utils.training.MGLPotentialTrainer"),
+        pytest.warns(UserWarning, match=message),
+    ):
+        assert cli.train_potential(args) == 0
+
+    assert load_data.call_args.kwargs["cutoff"] == 4.5  # the pre-trained cutoff still wins
+
+
 def test_train_potential_rejects_weight_for_missing_label(tmp_path):
     dataset = MagicMock(element_types=("Li", "O"), labels={"energies": [], "forces": []})
     args = cli.build_parser().parse_args(

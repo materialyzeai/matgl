@@ -15,6 +15,9 @@ nav_order: 3
   `CosineAnnealingLR` from `decay_steps` / `decay_alpha`. `configure_optimizers` now hands a
   `ReduceLROnPlateau` scheduler to Lightning with the metric it monitors (`lr_scheduler_monitor`,
   default `val_Total_Loss`).
+- **`mgl train` warns about scratch-only options when fine-tuning.** `--cutoff` and `--model-kwargs` are
+  ignored when `--model` is a pre-trained potential; passing them now emits a `UserWarning`. `--cutoff` still
+  defaults to 5.0 for scratch training.
 
 ## 4.1.3
 - **Fix: TensorNet SO(3) Warp/PyG parity.** Warp's radial embedding used the transposed antisymmetric tensor.

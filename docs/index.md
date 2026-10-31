@@ -324,22 +324,35 @@ For Extended XYZ, the default fields are `energy`, `forces`, `stress`, `charges`
 Options can also be collected in a YAML (or JSON) file keyed by option name and passed with `--config`; flags given on the command line override the file. `--optimizer` and `--scheduler` take any `torch.optim` / `torch.optim.lr_scheduler` class name, with options in `--optimizer-args` / `--scheduler-args`. Schedulers step once per epoch, so their arguments are in epochs. Without `--scheduler`, training uses `CosineAnnealingLR` from `--decay-steps` / `--decay-alpha`. `--warmup-epochs` prepends a linear warmup to any scheduler except `ReduceLROnPlateau`, which steps on `--scheduler-monitor` (default `val_Total_Loss`).
 
 ```yaml
-# train.yaml -- run with: mgl train --config train.yaml
+# train.yaml -- train from scratch with: mgl train --config train.yaml
 infile: training.extxyz
 model: TensorNet
+model_kwargs: {units: 64, nblocks: 2}
+cutoff: 5.0
 output: TensorNet-local
 epochs: 200
 lr: 1.0e-3
-optimizer: AdamW
-optimizer_args: {weight_decay: 0.01}
-scheduler: CosineAnnealingWarmRestarts
-scheduler_args: {T_0: 20, T_mult: 2, eta_min: 1.0e-5}
-warmup_epochs: 5
+decay_steps: 200   # default CosineAnnealingLR: T_max in epochs
+decay_alpha: 0.01  # minimum LR = lr * decay_alpha
 log_dir: logs
-# For plateau decay, replace the three scheduler lines above with (no warmup):
+# For plateau decay instead of the cosine, add:
 # scheduler: ReduceLROnPlateau
 # scheduler_args: {factor: 0.5, patience: 10}
-# warmup_epochs: 0
+```
+
+To fine-tune, set `model` to a pre-trained potential name or a saved local potential. Its element types, cutoff, architecture and energy offsets are reused, so `cutoff` and `model_kwargs` are ignored with a warning. Use a lower learning rate and a short warmup so the first updates do not disrupt the pre-trained weights:
+
+```yaml
+# finetune.yaml -- run with: mgl train --config finetune.yaml
+infile: my_data.extxyz
+model: TensorNet-PES-MatPES-PBE-2025.2  # or the path to a saved potential
+output: TensorNet-finetuned
+epochs: 50
+lr: 1.0e-4
+warmup_epochs: 5   # LR ramps linearly up to lr over the first 5 epochs
+decay_steps: 45    # then cosine decay over the remaining 45 epochs
+decay_alpha: 0.01
+log_dir: logs
 ```
 
 The geometry commands also accept multi-frame `.xyz` and `.extxyz` files. `mgl predict` reports one result per frame; `mgl relax -s _relaxed` writes all relaxed frames back to Extended XYZ; and `mgl md` starts one simulation per frame, using `_0`, `_1`, and so on in trajectory/log names. Nonperiodic molecular relaxation requires `--no-relax-cell`.

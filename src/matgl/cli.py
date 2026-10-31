@@ -344,8 +344,19 @@ def train_potential(args: argparse.Namespace) -> int:
     pretrained = None
     if is_scratch:
         element_types = None
-        cutoff = args.cutoff
+        cutoff = args.cutoff if args.cutoff is not None else 5.0
     else:
+        ignored = [
+            name
+            for name, given in (("--cutoff", args.cutoff is not None), ("--model-kwargs", bool(args.model_kwargs)))
+            if given
+        ]
+        if ignored:
+            warnings.warn(
+                f"Ignoring {' and '.join(ignored)} when fine-tuning {model_source}: these options only apply to "
+                "training from scratch; the pre-trained model's cutoff and architecture are used.",
+                stacklevel=2,
+            )
         pretrained = _load_potential(model_source)
         pretrained_model = cast("Any", pretrained.model)
         element_types = tuple(pretrained_model.element_types)
@@ -864,7 +875,7 @@ def build_parser(train_config: Mapping[str, Any] | None = None) -> argparse.Argu
         default={},
         help='Architecture-specific options as JSON, e.g. \'{"units": 32, "nblocks": 2}\'.',
     )
-    p_train.add_argument("--cutoff", type=float, default=5.0, help="Graph cutoff for scratch training.")
+    p_train.add_argument("--cutoff", type=float, default=None, help="Graph cutoff for scratch training (default: 5.0).")
     _add_pes_input_arguments(p_train)
     p_train.add_argument("--train-ratio", "--train_ratio", type=float, default=0.8)
     p_train.add_argument("--valid-ratio", "--valid_ratio", type=float, default=0.1)
