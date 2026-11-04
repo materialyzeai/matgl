@@ -14,13 +14,16 @@ This directory ships:
   CMake snippets.
 - `src/ML-MATGL/patch_lammps.py` — wires those snippets into a stock LAMMPS
   tree's `cmake/CMakeLists.txt` (run once before `cmake`).
-- `tests/in.matgl_si` — sample input deck for a single-point parity check.
+- `tests/in.matgl_si`, `tests/in.matgl_finite_strain`, `tests/in.matgl_md` —
+  input decks for single-point parity, finite-difference pressure, and a
+  short NVE run. `tests/ext/test_lammps_run.py` (one repo up) drives them.
 
 The Python side (one repo up) ships `mgl create-lammps-model`, which
 produces the `.pt` artifact these pair styles consume.
 
-> **Status.** The CPU/serial pair style is exercised in CI
-> (`.github/workflows/lammps-build.yml`). The Kokkos GPU variant builds
+> **Status.** The CPU/serial pair style and the Kokkos variant on host
+> backends (Serial, OpenMP) are exercised in CI
+> (`.github/workflows/lammps-build.yml`). The Kokkos CUDA variant builds
 > but is not yet covered in CI, as GitHub-hosted runners have no GPU.
 
 ## Building
@@ -107,9 +110,9 @@ Run with:
 mpirun -n 1 build/lmp -k on g 1 -sf kk -pk kokkos newton on neigh half -in in.matgl_si
 ```
 
-**`-pk kokkos newton on neigh half` is required, not optional.** `pair_matgl` 
-needs `newton on` (it folds periodic edges back onto local rows and needs ghost 
-contributions), and LAMMPS refuses `newton on` together with the Kokkos default 
+**`-pk kokkos newton on neigh half` is required, not optional.** `pair_matgl`
+needs `newton on` (it folds periodic edges back onto local rows and needs ghost
+contributions), and LAMMPS refuses `newton on` together with the Kokkos default
 `neigh full`.
 
 Equivalently, put `package kokkos newton on neigh half` in the input deck before
@@ -246,30 +249,46 @@ Currently a no-op.
 
 ## Continuous integration
 
-`.github/workflows/lammps-build.yml` builds the **CPU** pair style on
-every push that touches the `lammps/` tree, the Python wrapper, or the
-workflow itself. The job runs inside the `lammps/lammps-build:ubuntu_latest`
-public Docker image, downloads a CXX11-ABI libtorch, clones LAMMPS at a
-pinned tag, builds with `PKG_ML-MATGL=ON`, exports a tiny in-tree model
-through `LAMMPSMatGLModel`, runs the `in.matgl_si` deck, and diffs the
-LAMMPS energy against the Python reference.
+`.github/workflows/lammps-build.yml` runs on every push that touches the
+`lammps/` tree, the Python wrapper, or the workflow itself. Each job builds
+LAMMPS against a CXX11-ABI libtorch and runs `tests/ext/test_lammps_run.py`:
 
-The Kokkos variant is **not** exercised in CI today — GitHub-hosted
-runners have no GPU. Hardware-accelerated CI would need a self-hosted
-CUDA runner.
+| Job | Build | Pair styles tested |
+| --- | --- | --- |
+| `build_pair_matgl_cpu` | `PKG_ML-MATGL` | `matgl` |
+| `build_pair_matgl_kokkos_host` | `+ PKG_KOKKOS` (Serial; OpenMP) | `matgl`, `matgl/kk` (`-k on t N`) |
+| `build_pair_matgl_kokkos` | `+ PKG_KOKKOS`, `Kokkos_ENABLE_CUDA` | `matgl`, `matgl/kk` (`-k on g 1`) |
+
+The CUDA job needs a self-hosted GPU runner labeled `[self-hosted, gpu, cuda]`.
+None exists today, so it is skipped unless the repository variable
+`LAMMPS_GPU_CI` is set to `true`.
 
 ## Verifying a build
+
+Point the end-to-end tests at your `lmp` binary. Set `MATGL_LAMMPS_KOKKOS`
+to the arguments that follow `-k on` if the build has the KOKKOS package:
+
+```bash
+# from the matgl repo root
+MATGL_LAMMPS_BIN=<lammps>/build/lmp uv run pytest tests/ext/test_lammps_run.py
+MATGL_LAMMPS_BIN=<lammps>/build/lmp MATGL_LAMMPS_KOKKOS="t 4" \
+    uv run pytest tests/ext/test_lammps_run.py   # host Kokkos
+MATGL_LAMMPS_BIN=<lammps>/build/lmp MATGL_LAMMPS_KOKKOS="g 1" \
+    uv run pytest tests/ext/test_lammps_run.py   # CUDA Kokkos
+```
+
+The tests export a tiny TensorNet and check, for `matgl` and (if enabled)
+`matgl/kk`: energy, forces, and the pressure tensor against matgl's
+`PESCalculator` on the unit cell and a 2x2x2 supercell; hydrostatic pressure
+against a finite-difference `-dE/dV`; total-energy conservation over a
+50-step NVE run; and `matgl/kk` against `matgl` step by step.
+
+To check a real model by hand instead:
 
 ```bash
 cd lammps/tests
 <lammps>/build/lmp -in in.matgl_si
-```
-
-The test deck prints energy, forces, and stress on a small Si supercell.
-Compare against the Python reference:
-
-```bash
-uv run python tests/python_reference.py    # in this directory
+uv run python python_reference.py -m <model>
 ```
 
 Energies should match within `1e-5 eV`, forces within `1e-4 eV/Å`, and
