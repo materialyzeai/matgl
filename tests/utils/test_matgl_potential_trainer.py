@@ -15,6 +15,7 @@ import pathlib
 
 import numpy as np
 import pytest
+import torch
 from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.io import write
@@ -658,26 +659,26 @@ class TestFit:
         )
 
     @staticmethod
-    def _trainer(model):
-        return MGLPotentialTrainer(
-            model,
-            energy_weight=1.0,
-            force_weight=1.0,
-            stress_weight=0.1,
-            batch_size=2,
-            max_epochs=1,
-            accelerator="cpu",
-            devices=1,
-            seed=42,
-            loader_kwargs={"num_workers": 0, "frac_list": (0.6, 0.2, 0.2)},
-            trainer_kwargs={
+    def _trainer(model, **overrides):
+        kwargs = {
+            "energy_weight": 1.0,
+            "force_weight": 1.0,
+            "stress_weight": 0.1,
+            "batch_size": 2,
+            "max_epochs": 1,
+            "accelerator": "cpu",
+            "devices": 1,
+            "seed": 42,
+            "loader_kwargs": {"num_workers": 0, "frac_list": (0.6, 0.2, 0.2)},
+            "trainer_kwargs": {
                 "logger": False,
                 "enable_checkpointing": False,
                 "enable_progress_bar": False,
                 "enable_model_summary": False,
                 "num_sanity_val_steps": 0,
             },
-        )
+        }
+        return MGLPotentialTrainer(model, **{**kwargs, **overrides})
 
     def test_one_epoch_trains_and_records_state(self, monkeypatch, tmp_path):
         """fit() with a pre-built dataset and ndarray atomrefs populates trainer state."""
@@ -724,6 +725,75 @@ class TestFit:
         trainer = self._trainer(model)
         trainer.fit(dataset=ds, atomrefs=None)
         assert trainer.atomrefs is None
+
+    def test_fit_with_reduce_lr_on_plateau(self, monkeypatch, tmp_path):
+        """A named optimizer and ReduceLROnPlateau train, with the plateau stepping on the monitor."""
+        _patch_hf_dataset_download(monkeypatch, tmp_path)
+        ds = MGLDatasetLoader().matpes_dataset(
+            version="r2SCAN-2025.2", cutoff=4.0, save_cache=False, root=str(tmp_path / "ds"), stress_unit="GPa"
+        )
+        trainer = self._trainer(
+            self._make_model(ds.element_types),
+            max_epochs=2,
+            optimizer="AdamW",
+            optimizer_args={"weight_decay": 0.01},
+            scheduler="ReduceLROnPlateau",
+            scheduler_args={"patience": 0, "factor": 0.5},
+            scheduler_monitor="val_Energy_MAE",
+        )
+        trainer.fit(dataset=ds)
+
+        assert isinstance(trainer.trainer.optimizers[0], torch.optim.AdamW)
+        (config,) = trainer.trainer.lr_scheduler_configs
+        assert isinstance(config.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau)
+        assert config.monitor == "val_Energy_MAE"
+        assert config.scheduler.best < float("inf")  # it was stepped with the monitored value
+
+
+class TestBuildScheduler:
+    @staticmethod
+    def _optimizer(lr=1.0):
+        return torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=lr)
+
+    @staticmethod
+    def _lrs(optimizer, scheduler, epochs):
+        lrs = []
+        for _ in range(epochs):
+            lrs.append(optimizer.param_groups[0]["lr"])
+            optimizer.step()
+            scheduler.step()
+        return lrs
+
+    def test_default_is_cosine_from_decay_steps_and_alpha(self):
+        optimizer = self._optimizer(lr=0.1)
+        scheduler = training_mod._build_scheduler(optimizer, None, decay_steps=10, decay_alpha=0.01)
+        assert isinstance(scheduler, torch.optim.lr_scheduler.CosineAnnealingLR)
+        assert scheduler.T_max == 10
+        assert scheduler.eta_min == pytest.approx(0.001)
+
+    def test_linear_warmup_then_warm_restarts(self):
+        optimizer = self._optimizer()
+        scheduler = training_mod._build_scheduler(optimizer, "CosineAnnealingWarmRestarts", {"T_0": 2}, warmup_epochs=2)
+        lrs = self._lrs(optimizer, scheduler, 6)
+        np.testing.assert_allclose(lrs[:2], [1 / 3, 2 / 3])
+        # Full LR when the restart schedule takes over, and again at each restart.
+        np.testing.assert_allclose([lrs[2], lrs[4]], [1.0, 1.0])
+        assert lrs[3] < 1.0
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"name": "NotAScheduler"}, "Unknown scheduler"),
+            ({"name": "ReduceLROnPlateau", "warmup_epochs": 2}, "cannot be combined with ReduceLROnPlateau"),
+        ],
+    )
+    def test_invalid_scheduler_raises(self, kwargs, message):
+        with pytest.raises(ValueError, match=message):
+            training_mod._build_scheduler(self._optimizer(), **kwargs)
+
+    def test_unknown_optimizer_raises(self):
+        with pytest.raises(ValueError, match="Unknown optimizer"):
+            training_mod._build_optimizer([torch.nn.Parameter(torch.zeros(1))], "NotAnOptimizer", lr=1e-3)
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
     from pathlib import Path
 
+    from lightning.pytorch.utilities.types import OptimizerLRScheduler
     from numpy.typing import ArrayLike
     from torch.optim import Optimizer
     from torch.optim.lr_scheduler import LRScheduler
@@ -79,6 +80,8 @@ class MatglLightningModuleMixin:
 
     # Element counts behind each MAE/RMSE of the latest step(); consumed by _log_results.
     _last_metric_counts: dict[str, Any] | None = None
+    # Logged metric a ReduceLROnPlateau scheduler monitors.
+    lr_scheduler_monitor: str = "val_Total_Loss"
 
     def _init_epoch_metrics(self, keys: Sequence[str]) -> None:
         """Create per-split epoch accumulators for the ``*MAE`` / ``*RMSE`` keys returned by ``loss_fn``."""
@@ -169,8 +172,12 @@ class MatglLightningModuleMixin:
         self._log_results("test", results, batch_size)
         return results
 
-    def configure_optimizers(self) -> tuple[list[torch.optim.Optimizer], list[torch.optim.lr_scheduler.LRScheduler]]:
-        """Configure optimizers."""
+    def configure_optimizers(self) -> OptimizerLRScheduler:
+        """Configure optimizers.
+
+        A ``ReduceLROnPlateau`` scheduler is returned in Lightning's dict form so it
+        steps on ``lr_scheduler_monitor``; any other scheduler uses the list form.
+        """
         if self.optimizer is None:  # type: ignore[attr-defined]
             optimizer = torch.optim.Adam(
                 self.parameters(),  # type: ignore[attr-defined]
@@ -187,6 +194,11 @@ class MatglLightningModuleMixin:
             )
         else:
             scheduler = self.scheduler  # type: ignore[attr-defined]
+        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {"scheduler": scheduler, "monitor": self.lr_scheduler_monitor},
+            }
         return [
             optimizer,
         ], [
@@ -1600,6 +1612,53 @@ class MGLDatasetLoader:
         return np.asarray([refs[sym] for sym in element_types], dtype="float64")
 
 
+def _build_optimizer(params: Iterable, name: str, lr: float, optimizer_args: Mapping | None = None) -> Optimizer:
+    """Build the ``torch.optim`` optimizer called ``name``; ``optimizer_args`` may override ``lr``."""
+    optimizer_cls = getattr(torch.optim, name, None)
+    if not (isinstance(optimizer_cls, type) and issubclass(optimizer_cls, torch.optim.Optimizer)):
+        raise ValueError(f"Unknown optimizer {name!r}; expected a torch.optim class name such as 'Adam' or 'AdamW'.")
+    return optimizer_cls(params, **{"lr": lr, **(optimizer_args or {})})
+
+
+def _build_scheduler(
+    optimizer: Optimizer,
+    name: str | None,
+    scheduler_args: Mapping | None = None,
+    *,
+    decay_steps: int = 1000,
+    decay_alpha: float = 0.01,
+    warmup_epochs: int = 0,
+) -> LRScheduler:
+    """Build the ``torch.optim.lr_scheduler`` class called ``name``, with optional linear warmup.
+
+    ``name=None`` gives the default ``CosineAnnealingLR(T_max=decay_steps, eta_min=lr * decay_alpha)``.
+    Schedulers step once per epoch, so all their arguments are in epochs. A warmup is prepended with
+    ``SequentialLR``, which cannot chain ``ReduceLROnPlateau`` (its ``step`` needs a metric).
+    """
+    if name is None:
+        base_lr = optimizer.param_groups[0]["lr"]
+        scheduler: LRScheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=decay_steps, eta_min=base_lr * decay_alpha
+        )
+    else:
+        scheduler_cls = getattr(torch.optim.lr_scheduler, name, None)
+        if not (isinstance(scheduler_cls, type) and issubclass(scheduler_cls, torch.optim.lr_scheduler.LRScheduler)):
+            raise ValueError(
+                f"Unknown scheduler {name!r}; expected a torch.optim.lr_scheduler class name such as "
+                "'CosineAnnealingWarmRestarts' or 'ReduceLROnPlateau'."
+            )
+        scheduler = scheduler_cls(optimizer, **(scheduler_args or {}))
+    if warmup_epochs <= 0:
+        return scheduler
+    if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+        raise ValueError("warmup_epochs cannot be combined with ReduceLROnPlateau.")
+    # Start at lr / (warmup_epochs + 1) so the first epoch already trains.
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=1.0 / (warmup_epochs + 1), total_iters=warmup_epochs
+    )
+    return torch.optim.lr_scheduler.SequentialLR(optimizer, [warmup, scheduler], milestones=[warmup_epochs])
+
+
 class MGLPotentialTrainer:
     """Configure-once / fit-when-asked trainer for matgl ``Potential`` training.
 
@@ -1673,6 +1732,12 @@ class MGLPotentialTrainer:
         lr: float = 1e-3,
         decay_steps: int = 1000,
         decay_alpha: float = 0.01,
+        optimizer: str = "Adam",
+        optimizer_args: dict | None = None,
+        scheduler: str | None = None,
+        scheduler_args: dict | None = None,
+        warmup_epochs: int = 0,
+        scheduler_monitor: str = "val_Total_Loss",
         # DataLoader defaults.
         batch_size: int = 32,
         # pl.Trainer placement controls.
@@ -1719,8 +1784,18 @@ class MGLPotentialTrainer:
                 forces and energies share an order of magnitude. Default
                 ``1.0``.
             lr: Initial learning rate.
-            decay_steps: ``CosineAnnealingLR`` ``T_max``.
-            decay_alpha: Minimum-LR multiplier (``eta_min = lr * decay_alpha``).
+            decay_steps: ``CosineAnnealingLR`` ``T_max`` (epochs) for the default scheduler.
+            decay_alpha: Minimum-LR multiplier (``eta_min = lr * decay_alpha``) for the default scheduler.
+            optimizer: ``torch.optim`` class name (default ``"Adam"``).
+            optimizer_args: Extra optimizer kwargs, e.g. ``{"weight_decay": 0.01}``.
+            scheduler: ``torch.optim.lr_scheduler`` class name, e.g.
+                ``"CosineAnnealingWarmRestarts"`` or ``"ReduceLROnPlateau"``. ``None`` (default)
+                uses ``CosineAnnealingLR`` built from ``decay_steps`` / ``decay_alpha``.
+                Schedulers step once per epoch.
+            scheduler_args: Scheduler kwargs, in epochs, e.g. ``{"T_0": 10, "T_mult": 2}``.
+            warmup_epochs: Epochs of linear LR warmup before ``scheduler`` takes over (``0`` disables).
+                Not supported with ``ReduceLROnPlateau``.
+            scheduler_monitor: Logged metric ``ReduceLROnPlateau`` steps on.
             batch_size: Per-loader batch size.
             max_epochs: ``pl.Trainer`` max epochs.
             accelerator: ``pl.Trainer`` accelerator. Accepts any value
@@ -1758,6 +1833,12 @@ class MGLPotentialTrainer:
         self.lr = lr
         self.decay_steps = decay_steps
         self.decay_alpha = decay_alpha
+        self.optimizer = optimizer
+        self.optimizer_args = dict(optimizer_args or {})
+        self.scheduler = scheduler
+        self.scheduler_args = dict(scheduler_args or {})
+        self.warmup_epochs = warmup_epochs
+        self.scheduler_monitor = scheduler_monitor
 
         self.batch_size = batch_size
 
@@ -1969,6 +2050,17 @@ class MGLPotentialTrainer:
             decay_steps=self.decay_steps,
             decay_alpha=self.decay_alpha,
         )
+        optimizer = _build_optimizer(self.lit_module.parameters(), self.optimizer, self.lr, self.optimizer_args)
+        self.lit_module.optimizer = optimizer
+        self.lit_module.scheduler = _build_scheduler(
+            optimizer,
+            self.scheduler,
+            self.scheduler_args,
+            decay_steps=self.decay_steps,
+            decay_alpha=self.decay_alpha,
+            warmup_epochs=self.warmup_epochs,
+        )
+        self.lit_module.lr_scheduler_monitor = self.scheduler_monitor
         self.trainer = pl.Trainer(
             max_epochs=self.max_epochs,
             accelerator=self.accelerator,
