@@ -126,8 +126,15 @@ limitations are in [`lammps/README.md`](lammps/README.md).
 
 ## Docker images
 
-Docker images have now been built for matgl, together with LAMMPS support. They are available at the
-[Materials Virtual Lab Docker Repository]. If you wish to use MatGL with LAMMPS, this is probably the easiest option.
+Docker images are built from [`docker/`](docker) and published to [materialyzeai/matgl] on Docker Hub with every
+release, tagged by version and `latest`:
+
+- `materialyzeai/matgl:latest` — matgl (linux/amd64, linux/arm64).
+- `materialyzeai/matgl:latest-kokkos-cpu` — matgl plus LAMMPS with KOKKOS (OpenMP) and `pair_style matgl` /
+  `matgl/kk`, also importable as the `lammps` Python module (linux/amd64). If you wish to use MatGL with LAMMPS, this
+  is probably the easiest option.
+
+A CUDA Kokkos variant can be built locally from `docker/Dockerfile.kokkos`.
 
 ## Usage
 
@@ -594,5 +601,5 @@ for their contributions to warp-acceleration for TensorNet, which yielded ~2-3x 
 [MatGL]: https://matgl.ai
 [MatPES]: https://matpes.ai
 [MatCalc]: https://matcalc.ai
-[Materials Virtual Lab Docker Repository]: https://hub.docker.com/orgs/materialsvirtuallab/repositories
+[materialyzeai/matgl]: https://hub.docker.com/r/materialyzeai/matgl
 [Hugging Face Hub]: https://huggingface.co

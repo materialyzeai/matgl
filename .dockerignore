@@ -1,0 +1,11 @@
+# Docker images (docker/) are built from the repository root but only need the
+# package sources and the LAMMPS pair style. Allowlist those; everything else
+# (tests, docs, datasets, virtualenvs, .git) stays out of the build context.
+*
+!src/
+!lammps/
+!pyproject.toml
+!README.md
+!LICENSE
+**/__pycache__
+**/*.egg-info

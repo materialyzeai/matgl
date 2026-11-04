@@ -1,0 +1,148 @@
+# syntax=docker/dockerfile:1
+#
+# MatGL (from this source tree) + LAMMPS built with KOKKOS (CUDA + OpenMP) and
+# the native `pair_style matgl` / `matgl/kk` from lammps/.
+#
+# linux/amd64 only (CUDA libtorch has no arm64 build). Not built in CI: GitHub-
+# hosted runners lack the disk space for the CUDA toolchain + CUDA libtorch.
+#
+# Build from the repository root. The build context has no .git, so the version
+# must be passed explicitly:
+#   docker build -f docker/Dockerfile.kokkos \
+#       --build-arg MATGL_VERSION="$(uvx --from setuptools-scm python -m setuptools_scm)" \
+#       -t materialyzeai/matgl:latest-kokkos .
+#   # H100: --build-arg KOKKOS_ARCH=HOPPER90 (default AMPERE80 also JITs on Hopper via PTX)
+#
+# Run (single GPU only; multi-rank Kokkos + libtorch is unsupported upstream):
+#   mgl create-lammps-model -m materialyze/TensorNet-MatPES-r2SCAN -o model.pt --dtype float32
+#   lmp -k on g 1 -sf kk -pk kokkos newton on neigh half -in in.lammps
+
+ARG CUDA_VERSION=12.4.1
+ARG UBUNTU_VERSION=22.04
+
+########################################################################
+# matgl wheel
+########################################################################
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS wheel
+
+ARG MATGL_VERSION
+
+RUN --mount=type=bind,source=.,target=/tmp/matgl,rw \
+    test -n "${MATGL_VERSION}" || { echo "MATGL_VERSION build-arg is required" >&2; exit 1; }; \
+    SETUPTOOLS_SCM_PRETEND_VERSION="${MATGL_VERSION}" uv build --wheel --out-dir /opt/dist /tmp/matgl
+
+########################################################################
+# Builder
+########################################################################
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu${UBUNTU_VERSION} AS builder
+
+# LAMMPS release verified with lammps/ (see .github/workflows/lammps-build.yml).
+ARG LAMMPS_VERSION=stable_22Jul2025_update5
+# LibTorch must be a CUDA build with CXX11 ABI; tested upstream for 2.2-2.7.
+ARG LIBTORCH_VERSION=2.5.1
+ARG LIBTORCH_CUDA_TAG=cu124
+ARG CMAKE_VERSION=3.31.6
+# Kokkos GPU arch: AMPERE80 (A100), HOPPER90 (H100), ADA89 (L40S), etc.
+ARG KOKKOS_ARCH=AMPERE80
+ARG BUILD_JOBS=8
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        git \
+        libfftw3-dev \
+        libjpeg-dev \
+        libpng-dev \
+        ninja-build \
+        pkg-config \
+        python3 \
+        unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# LAMMPS requires a newer CMake than Ubuntu ships.
+RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
+        | tar -xz -C /usr/local --strip-components=1
+
+# CUDA libtorch (CXX11 ABI).
+RUN curl -fsSL -o /tmp/libtorch.zip \
+        "https://download.pytorch.org/libtorch/${LIBTORCH_CUDA_TAG}/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2B${LIBTORCH_CUDA_TAG}.zip" \
+    && unzip -q /tmp/libtorch.zip -d /opt \
+    && rm /tmp/libtorch.zip
+
+RUN git clone --depth 1 --branch "${LAMMPS_VERSION}" https://github.com/lammps/lammps.git /opt/lammps-src
+
+# pair_matgl / pair_matgl_kokkos sources from this tree.
+COPY lammps /opt/matgl/lammps
+
+# Register ML-MATGL (+ Kokkos variant) before GenerateStyleHeaders().
+RUN python3 /opt/matgl/lammps/src/ML-MATGL/patch_lammps.py /opt/lammps-src /opt/matgl
+
+# lmp finds libtorch via RPATH rather than LD_LIBRARY_PATH, so the Python torch
+# wheel in the runtime image never picks up these (different-version) libs.
+# MKL_INCLUDE_DIR: works around libtorch's Caffe2 config leaking MKL_INCLUDE_DIR-NOTFOUND.
+RUN cmake -B /opt/lammps-build -S /opt/lammps-src/cmake -G Ninja \
+        -D CMAKE_BUILD_TYPE=Release \
+        -D CMAKE_INSTALL_PREFIX=/opt/lammps \
+        -D CMAKE_CXX_STANDARD=17 \
+        -D CMAKE_CXX_COMPILER=/opt/lammps-src/lib/kokkos/bin/nvcc_wrapper \
+        -D CMAKE_PREFIX_PATH=/opt/libtorch \
+        -D CMAKE_INSTALL_RPATH=/opt/libtorch/lib \
+        -D MKL_INCLUDE_DIR=/usr/include \
+        -D BUILD_MPI=OFF \
+        -D BUILD_OMP=ON \
+        -D BUILD_SHARED_LIBS=OFF \
+        -D PKG_KOKKOS=ON \
+        -D Kokkos_ENABLE_SERIAL=ON \
+        -D Kokkos_ENABLE_OPENMP=ON \
+        -D Kokkos_ENABLE_CUDA=ON \
+        -D Kokkos_ENABLE_CUDA_LAMBDA=ON \
+        -D "Kokkos_ARCH_${KOKKOS_ARCH}=ON" \
+        -D PKG_ML-MATGL=ON \
+        -D MATGL_PYTHON_EXECUTABLE=/opt/venv/bin/python \
+        -D PKG_MANYBODY=ON \
+        -D PKG_MOLECULE=ON \
+        -D PKG_EXTRA-COMPUTE=ON \
+        -D PKG_EXTRA-DUMP=ON \
+        -D PKG_EXTRA-FIX=ON \
+    && cmake --build /opt/lammps-build -j "${BUILD_JOBS}" \
+    && cmake --install /opt/lammps-build
+
+########################################################################
+# Runtime
+########################################################################
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu${UBUNTU_VERSION}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -y && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libfftw3-double3 \
+        libgomp1 \
+        libjpeg-turbo8 \
+        libpng16-16 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+COPY --from=builder /opt/libtorch/lib /opt/libtorch/lib
+COPY --from=builder /opt/lammps /opt/lammps
+# pair_matgl shells out to export_matgl_checkpoint.py (path baked in at build time)
+# when pair_coeff is given a raw matgl checkpoint directory.
+COPY --from=builder /opt/matgl/lammps /opt/matgl/lammps
+
+ENV UV_PYTHON_INSTALL_DIR=/opt/python \
+    UV_LINK_MODE=copy \
+    UV_NO_CACHE=1
+RUN --mount=type=bind,from=wheel,source=/opt/dist,target=/tmp/dist \
+    uv venv --python 3.12 /opt/venv \
+    && uv pip install --python /opt/venv/bin/python /tmp/dist/matgl-*.whl
+
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:/opt/lammps/bin:${PATH}" \
+    MATGL_PYTHON=/opt/venv/bin/python \
+    OMP_PROC_BIND=spread \
+    OMP_PLACES=threads
+
+WORKDIR /work

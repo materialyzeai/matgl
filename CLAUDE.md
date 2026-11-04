@@ -46,6 +46,8 @@ mgl clear -y
 
 Docs/release helpers live in `tasks.py` (`invoke make-docs`, `invoke release <version>`). `changes.md` is the canonical changelog and is the source `release` reads from.
 
+Docker images (`docker/Dockerfile`, `docker/Dockerfile.kokkos-cpu`, `docker/Dockerfile.kokkos`) install matgl from the source tree, not PyPI, and need `--build-arg MATGL_VERSION=...` because the build context (allowlisted in `.dockerignore`) has no `.git`. `.github/workflows/docker.yml` builds, smoke-tests and pushes `materialyzeai/matgl:<version>`/`latest` and `-kokkos-cpu` on each published release; the CUDA image is built manually.
+
 ## Architecture
 
 matgl uses PyTorch Geometric (PyG) exclusively as its graph backend. DGL is no longer
