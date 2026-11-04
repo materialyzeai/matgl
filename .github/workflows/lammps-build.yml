@@ -47,6 +47,7 @@ jobs:
 
     env:
       LIBTORCH_VERSION: "2.5.1"
+      CMAKE_VERSION: "3.31.6"
 
     steps:
       - name: Install build + CI tooling
@@ -79,6 +80,20 @@ jobs:
           fi
           echo "Installed compiler: $(gcc --version | head -1)"
           echo "Installed cmake:    $(cmake --version | head -1)"
+
+      - name: Install CMake ${{ env.CMAKE_VERSION }}
+        # LAMMPS (develop) requires CMake >= 3.27; distro packages (e.g. 3.25
+        # on Debian 12) are too old. Use Kitware's pinned binary release.
+        shell: bash
+        run: |
+          arch="$(uname -m)"
+          curl -fsSL -o cmake.tar.gz \
+            "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-${arch}.tar.gz"
+          mkdir -p "${RUNNER_TEMP}/cmake"
+          tar -xzf cmake.tar.gz -C "${RUNNER_TEMP}/cmake" --strip-components=1
+          rm cmake.tar.gz
+          echo "${RUNNER_TEMP}/cmake/bin" >> "$GITHUB_PATH"
+          "${RUNNER_TEMP}/cmake/bin/cmake" --version | head -1
 
       - name: Checkout matgl
         uses: actions/checkout@v4
@@ -268,6 +283,7 @@ jobs:
 
     env:
       LIBTORCH_VERSION: "2.5.1"
+      CMAKE_VERSION: "3.31.6"
 
     steps:
       - name: Install build + CI tooling
@@ -300,6 +316,20 @@ jobs:
           fi
           echo "Installed compiler: $(gcc --version | head -1)"
           echo "Installed cmake:    $(cmake --version | head -1)"
+
+      - name: Install CMake ${{ env.CMAKE_VERSION }}
+        # LAMMPS (develop) requires CMake >= 3.27; distro packages (e.g. 3.25
+        # on Debian 12) are too old. Use Kitware's pinned binary release.
+        shell: bash
+        run: |
+          arch="$(uname -m)"
+          curl -fsSL -o cmake.tar.gz \
+            "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-${arch}.tar.gz"
+          mkdir -p "${RUNNER_TEMP}/cmake"
+          tar -xzf cmake.tar.gz -C "${RUNNER_TEMP}/cmake" --strip-components=1
+          rm cmake.tar.gz
+          echo "${RUNNER_TEMP}/cmake/bin" >> "$GITHUB_PATH"
+          "${RUNNER_TEMP}/cmake/bin/cmake" --version | head -1
 
       - name: Checkout matgl
         uses: actions/checkout@v4
@@ -483,6 +513,7 @@ jobs:
 
     env:
       LIBTORCH_VERSION: "2.5.1"
+      CMAKE_VERSION: "3.31.6"
       # libtorch CUDA wheel tag (e.g. cu118, cu121, cu124) — must match the
       # CUDA toolkit installed on the runner. Override via repo/org variable
       # CUDA_TAG if the runner ships a different CUDA version.
@@ -492,6 +523,20 @@ jobs:
       KOKKOS_ARCH: ${{ vars.KOKKOS_ARCH || 'AMPERE80' }}
 
     steps:
+      - name: Install CMake ${{ env.CMAKE_VERSION }}
+        # LAMMPS (develop) requires CMake >= 3.27; distro packages (e.g. 3.25
+        # on Debian 12) are too old. Use Kitware's pinned binary release.
+        shell: bash
+        run: |
+          arch="$(uname -m)"
+          curl -fsSL -o cmake.tar.gz \
+            "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-${arch}.tar.gz"
+          mkdir -p "${RUNNER_TEMP}/cmake"
+          tar -xzf cmake.tar.gz -C "${RUNNER_TEMP}/cmake" --strip-components=1
+          rm cmake.tar.gz
+          echo "${RUNNER_TEMP}/cmake/bin" >> "$GITHUB_PATH"
+          "${RUNNER_TEMP}/cmake/bin/cmake" --version | head -1
+
       - name: Checkout matgl
         uses: actions/checkout@v4
         with:
