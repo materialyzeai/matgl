@@ -259,7 +259,9 @@ LAMMPS against a CXX11-ABI libtorch and runs `tests/ext/test_lammps_run.py`:
 | `build_pair_matgl_kokkos_host` | `+ PKG_KOKKOS` (Serial; OpenMP) | `matgl`, `matgl/kk` (`-k on t N`) |
 | `build_pair_matgl_kokkos` | `+ PKG_KOKKOS`, `Kokkos_ENABLE_CUDA` | `matgl`, `matgl/kk` (`-k on g 1`) |
 
-The CUDA job needs a self-hosted GPU runner and does not run today.
+The CUDA job needs a self-hosted GPU runner labeled `[self-hosted, gpu, cuda]`.
+None exists today, so it is skipped unless the repository variable
+`LAMMPS_GPU_CI` is set to `true`.
 
 ## Verifying a build
 

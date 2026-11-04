@@ -16,9 +16,10 @@ name: LAMMPS pair_matgl build
 #   * build_pair_matgl_kokkos_host -- PKG_KOKKOS with a host-only backend
 #     (Serial, OpenMP); exercises pair_style matgl/kk on GitHub-hosted runners.
 #   * build_pair_matgl_kokkos      -- Kokkos/CUDA. Needs a self-hosted runner
-#     labeled [self-hosted, gpu, cuda] with an NVIDIA driver + nvcc on PATH;
-#     none is registered against this repo today, so the job queues until
-#     `timeout-minutes`. Verified manually on a single-GPU NERSC node.
+#     labeled [self-hosted, gpu, cuda] with an NVIDIA driver + nvcc on PATH.
+#     Disabled (skipped) unless the repository variable LAMMPS_GPU_CI is
+#     "true"; no such runner exists today. Verified manually on a single-GPU
+#     NERSC node.
 
 on:
   push:
@@ -263,8 +264,8 @@ jobs:
     name: pair_matgl/kk (host Kokkos, ${{ matrix.backend }})
     # Host-only Kokkos build (no CUDA) on a GitHub-hosted runner. This is the
     # only CI coverage that actually compiles and runs pair_matgl_kokkos.cpp:
-    # the CUDA job below has no runner. A host-only build catches code that
-    # assumes CUDA (e.g. unguarded Kokkos::Cuda / cudaGetDevice).
+    # the CUDA job below is disabled (no runner). A host-only build catches
+    # code that assumes CUDA (e.g. unguarded Kokkos::Cuda / cudaGetDevice).
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -506,8 +507,10 @@ jobs:
     name: pair_matgl/kk (GPU, Kokkos)
     # Requires a self-hosted runner with an NVIDIA GPU, driver, and nvcc on
     # PATH, labeled to match below. No such runner is registered against
-    # this repo yet, so this job will queue indefinitely until one exists.
-    # `timeout-minutes` bounds that queue time instead of hanging forever.
+    # this repo, so the job is disabled: it runs only when the repository
+    # variable LAMMPS_GPU_CI is set to "true" (Settings > Secrets and
+    # variables > Actions > Variables) once a runner exists.
+    if: vars.LAMMPS_GPU_CI == 'true'
     runs-on: [self-hosted, gpu, cuda]
     timeout-minutes: 60
 
