@@ -6,6 +6,17 @@ nav_order: 3
 
 # Change Log
 
+## 4.1.4
+- **Fix: `pair_matgl/kk` in host-only Kokkos builds.** The LAMMPS Kokkos pair style failed to compile without CUDA.
+  The `Kokkos::Cuda` / `cudaGetDevice` branch is now guarded by `KOKKOS_ENABLE_CUDA`, non-CUDA GPU backends are
+  rejected instead of passing device pointers to a CPU tensor, and dependent member-template calls now compile
+  under clang. (#878)
+- **Tests: LAMMPS end-to-end.** `tests/ext/test_lammps_run.py` drives an `lmp` binary (opt-in via
+  `MATGL_LAMMPS_BIN` / `MATGL_LAMMPS_KOKKOS`) and checks `pair_style matgl` and `matgl/kk` against
+  `PESCalculator`, finite-difference pressure, NVE energy conservation and kk-vs-plain parity. CI adds a
+  Serial/OpenMP host Kokkos job; the CUDA Kokkos job is skipped unless the `LAMMPS_GPU_CI` repository variable is
+  `"true"`. (#878)
+
 ## 4.1.3
 - **Fix: TensorNet SO(3) Warp/PyG parity.** Warp's radial embedding used the transposed antisymmetric tensor.
   The embedding now follows the PyG convention. SO(3) models evaluated with Warp change; checkpoints trained
