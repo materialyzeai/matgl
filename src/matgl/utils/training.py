@@ -272,12 +272,13 @@ class ModelLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         self.lr = lr
         self.decay_steps = decay_steps
         self.decay_alpha = decay_alpha
+        self.loss: Callable[..., torch.Tensor]
         if loss == "mse_loss":
             self.loss = F.mse_loss
         elif loss == "huber_loss":
-            self.loss = F.huber_loss  # type:ignore[assignment]
+            self.loss = F.huber_loss
         elif loss == "smooth_l1_loss":
-            self.loss = F.smooth_l1_loss  # type:ignore[assignment]
+            self.loss = F.smooth_l1_loss
         else:
             self.loss = F.l1_loss
         self.optimizer = optimizer
@@ -475,10 +476,11 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             data_std=torch.as_tensor(self.data_std),  # type: ignore[arg-type]
             data_mean=torch.as_tensor(self.data_mean),  # type: ignore[arg-type]
         )
+        self.loss: Callable[..., torch.Tensor]
         if loss == "mse_loss":
             self.loss = F.mse_loss
         elif loss == "huber_loss":
-            self.loss = F.huber_loss  # type:ignore[assignment]
+            self.loss = F.huber_loss
         elif loss == "smooth_l1_loss":
             self.loss = F.smooth_l1_loss
         else:
