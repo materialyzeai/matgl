@@ -74,13 +74,25 @@ void PairMATGLKokkos<DeviceType>::init_style()
                           !std::is_same<DeviceType, LMPDeviceType>::value);
   request->set_kokkos_device(std::is_same<DeviceType, LMPDeviceType>::value);
 
-  // Pick the matching libtorch device.
-  if (std::is_same<DeviceType, Kokkos::Cuda>::value) {
+  // Pick the matching libtorch device. Kokkos::Cuda and cudaGetDevice only
+  // exist in CUDA-enabled Kokkos builds, so that branch is compiled only
+  // there; host-only builds (Serial/OpenMP/Threads) always run Torch on CPU.
+  // Other GPU backends (HIP, SYCL) are rejected rather than handing device
+  // pointers to a CPU tensor via from_blob().
+  constexpr bool host_accessible =
+      Kokkos::SpaceAccessibility<Kokkos::HostSpace, typename DeviceType::memory_space>::accessible;
+  torch_device_ = torch::kCPU;
+#ifdef KOKKOS_ENABLE_CUDA
+  if constexpr (std::is_same_v<DeviceType, Kokkos::Cuda>) {
     int gpu = 0;
     if (lmp->kokkos->ngpus > 0) cudaGetDevice(&gpu);
     torch_device_ = torch::Device(torch::kCUDA, gpu);
-  } else {
-    torch_device_ = torch::kCPU;
+  } else
+#endif
+  if constexpr (!host_accessible) {
+    error->all(FLERR,
+               "pair_style matgl/kk: unsupported Kokkos device backend; only "
+               "CUDA and host (Serial/OpenMP/Threads) backends are supported");
   }
   // Move the model to the matching device. ``torch::jit::Module::to`` is
   // safe to call repeatedly.
@@ -339,12 +351,12 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
     auto host_opts = torch::TensorOptions().dtype(dtype_).device(torch::kCPU);
     auto cell_h = torch::zeros({3, 3}, host_opts);
     if (dtype_ == torch::kFloat64) {
-      auto c = cell_h.accessor<double, 2>();
+      auto c = cell_h.template accessor<double, 2>();
       c[0][0] = domain->xprd;
       c[1][0] = domain->xy;   c[1][1] = domain->yprd;
       c[2][0] = domain->xz;   c[2][1] = domain->yz;   c[2][2] = domain->zprd;
     } else {
-      auto c = cell_h.accessor<float, 2>();
+      auto c = cell_h.template accessor<float, 2>();
       c[0][0] = static_cast<float>(domain->xprd);
       c[1][0] = static_cast<float>(domain->xy);
       c[1][1] = static_cast<float>(domain->yprd);
@@ -376,7 +388,7 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
 
   // 8) Energy + force scatter. LAMMPS f is double on device; the model may
   //    return float32 — promote on the fly.
-  double total_energy = out.at("total_energy_local").toTensor().to(torch::kFloat64).item<double>();
+  double total_energy = out.at("total_energy_local").toTensor().to(torch::kFloat64).template item<double>();
   if (eflag_global) eng_vdwl += total_energy;
 
   torch::Tensor forces_t =
@@ -386,7 +398,7 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
   // into LAMMPS' f.
   using UnmanagedF = Kokkos::View<double **, Kokkos::LayoutRight, DeviceType,
                                   Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-  UnmanagedF d_force_in(forces_t.data_ptr<double>(), nlocal, 3);
+  UnmanagedF d_force_in(forces_t.template data_ptr<double>(), nlocal, 3);
 
   Kokkos::parallel_for(
       "matgl_kk:add_forces",
@@ -403,7 +415,7 @@ void PairMATGLKokkos<DeviceType>::compute(int eflag, int vflag)
   //    pair_gnnp.cpp: virial -= volume * stress, with ASE stress = dE/dstrain / V).
   if (vflag_global) {
     auto vir_t = out.at("virials").toTensor().to(torch::kFloat64).cpu();
-    auto va = vir_t.accessor<double, 2>();
+    auto va = vir_t.template accessor<double, 2>();
     virial[0] -= va[0][0];
     virial[1] -= va[1][1];
     virial[2] -= va[2][2];
