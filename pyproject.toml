@@ -22,7 +22,7 @@ authors = [
 ]
 description = "MatGL is a framework for graph deep learning for materials science."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 keywords = [
     "materials",
     "interatomic potential",

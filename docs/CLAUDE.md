@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project layout
 
-`src/matgl/` is a `src`-layout package (installed as `matgl`). The package targets Python 3.11+ and is built with setuptools; environment management is done with `uv` (`uv.lock` is checked in).
+`src/matgl/` is a `src`-layout package (installed as `matgl`). The package targets Python 3.12+ and is built with setuptools; environment management is done with `uv` (`uv.lock` is checked in).
 
 ## Common commands
 
-Environment setup (Python 3.11+ required):
+Environment setup (Python 3.12+ required):
 
 ```bash
 uv venv && uv sync                 # install runtime deps + dev group
