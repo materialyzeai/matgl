@@ -356,25 +356,28 @@ class TestMatpesSchemaValidation:
         with pytest.raises(ValueError, match=message):
             training_mod._matpes_samples_to_lists(payload)
 
-    def test_rejects_partially_populated_stress_labels(self):
-        with pytest.raises(ValueError, match="Stress labels must be present for every sample"):
-            training_mod._matpes_samples_to_lists([_minimal_pes_record(stress=True), _minimal_pes_record()])
+    def test_partially_populated_stress_labels(self):
+        _, labels = training_mod._matpes_samples_to_lists([_minimal_pes_record(stress=True), _minimal_pes_record()])
+        assert labels["stresses"][0] is not None
+        assert labels["stresses"][1] is None
 
-    def test_rejects_mixed_structure_and_molecule_dataset(self):
+    def test_mixed_structure_and_molecule_dataset(self):
         structures = [
             Structure(Lattice.cubic(4), ["Li"], [[0, 0, 0]]),
             Molecule(["H"], [[0, 0, 0]]),
         ]
         labels = {"energies": [-1.0, -0.5], "forces": [[[0.0, 0.0, 0.0]]] * 2}
-        with pytest.raises(ValueError, match="cannot mix periodic structures"):
-            training_mod._build_pes_dataset(
-                structures,
-                labels,
-                cutoff=4.0,
-                element_types=("H", "Li"),
-                save_cache=False,
-                root=None,
-            )
+        dataset = training_mod._build_pes_dataset(
+            structures,
+            labels,
+            cutoff=4.0,
+            element_types=("H", "Li"),
+            save_cache=False,
+            root=None,
+        )
+        assert len(dataset) == 2
+        assert dataset.graphs[0].pbc.all()
+        assert not dataset.graphs[1].pbc.any()
 
 
 class TestLoadDatasetFromExtxyz:
@@ -452,14 +455,16 @@ class TestLoadDatasetFromExtxyz:
         np.testing.assert_allclose(ds.labels["forces"][0], [[0.1, 0.2, 0.3]])
         np.testing.assert_allclose(ds.labels["stresses"][0], np.arange(9).reshape(3, 3))
 
-    def test_missing_required_field_raises(self, tmp_path):
+    def test_missing_energy_is_masked(self, tmp_path):
         atoms = Atoms("Li", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
         atoms.calc = SinglePointCalculator(atoms, energy=-1.0, forces=np.zeros((1, 3)))
         path = tmp_path / "missing.extxyz"
         write(path, atoms, format="extxyz")
 
-        with pytest.raises(KeyError, match="missing required field 'unknown'"):
-            MGLDatasetLoader.from_extxyz(path, energy_key="unknown", save_cache=False)
+        dataset = MGLDatasetLoader.from_extxyz(path, energy_key="unknown", save_cache=False)
+        assert np.isnan(dataset.labels["energies"][0])
+        with pytest.raises(ValueError, match="must contain energy or forces"):
+            MGLDatasetLoader.from_extxyz(path, energy_key="unknown", forces_key="unknown", save_cache=False)
 
     def test_empty_file_raises(self, monkeypatch, tmp_path):
         import ase.io
@@ -468,7 +473,7 @@ class TestLoadDatasetFromExtxyz:
         with pytest.raises(ValueError, match="contains no frames"):
             MGLDatasetLoader.from_extxyz(tmp_path / "empty.extxyz", save_cache=False)
 
-    def test_inconsistent_stress_presence_raises(self, tmp_path):
+    def test_inconsistent_stress_presence_is_masked(self, tmp_path):
         with_stress = Atoms("Li", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
         with_stress.calc = SinglePointCalculator(
             with_stress,
@@ -481,19 +486,19 @@ class TestLoadDatasetFromExtxyz:
         path = tmp_path / "partial_stress.extxyz"
         write(path, [with_stress, without_stress], format="extxyz")
 
-        with pytest.raises(ValueError, match="Stress labels must be present for every Extended XYZ frame"):
-            MGLDatasetLoader.from_extxyz(path, save_cache=False)
+        dataset = MGLDatasetLoader.from_extxyz(path, save_cache=False)
+        assert dataset.labels["stresses"][1] is None
 
-    def test_partial_periodicity_raises(self, tmp_path):
+    def test_partial_periodicity_is_preserved(self, tmp_path):
         atoms = Atoms("Li", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=[True, False, False])
         atoms.calc = SinglePointCalculator(atoms, energy=-1.0, forces=np.zeros((1, 3)))
         path = tmp_path / "partial_pbc.extxyz"
         write(path, atoms, format="extxyz")
 
-        with pytest.raises(ValueError, match="Partially periodic"):
-            MGLDatasetLoader.from_extxyz(path, save_cache=False)
+        dataset = MGLDatasetLoader.from_extxyz(path, save_cache=False)
+        assert dataset.graphs[0].pbc.tolist() == [[True, False, False]]
 
-    def test_mixed_periodicity_raises(self, tmp_path):
+    def test_mixed_periodicity(self, tmp_path):
         periodic = Atoms("Li", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
         molecule = Atoms("H", positions=[[0, 0, 0]], pbc=False)
         for atoms in (periodic, molecule):
@@ -501,8 +506,9 @@ class TestLoadDatasetFromExtxyz:
         path = tmp_path / "mixed.extxyz"
         write(path, [periodic, molecule], format="extxyz")
 
-        with pytest.raises(ValueError, match="cannot mix periodic structures"):
-            MGLDatasetLoader.from_extxyz(path, save_cache=False)
+        dataset = MGLDatasetLoader.from_extxyz(path, save_cache=False)
+        assert dataset.graphs[0].pbc.all()
+        assert not dataset.graphs[1].pbc.any()
 
     def test_invalid_stress_shape_raises(self, tmp_path):
         atoms = Atoms("Li", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)

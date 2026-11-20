@@ -35,7 +35,8 @@ class Potential(nn.Module, IOMixIn):
     per-graph energy (M3GNet, CHGNet, TensorNet, ...) and produces forces,
     stress, and optionally the Hessian via PyTorch autograd. The wrapped
     model's ``__call__`` is expected to accept the keyword arguments
-    ``g``, ``state_attr``, and ``l_g`` (and, when ``calc_charge=True``,
+    ``g``, ``state_attr``, and ``l_g`` (and, for a model declaring
+    ``supports_total_charge=True`` or when ``calc_charge=True``,
     additionally ``total_charge`` and ``ext_pot``), and return a scalar
     energy tensor of shape ``(num_graphs,)``.
 
@@ -190,7 +191,9 @@ class Potential(nn.Module, IOMixIn):
 
         Stress is obtained by introducing a symbolic strain tensor
         ``eps`` of shape ``(B, 3, 3)`` and using ``dE/d_eps`` from autograd,
-        scaled by ``1/V`` and converted to GPa.
+        scaled by ``1/V`` and converted to GPa. Graphs whose ``pbc`` flags
+        are all false have zero bulk stress and are not strained. Graphs
+        without ``pbc`` retain the legacy periodic convention.
 
         The input ``g`` is **not mutated**: this method shallow-clones it
         before attaching ``lattice`` / ``pbc_offshift`` / ``pos`` so the
@@ -208,6 +211,8 @@ class Potential(nn.Module, IOMixIn):
                 * ``g.pbc_offset`` -- integer PBC image offsets per edge,
                   shape (E, 3);
                 * ``g.batch`` -- per-node graph index when batched.
+                * ``g.pbc`` -- optional per-graph PBC flags, shape (B, 3).
+                * ``g.total_charge`` -- optional net charge, shape (B,).
             lat: lattice in Cartesian frame, shape ``(B, 3, 3)`` (or
                 ``(3, 3)`` for a single graph). Units of A.
             state_attr: optional global state features, shape
@@ -215,10 +220,11 @@ class Potential(nn.Module, IOMixIn):
             l_g: optional line graph used by three-body interactions
                 (M3GNet/CHGNet/SO3Net). May be ``None`` for two-body
                 models such as TensorNet.
-            total_charge: optional per-graph total charge, shape ``(B,)``,
-                consumed only when ``calc_charge=True``.
+            total_charge: optional per-graph total charge, shape ``(B,)``.
+                Defaults to ``g.total_charge`` for charge-conditioned models,
+                independently of whether partial charges are requested.
             ext_pot: optional per-atom external potential, shape ``(N,)``,
-                consumed only when ``calc_charge=True``.
+                consumed by charge-conditioned models.
 
         Returns:
             A tuple whose contents depend on the active ``calc_*`` flags.
@@ -275,12 +281,19 @@ class Potential(nn.Module, IOMixIn):
             state_attr = state_attr.to(dtype)
 
         batch_size = g.num_graphs if hasattr(g, "num_graphs") else 1
-        # st (strain) for stress calculations
+        # Legacy graphs without PBC metadata retain the historical periodic convention.
+        pbc = getattr(g, "pbc", None)
+        periodic = (
+            torch.ones(batch_size, dtype=torch.bool, device=device)
+            if pbc is None
+            else pbc.to(device=device, dtype=torch.bool).reshape(batch_size, 3).any(dim=1)
+        )
+        # Molecules use a bookkeeping lattice, not a deformable periodic cell.
         st = lat.new_zeros([batch_size, 3, 3])
         if self.calc_stresses:
             st.requires_grad_(True)
 
-        lattice = lat @ (self._eye3 + st)
+        lattice = lat @ (self._eye3 + st * periodic[:, None, None])
 
         # Attach lattice to edges
         if isinstance(g, Batch):
@@ -307,6 +320,13 @@ class Potential(nn.Module, IOMixIn):
         # enter the no_grad context when forces/stresses/hessian are all off.
         needs_autograd = self.calc_forces or self.calc_stresses or self.calc_hessian
         autograd_ctx = nullcontext() if needs_autograd else torch.no_grad()
+        charge_conditioned = self.calc_charge or getattr(self.model, "supports_total_charge", False)
+        if charge_conditioned and total_charge is None:
+            total_charge = getattr(g, "total_charge", None)
+        if total_charge is not None:
+            total_charge = total_charge.to(device=device, dtype=dtype)
+        if ext_pot is not None:
+            ext_pot = ext_pot.to(device=device, dtype=dtype)
         with autograd_ctx:
             total_energies = (
                 self.model(
@@ -316,7 +336,7 @@ class Potential(nn.Module, IOMixIn):
                     total_charge=total_charge,
                     ext_pot=ext_pot,
                 )
-                if self.calc_charge
+                if charge_conditioned
                 else self.model(g=g, state_attr=state_attr, l_g=l_g)
             )
             total_energies = self.data_std * total_energies + self.data_mean
@@ -369,6 +389,9 @@ class Potential(nn.Module, IOMixIn):
                 if matgl.float_th == torch.float16
                 else torch.abs(torch.det(lattice))
             )
+            if torch.any(periodic & ((volume <= 0) | ~torch.isfinite(volume))):
+                raise ValueError("Periodic stress requires a finite, nonzero cell volume.")
+            volume = torch.where(periodic, volume, torch.ones_like(volume))
             # grads[1] is dE/dε with shape either (3, 3) [unbatched] or (B, 3, 3) [batched].
             # Stress = (1/V) * dE/dε in eV/Å³, converted to GPa.
             sts = grads[1]

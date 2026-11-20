@@ -482,7 +482,7 @@ def test_train_potential_scratch_uses_modern_pyg_trainer(tmp_path):
     )
     model_class.assert_called_once_with(element_types=("Li", "O"), cutoff=5.0, is_intensive=False, units=16)
     assert trainer_class.call_args.kwargs["max_epochs"] == 2
-    assert trainer_class.call_args.kwargs["stress_weight"] == 0.0
+    assert trainer_class.call_args.kwargs["stress_weight"] is None
     assert trainer_class.call_args.kwargs["trainer_kwargs"]["logger"] is fake_logger
     assert trainer_class.call_args.kwargs["trainer_kwargs"]["enable_checkpointing"] is True
     logger_class.assert_called_once_with(save_dir=str(tmp_path / "logs"), name="matgl")

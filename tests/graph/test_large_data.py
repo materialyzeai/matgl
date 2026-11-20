@@ -82,7 +82,8 @@ def test_disk_dataset_loader_and_qeq_charge(tmp_path):
     assert graph.q_ref.shape == (4,)
     assert energy.shape == (2,)
     assert forces.shape == (4, 3)
-    assert stress.shape == (2, 6)
+    assert stress.shape == (6, 3)
+    torch.testing.assert_close(stress[:3], torch.tensor([[0.0, 5.0, 4.0], [5.0, 1.0, 3.0], [4.0, 3.0, 2.0]]))
     assert charges.shape == (4,)
     assert len(list(val_loader)) == 5
 

@@ -6,6 +6,18 @@ nav_order: 3
 
 # Change Log
 
+## Unreleased
+- Support joint molecule/material PES datasets in the JSON and Extended XYZ loaders, including partial PBC and
+  missing targets. `System2Graph` dispatches mixed pymatgen inputs with shared element ordering.
+- Converters preserve per-system PBC, net charge and spin multiplicity. QET receives net charge independently of
+  partial-charge supervision. Spin metadata does not add spin conditioning to existing models.
+- Molecular bulk stress is zero and excluded from training metrics/loss. `MGLPotentialTrainer` defaults to
+  automatic stress weighting (0.1 with periodic stress labels, otherwise 0) and masks missing targets by default.
+  Explicit positive stress weights require periodic stress labels. Legacy graphs without PBC metadata retain
+  the previous periodic convention; rebuild old processed datasets for the new metadata.
+- PES collation expands six-component Voigt stresses to 3x3 matrices, yielding `(3 * batch_size, 3)` labels
+  consistently with the potential's stress output.
+
 ## 4.1.4
 - **Fix: `pair_matgl/kk` in host-only Kokkos builds.** The LAMMPS Kokkos pair style failed to compile without CUDA.
   The `Kokkos::Cuda` / `cudaGetDevice` branch is now guarded by `KOKKOS_ENABLE_CUDA`, non-CUDA GPU backends are

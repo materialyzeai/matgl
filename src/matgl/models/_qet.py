@@ -44,6 +44,7 @@ class QET(TensorNet):
     """
 
     __version__ = 1
+    supports_total_charge = True
 
     def __init__(
         self,
