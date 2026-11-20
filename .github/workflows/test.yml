@@ -42,6 +42,9 @@ jobs:
             optionals: "jax"
           - os: ubuntu-latest
             python: "3.13"
+            optionals: "torch-sim"
+          - os: ubuntu-latest
+            python: "3.13"
           - os: macos-latest
             python: "3.12"
 
@@ -92,7 +95,7 @@ jobs:
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: coverage/coverage-base/coverage.xml,coverage/coverage-ops/coverage.xml,coverage/coverage-alchmtk/coverage.xml,coverage/coverage-jax/coverage.xml
+          files: coverage/coverage-base/coverage.xml,coverage/coverage-ops/coverage.xml,coverage/coverage-alchmtk/coverage.xml,coverage/coverage-jax/coverage.xml,coverage/coverage-torch-sim/coverage.xml
           fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

@@ -77,6 +77,17 @@ alchmtk = [
 jax = [
   "jax>=0.4.30",
 ]
+torch-sim = [
+  "torch-sim-atomistic>=0.6.1,<0.7",
+]
+
+[tool.uv]
+conflicts = [
+  [
+    { extra = "alchmtk" },
+    { extra = "torch-sim" },
+  ],
+]
 
 [tool.setuptools_scm]
 tag_regex = '^v(?P<version>\d+\.\d+\.\d+)$'
