@@ -272,3 +272,79 @@ def test_initial_moments_do_not_invent_spin_multiplicity():
     atoms.set_initial_magnetic_moments([0.2, 0.3])
     _, _, spin = get_system_metadata(atoms, is_atoms=True)
     assert np.isnan(spin)
+
+
+@pytest.mark.parametrize("charge", [float("nan"), float("inf"), -float("inf")])
+def test_nonfinite_conditioning_charge_is_rejected(charge):
+    atoms = _frames()[0]
+    atoms.info["total_charge"] = charge
+    with pytest.raises(ValueError, match="total_charge must be finite"):
+        get_system_metadata(atoms, is_atoms=True)
+
+
+@pytest.mark.parametrize("spin", [0, -1, 1.5, float("inf"), -float("inf")])
+def test_invalid_spin_multiplicity_is_rejected(spin):
+    molecule = _systems()[0]
+    molecule.properties["spin_multiplicity"] = spin
+    with pytest.raises(ValueError, match="spin_multiplicity must be a positive integer"):
+        get_system_metadata(molecule)
+
+
+def test_system_converter_rejects_unsupported_input():
+    with pytest.raises(TypeError, match="expects a pymatgen Structure or Molecule"):
+        System2Graph(("H",)).get_graph(_frames()[0])
+
+
+def test_periodic_stress_rejects_zero_volume():
+    crystal = _systems()[1]
+    graph, lattice, _ = Structure2Graph(("H",), cutoff=2.5).get_graph(crystal)
+    lattice[0, 2, 2] = 0
+    with pytest.raises(ValueError, match="Periodic stress requires a finite, nonzero cell volume"):
+        Potential(_model(), calc_stresses=True).eval()(graph, lattice)
+
+
+@pytest.mark.parametrize("property_name", ["energies", "forces", "stresses"])
+def test_collation_rejects_infinite_targets(property_name):
+    graph, lattice, state = Molecule2Graph(("H",), cutoff=2.5).get_graph(_systems()[0])
+    labels = {"energies": torch.tensor(-1.0), "forces": torch.zeros(2, 3), "stresses": torch.zeros(3, 3)}
+    labels[property_name] = torch.full_like(labels[property_name], float("inf"))
+    with pytest.raises(ValueError, match="PES labels cannot contain infinite values"):
+        collate_fn_pes([(graph, lattice, torch.as_tensor(state), labels)])
+
+
+def test_json_conditioning_overrides_and_voigt_stress(tmp_path):
+    molecule = Molecule(["H", "H"], [[0, 0, 0], [0.8, 0, 0]])
+    crystal = _systems()[1]
+    samples = [
+        {
+            "structure": molecule.as_dict(),
+            "total_charge": 1,
+            "spin_multiplicity": 2,
+            "energy": None,
+            "forces": np.zeros((2, 3)).tolist(),
+        },
+        {"structure": crystal.as_dict(), "energy": -2.0, "forces": None, "stress": [1, 2, 3, 4, 5, 6]},
+    ]
+    path = tmp_path / "conditioned.json"
+    path.write_text(json.dumps(samples))
+    dataset = MGLDatasetLoader.from_json(path, element_types=("H",), stress_unit="GPa", save_cache=False)
+    batch = collate_fn_pes([dataset[0], dataset[1]])
+    assert dataset.graphs[0].total_charge.item() == 1
+    assert dataset.graphs[0].spin_multiplicity.item() == 2
+    assert torch.isnan(batch[3][0])
+    assert torch.isnan(batch[4][2:]).all()
+    assert torch.isnan(batch[5][:3]).all()
+    torch.testing.assert_close(batch[5][3:], torch.tensor([[1.0, 6.0, 5.0], [6.0, 2.0, 4.0], [5.0, 4.0, 3.0]]))
+
+
+def test_external_potential_changes_charges_without_changing_net_charge():
+    graph, lattice, _ = Molecule2Graph(("H",), cutoff=2.5).get_graph(_systems()[0])
+    potential = Potential(_model(QET), calc_charge=True, calc_stresses=False).eval()
+    before = potential(graph, lattice)[4]
+    # Conditioning values may come from a double-precision external solver.
+    shifted = potential(graph, lattice, ext_pot=torch.tensor([-0.5, 0.5], dtype=torch.float64))
+    assert shifted[4].dtype == potential.data_mean.dtype
+    assert not torch.allclose(before, shifted[4])
+    torch.testing.assert_close(shifted[4].sum(), torch.tensor(1.0), atol=1e-6, rtol=1e-6)
+    assert torch.isfinite(shifted[0]).all()
+    assert torch.isfinite(shifted[1]).all()
