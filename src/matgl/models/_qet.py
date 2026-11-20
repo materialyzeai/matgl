@@ -246,6 +246,7 @@ class QET(TensorNet):
         fea_dict["charge"] = charge
         fea_dict["elec_pot"] = elec_pot
         if magmom is not None:
+            g.magmom = magmom
             fea_dict["magmom"] = magmom
         fea_dict["node_feat"] = node_feat
         fea_dict["atomic_energies"] = atomic_energies

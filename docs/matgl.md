@@ -50,6 +50,8 @@ MatGL (Materials Graph Library) is a graph deep learning library for materials s
     * `TrajectoryObserver`
       * `TrajectoryObserver.as_pandas()`
       * `TrajectoryObserver.save()`
+  * [matgl.ext.torch_sim module](matgl.ext.torch_sim.md)
+    * `MatGLModel`
   * matgl.ext.pymatgen module
     * `Molecule2Graph`
       * `Molecule2Graph.get_graph()`

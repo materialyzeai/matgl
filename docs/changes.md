@@ -17,6 +17,12 @@ nav_order: 3
   the previous periodic convention; rebuild old processed datasets for the new metadata.
 - PES collation expands six-component Voigt stresses to 3x3 matrices, yielding `(3 * batch_size, 3)` labels
   consistently with the potential's stress output.
+- **Optional TorchSim integration (`matgl.ext.torch_sim`).** `MatGLModel` adapts PyG-backed MatGL `Potential`
+  objects to TorchSim's batched `ModelInterface` using TorchSim-native neighbor lists, without an ASE/pymatgen
+  conversion in the simulation loop. It supports batched energy and force evaluation, periodic stress in
+  eV/Angstrom^3, QET partial charges and magnetic moments, total-charge/state extras, device/dtype validation,
+  isolated atoms, and both periodic and nonperiodic systems. Install it with `pip install 'matgl[torch-sim]'`.
+- Attach QET's optional magnetic-moment readout to the graph so `Potential(calc_magmom=True)` can return it.
 
 ## 4.1.4
 - **Fix: `pair_matgl/kk` in host-only Kokkos builds.** The LAMMPS Kokkos pair style failed to compile without CUDA.
