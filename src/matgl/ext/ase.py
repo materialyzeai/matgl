@@ -35,7 +35,6 @@ from pymatgen.core.structure import Molecule, Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.optimization.neighbors import find_points_in_spheres
 
-import matgl
 from matgl.graph.converters import GraphConverter
 
 try:
@@ -193,10 +192,11 @@ class PESCalculator(Calculator):
             stress_unit (str): stress unit either in "GPa" or "eV/A^3". Default: "GPa"
             stress_weight (float): conversion factor from GPa to eV/A^3, if it is set to 1.0, the unit is in GPa
             use_voigt (bool): whether the voigt notation is used for stress output
-            total_charge (tensor): total charge of the structure, consumed only by charge-predicting
-                potentials (calc_charge=True). If None, the sum of atoms.get_initial_charges() is used.
-            ext_pot (tensor): external potential applied to atoms, shape (Natoms,), consumed only by
-                charge-predicting potentials
+            total_charge (tensor): total charge of the structure for charge-conditioned potentials,
+                independently of partial-charge output. If None, graph metadata supplies the charge
+                from Atoms.info or the sum of atoms.get_initial_charges().
+            ext_pot (tensor): external potential applied to atoms, shape (Natoms,), consumed by
+                charge-conditioned potentials.
             **kwargs: Kwargs pass through to super().__init__().
         """
         super().__init__(**kwargs)
@@ -259,15 +259,7 @@ class PESCalculator(Calculator):
         super().calculate(atoms=atoms, properties=properties, system_changes=system_changes)
         graph, lattice, state_attr_default = self._atoms2graph.get_graph(atoms)
         state_attr = self.state_attr if self.state_attr is not None else state_attr_default
-        if self.compute_charge:
-            total_charge = (
-                self.total_charge
-                if self.total_charge is not None
-                else torch.tensor(atoms.get_initial_charges(), dtype=matgl.float_th).sum()
-            )
-            calc_result = self.potential(graph, lattice, state_attr, total_charge=total_charge, ext_pot=self.ext_pot)
-        else:
-            calc_result = self.potential(graph, lattice, state_attr)
+        calc_result = self.potential(graph, lattice, state_attr, total_charge=self.total_charge, ext_pot=self.ext_pot)
         energy_val = calc_result[0].detach().cpu().numpy().item()
         self.results.update(
             energy=energy_val,

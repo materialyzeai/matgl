@@ -95,7 +95,8 @@ def test_torch_sim_static_runner_and_isolated_atom():
 
 
 @pytest.mark.parametrize("magmoms", [False, True])
-def test_torch_sim_qet_returns_charge_constrained_per_system(magmoms):
+@pytest.mark.parametrize("charge_output", [False, True])
+def test_torch_sim_qet_returns_charge_constrained_per_system(magmoms, charge_output):
     torch.manual_seed(5)
     qet = QET(
         element_types=("Li", "F"),
@@ -108,7 +109,7 @@ def test_torch_sim_qet_returns_charge_constrained_per_system(magmoms):
         include_magmom=magmoms,
     )
     model = MatGLModel(
-        Potential(qet, calc_forces=True, calc_stresses=False, calc_charge=True, calc_magmom=magmoms),
+        Potential(qet, calc_forces=True, calc_stresses=False, calc_charge=charge_output, calc_magmom=magmoms),
         compute_stress=False,
     )
     atoms = [
@@ -120,7 +121,12 @@ def test_torch_sim_qet_returns_charge_constrained_per_system(magmoms):
 
     output = model(state)
 
-    charge_sums = torch.zeros(2).scatter_add_(0, state.system_idx, output["partial_charges"])
+    charges = qet.feature_dict["charge"]
+    if charge_output:
+        torch.testing.assert_close(output["partial_charges"], charges)
+    else:
+        assert "partial_charges" not in output
+    charge_sums = torch.zeros(2).scatter_add_(0, state.system_idx, charges)
     torch.testing.assert_close(charge_sums, state.total_charge, atol=1e-6, rtol=1e-6)
     if magmoms:
         assert output["magnetic_moments"].shape == (state.n_atoms,)
@@ -274,6 +280,68 @@ def test_torch_sim_continuous_state_follows_model_dtype():
         for key, value in output.items():
             assert torch.isfinite(value).all()
             torch.testing.assert_close(value, expected[key])
+
+
+def test_torch_sim_rejects_model_without_graph_metadata():
+    with pytest.raises(TypeError, match=r"potential\.model must define cutoff and element_types"):
+        MatGLModel(Potential(torch.nn.Identity()))
+
+
+def test_torch_sim_device_transfer_and_mismatch_guard():
+    model = MatGLModel(_potential(), dtype=torch.float64, state_attr=torch.ones(1, 2))
+    state = ts.initialize_state(bulk("Si", "diamond", a=5.43), model.device, model.dtype)
+    # Meta provides a real second device without requiring a CUDA worker. It
+    # checks migration and early validation, not accelerator execution.
+    model.device = torch.device("meta")
+    assert model.device == torch.device("meta")
+    assert all(tensor.device.type == "meta" for tensor in model.parameters())
+    assert all(tensor.device.type == "meta" for tensor in model.buffers())
+    with pytest.raises(ValueError, match="SimState device cpu does not match model device meta"):
+        model(state)
+
+
+def test_torch_sim_rejects_singular_periodic_cell():
+    model = MatGLModel(_potential())
+    state = ts.initialize_state(bulk("Si", "diamond", a=5.43), model.device, model.dtype)
+    state.cell[0, :, 2] = 0
+    with pytest.raises(ValueError, match="periodic systems require non-singular cells"):
+        model(state)
+
+
+@pytest.mark.parametrize("charge_output", [False, True])
+def test_torch_sim_external_potential_extras_and_keyword_override(charge_output):
+    torch.manual_seed(17)
+    qet = QET(element_types=("Li", "F"), units=8, nblocks=1, num_rbf=8, cutoff=5.0, use_warp=False)
+    model = MatGLModel(
+        Potential(qet, calc_charge=charge_output, calc_stresses=False), dtype=torch.float64, compute_stress=False
+    )
+    atoms = Atoms("LiF", positions=[[0, 0, 0], [2.0, 0.3, 0]], cell=[8, 8, 8], pbc=True)
+    state = ts.initialize_state(atoms, model.device, model.dtype)
+    # Extras from an external solver can have a different floating dtype.
+    state.system_extras["total_charge"] = torch.tensor([1.0], dtype=torch.float32)
+    state.atom_extras["external_potential"] = torch.tensor([-0.3, 0.3], dtype=torch.float32)
+    biased = model(state)
+    biased_charge = qet.feature_dict["charge"].detach().clone()
+    overridden = model(state, ext_pot=torch.zeros(2, dtype=torch.float32))
+    overridden_charge = qet.feature_dict["charge"].detach().clone()
+    assert not torch.allclose(biased_charge, overridden_charge)
+    assert biased_charge.dtype == model.dtype
+    torch.testing.assert_close(biased_charge.sum(), torch.tensor(1.0, dtype=model.dtype), atol=1e-10, rtol=1e-10)
+    torch.testing.assert_close(overridden_charge.sum(), biased_charge.sum(), atol=1e-10, rtol=1e-10)
+    if charge_output:
+        torch.testing.assert_close(biased["partial_charges"], biased_charge)
+    else:
+        assert "partial_charges" not in biased
+    # An explicit zero field must reproduce evaluation without an extra field.
+    del state.atom_extras["external_potential"]
+    unperturbed = model(state)
+    for key, expected in unperturbed.items():
+        torch.testing.assert_close(overridden[key], expected)
+    # Explicit net charge also overrides the state extra.
+    model(state, total_charge=torch.tensor([-1.0], dtype=torch.float32))
+    torch.testing.assert_close(
+        qet.feature_dict["charge"].sum(), torch.tensor(-1.0, dtype=model.dtype), atol=1e-10, rtol=1e-10
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")

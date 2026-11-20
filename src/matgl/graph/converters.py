@@ -11,6 +11,32 @@ from torch_geometric.data import Data
 import matgl
 
 
+def get_system_metadata(structure, is_atoms: bool = False) -> tuple[np.ndarray, float, float]:
+    """Return PBC, net charge and spin multiplicity without using target labels.
+
+    ASE inputs may declare ``total_charge`` (or ``charge``) and
+    ``spin_multiplicity`` in ``Atoms.info``. Unknown spin multiplicities are NaN;
+    a periodic structure does not implicitly have a molecular singlet state.
+    """
+    if is_atoms:
+        pbc = np.asarray(structure.pbc, dtype=bool)
+        metadata = structure.info
+        charge = getattr(structure, "charge", np.sum(structure.get_initial_charges()))
+        spin = getattr(structure, "spin_multiplicity", float("nan"))
+    else:
+        pbc = np.asarray(structure.lattice.pbc if hasattr(structure, "lattice") else [False] * 3, dtype=bool)
+        metadata = getattr(structure, "properties", {})
+        charge = getattr(structure, "charge", 0.0)
+        spin = getattr(structure, "spin_multiplicity", float("nan"))
+    charge = float(metadata.get("total_charge", metadata.get("charge", charge)))
+    spin = float(metadata.get("spin_multiplicity", spin))
+    if not np.isfinite(charge):
+        raise ValueError("total_charge must be finite.")
+    if not np.isnan(spin) and (not np.isfinite(spin) or spin < 1 or not spin.is_integer()):
+        raise ValueError("spin_multiplicity must be a positive integer when supplied.")
+    return pbc, charge, spin
+
+
 class GraphConverter(metaclass=abc.ABCMeta):
     """Abstract base class for converters from input crystals/molecules to graphs."""
 
@@ -106,6 +132,12 @@ class GraphConverter(metaclass=abc.ABCMeta):
 
         # Add fractional coordinates as node attribute
         graph.frac_coords = torch.as_tensor(frac_coords, dtype=matgl.float_th, device=device)
+
+        # Keep one metadata row per graph so PyG concatenates mixed systems correctly.
+        pbc, charge, spin = get_system_metadata(structure, is_atoms=is_atoms)
+        graph.pbc = torch.as_tensor(pbc, dtype=torch.bool, device=device).reshape(1, 3)
+        graph.total_charge = torch.tensor([charge], dtype=matgl.float_th, device=device)
+        graph.spin_multiplicity = torch.tensor([spin], dtype=matgl.float_th, device=device)
 
         # Default state attributes
         state_attr = np.array([0.0, 0.0], dtype=matgl.float_np)

@@ -35,7 +35,8 @@ relaxed = ts.optimize(system=state, model=model, optimizer=ts.Optimizer.fire)
 
 Stress is reported as zero for nonperiodic systems, where bulk stress is undefined. For QET potentials, a
 per-system `total_charge` TorchSim extra (or the same forward keyword) constrains QEq; predicted charges are returned
-as `partial_charges`. Use `Potential(qet, calc_charge=True)` for charge-conditioned QET evaluation. The per-atom
+as `partial_charges` when `Potential(qet, calc_charge=True)` is used. Net-charge conditioning also works with
+`calc_charge=False`; that flag controls whether partial charges are returned. The per-atom
 `external_potential` extra (or `ext_pot` keyword) supplies an external potential; `state_attr` can be passed as a
 system extra, constructor default, or forward keyword. Forward keywords take precedence over extras.
 

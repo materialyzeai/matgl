@@ -373,7 +373,7 @@ exported.save("property-model")
 
 ### `MGLPotentialTrainer`
 
-`matgl.utils.training.MGLPotentialTrainer` is a high-level wrapper around `PotentialLightningModule` and `pl.Trainer` with sensible MatPES-tuned defaults (Huber loss, stress weight 0.1, Adam + CosineAnnealingLR). Dataset construction is delegated to a sibling `MGLDatasetLoader` factory; the trainer itself only consumes pre-built `MGLDataset`s.
+`matgl.utils.training.MGLPotentialTrainer` is a high-level wrapper around `PotentialLightningModule` and `pl.Trainer` with sensible MatPES-tuned defaults (Huber loss, automatic stress weight, Adam + CosineAnnealingLR). Dataset construction is delegated to a sibling `MGLDatasetLoader` factory; the trainer itself only consumes pre-built `MGLDataset`s.
 
 #### CLI training and evaluation
 
@@ -384,7 +384,27 @@ mgl train -i training.extxyz -m TensorNet -o TensorNet-local --epochs 100
 mgl evaluate -i test.extxyz -m TensorNet-local
 ```
 
-For Extended XYZ, the default fields are `energy`, `forces`, `stress`, `charges`, and `magmoms`; override them with `--energy-key`, `--forces-key`, and the corresponding key options. Energies and forces are expected in eV and eV/Å. Stress defaults to ASE's eV/Å³ convention and is converted to matgl's GPa convention. Periodic frames use `Structure2Graph`, while fully nonperiodic frames use `Molecule2Graph`; one file cannot mix the two. Use `--model-kwargs '{"units": 128, "nblocks": 3}'` for architecture options, or pass a saved potential instead of `TensorNet` to fine-tune it.
+For Extended XYZ, the default fields are `energy`, `forces`, `stress`, `charges`, and `magmoms`; override them with `--energy-key`, `--forces-key`, and the corresponding key options. Energies and forces are expected in eV and eV/Å. Stress defaults to ASE's eV/Å³ convention and is converted to matgl's GPa convention. Files can mix periodic structures, partially periodic slabs, and nonperiodic molecules. Use `--model-kwargs '{"units": 128, "nblocks": 3}'` for architecture options, or pass a saved potential instead of `TensorNet` to fine-tune it.
+
+#### Joint molecular and materials training
+
+`MGLDatasetLoader.from_extxyz` and `from_json` accept molecules and periodic structures in the same dataset. For a custom `MGLDataset`, use `matgl.ext.pymatgen.System2Graph(element_types=model.element_types, cutoff=model.cutoff)` to dispatch between `Molecule2Graph` and `Structure2Graph` with one element ordering.
+
+```python
+from matgl import MGLDatasetLoader, MGLPotentialTrainer
+from matgl.models import TensorNet
+
+dataset = MGLDatasetLoader.from_extxyz("molecules_and_materials.extxyz")
+model = TensorNet(element_types=dataset.element_types, is_intensive=False, cutoff=5.0)
+trainer = MGLPotentialTrainer(model, batch_size=16, max_epochs=100)
+potential = trainer.fit(dataset, save_path="joint-potential")
+```
+
+Missing targets are represented by NaN and excluded separately for each property with `allow_missing_labels=True` (the high-level trainer default). Each Extended XYZ frame needs at least energy or forces. Molecular bulk stress is always excluded, even if a file supplies a finite molecular stress target; `Potential` returns zeros for these stress rows. Leave `stress_weight=None` to select 0.1 when periodic stress labels are available and 0.0 otherwise, or set an explicit weight. The lower-level `PotentialLightningModule` retains its explicit `allow_missing_labels=False` default, so enable it when using partially labelled data directly.
+
+Converters attach per-graph `pbc`, `total_charge`, and `spin_multiplicity`. Extended XYZ reads net charge from `Atoms.info["total_charge"]` (or `"charge"`, then initial atomic charges), independently of target partial charges. Supply known spin multiplicities explicitly in `Atoms.info["spin_multiplicity"]`. QET consumes net charge even with `charge_weight=0`; ordinary TensorNet does not condition on charge. Spin metadata alone does not make a model spin-conditioned. Use compatible reference methods, energy offsets, and model chemistry when combining datasets.
+
+Processed caches built from source structures are regenerated to include the metadata. Rebuild legacy cache-only datasets to obtain it; graphs without `pbc` retain the previous periodic stress behavior. The MatPES-specific optional charge/magmom extractors still drop samples missing a requested optional target, as before.
 
 The geometry commands also accept multi-frame `.xyz` and `.extxyz` files. `mgl predict` reports one result per frame; `mgl relax -s _relaxed` writes all relaxed frames back to Extended XYZ; and `mgl md` starts one simulation per frame, using `_0`, `_1`, and so on in trajectory/log names. Nonperiodic molecular relaxation requires `--no-relax-cell`.
 
@@ -462,7 +482,7 @@ trainer = MGLPotentialTrainer(
 finetuned = trainer.fit(dataset=ds, atomrefs=refs, save_path="./TensorNet-finetuned")
 ```
 
-The same pattern works for any pretrained `Potential` from the [`materialyze`](https://huggingface.co/materialyze) HF organisation — extract `pretrained.model`, hand it to `MGLPotentialTrainer`, and `fit`. For datasets without stress labels (e.g. cluster / dimer extxyz), set `stress_weight=0` in the trainer constructor so the stress term is dropped from the loss.
+The same pattern works for any pretrained `Potential` from the [`materialyze`](https://huggingface.co/materialyze) HF organisation — extract `pretrained.model`, hand it to `MGLPotentialTrainer`, and `fit`. For datasets without periodic stress labels (e.g. cluster / dimer extxyz), the default `stress_weight=None` disables stress training automatically; `stress_weight=0` disables it explicitly.
 
 ## Tutorials
 

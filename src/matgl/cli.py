@@ -352,9 +352,7 @@ def train_potential(args: argparse.Namespace) -> int:
         cutoff = float(pretrained_model.cutoff)
 
     dataset = _load_cli_pes_dataset(args, cutoff=cutoff, element_types=element_types)
-    stress_weight = (
-        args.stress_weight if args.stress_weight is not None else (0.1 if "stresses" in dataset.labels else 0.0)
-    )
+    stress_weight = args.stress_weight
     magmom_weight = (
         args.magmom_weight if args.magmom_weight is not None else (0.1 if "magmoms" in dataset.labels else 0.0)
     )
@@ -362,7 +360,7 @@ def train_potential(args: argparse.Namespace) -> int:
         args.charge_weight if args.charge_weight is not None else (0.1 if "charges" in dataset.labels else 0.0)
     )
     for label, weight in (("stresses", stress_weight), ("magmoms", magmom_weight), ("charges", charge_weight)):
-        if weight > 0 and label not in dataset.labels:
+        if weight is not None and weight > 0 and label not in dataset.labels:
             raise ValueError(f"{label} weight is positive, but the dataset has no {label} labels")
 
     if is_scratch:
@@ -449,6 +447,7 @@ def evaluate_potential(args: argparse.Namespace) -> int:
         stress_weight=1.0 if "stresses" in labels else 0.0,
         magmom_weight=1.0 if "magmoms" in labels else 0.0,
         charge_weight=1.0 if "charges" in labels else 0.0,
+        allow_missing_labels=True,
     )
     _, data_loader = MGLDataLoader(
         train_data=dataset,
@@ -849,7 +848,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--stress_weight",
         type=float,
         default=None,
-        help="Stress loss weight (default: 0.1 when labels exist, otherwise 0).",
+        help="Stress loss weight (default: 0.1 with periodic stress labels, otherwise 0).",
     )
     p_train.add_argument(
         "--magmom-weight",

@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # Bump this when the on-disk format changes in a backwards-incompatible way so
 # old caches are invalidated automatically (a stricter version of the cutoff
 # fingerprint below).
-_CACHE_FORMAT_VERSION = 2
+_CACHE_FORMAT_VERSION = 3
 
 
 def _json_default(obj: Any) -> Any:
@@ -49,6 +49,10 @@ def _json_default(obj: Any) -> Any:
 
 def _hash_structure(hasher: Any, structure: Any) -> None:
     """Fold the geometry and species of a pymatgen Structure/Molecule or ASE Atoms into ``hasher``."""
+    from matgl.graph.converters import get_system_metadata
+
+    _, charge, spin = get_system_metadata(structure, is_atoms=hasattr(structure, "get_positions"))
+    hasher.update(np.asarray([charge, spin], dtype=np.float64).tobytes())
     if hasattr(structure, "get_positions"):  # ASE Atoms
         hasher.update(np.asarray(structure.get_atomic_numbers(), dtype=np.int64).tobytes())
         hasher.update(np.ascontiguousarray(structure.get_positions(), dtype=np.float64).tobytes())
@@ -264,26 +268,41 @@ def collate_fn_pes(
         - state_attr: Stacked state attributes (batch_size, state_dim)
         - e: Energies (batch_size,)
         - f: Forces (num_atoms, 3)
-        - s: Stresses (batch_size, 6) or zeros if include_stress=False
+        - s: Stresses (3*batch_size, 3) or zeros if include_stress=False
         - m: Magnetic moments (batch_size, ...) or zeros if include_magmom=False
         - q: Per-atom charges concatenated across the batch (only when include_charge=True)
     """
     graphs, lattices, state_attr, labels = map(list, zip(*batch, strict=False))
 
     g = Batch.from_data_list(graphs)  # Batch main graphs
-    e = torch.tensor([d["energies"] for d in labels], dtype=matgl.float_th)
-    f = torch.vstack([d["forces"] for d in labels])
+
+    def target(value, shape: tuple[int, ...], voigt: bool = False) -> torch.Tensor:
+        tensor = torch.as_tensor(float("nan") if value is None else value, dtype=matgl.float_th)
+        if tensor.numel() == 1 and torch.isnan(tensor).all():
+            return torch.full(shape, float("nan"), dtype=matgl.float_th)
+        if torch.isinf(tensor).any():
+            raise ValueError("PES labels cannot contain infinite values; use NaN for missing labels.")
+        if voigt and tensor.shape == (6,):
+            tensor = tensor[[0, 5, 4, 5, 1, 3, 4, 3, 2]]
+        return tensor.reshape(shape)
+
+    e = torch.stack([target(d.get("energies"), ()) for d in labels])
+    f = torch.vstack([target(d.get("forces"), (graph.num_nodes, 3)) for graph, d in zip(graphs, labels, strict=False)])
     s = (
-        torch.vstack([d["stresses"] for d in labels])
+        torch.vstack([target(d.get("stresses"), (3, 3), voigt=True) for d in labels])
         if include_stress
         else torch.zeros(e.size(0), dtype=matgl.float_th)
     )
     m = (
-        torch.vstack([d["magmoms"].view(-1, 1) for d in labels])
+        torch.vstack([target(d.get("magmoms"), (graph.num_nodes, 1)) for graph, d in zip(graphs, labels, strict=False)])
         if include_magmom
         else torch.zeros(e.size(0), dtype=matgl.float_th)
     )
-    q = torch.hstack([d["charges"] for d in labels]) if include_charge else torch.zeros(e.size(0), dtype=matgl.float_th)
+    q = (
+        torch.hstack([target(d.get("charges"), (graph.num_nodes,)) for graph, d in zip(graphs, labels, strict=False)])
+        if include_charge
+        else torch.zeros(e.size(0), dtype=matgl.float_th)
+    )
     state_attr = torch.stack(state_attr)  # type:ignore[assignment]
     lat = lattices[0] if g.batch_size == 1 else torch.squeeze(torch.stack(lattices))
     if include_magmom:
@@ -637,7 +656,7 @@ class MGLDataset(Dataset):
             self.lattices[idx],
             self.state_attr[idx],
             {
-                k: torch.tensor(v[idx], dtype=matgl.float_th)
+                k: torch.tensor(float("nan") if v[idx] is None else v[idx], dtype=matgl.float_th)
                 for k, v in self.labels.items()
                 if not isinstance(v[idx], str)
             },

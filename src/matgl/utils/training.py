@@ -516,6 +516,8 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         lat: torch.Tensor,
         l_g: Any = None,
         state_attr: torch.Tensor | None = None,
+        total_charge: torch.Tensor | None = None,
+        ext_pot: torch.Tensor | None = None,
     ) -> tuple:
         """Run the wrapped potential model.
 
@@ -524,24 +526,13 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             lat: Lattice tensor.
             l_g: Optional line graph.
             state_attr: Optional state attribute.
+            total_charge: Net charge per graph; defaults to graph metadata.
+            ext_pot: Optional per-atom external potential for charge-conditioned models.
 
         Returns:
             energy, force, stress, hessian and optional site_wise
         """
-        if self.include_line_graph:
-            if self.model.calc_magmom:
-                e, f, s, h, m = self.model(g=g, lat=lat, l_g=l_g, state_attr=state_attr)
-                return e, f, s, h, m
-            e, f, s, h = self.model(g=g, lat=lat, l_g=l_g, state_attr=state_attr)
-            return e, f, s, h
-        if self.model.calc_charge:
-            e, f, s, h, q = self.model(g=g, lat=lat, l_g=l_g, state_attr=state_attr)
-            return e, f, s, h, q
-        if self.model.calc_magmom:
-            e, f, s, h, m = self.model(g=g, lat=lat, state_attr=state_attr)
-            return e, f, s, h, m
-        e, f, s, h = self.model(g=g, lat=lat, state_attr=state_attr)
-        return e, f, s, h
+        return self.model(g=g, lat=lat, l_g=l_g, state_attr=state_attr, total_charge=total_charge, ext_pot=ext_pot)
 
     def step(self, batch: tuple) -> tuple[dict[str, Any], int]:
         """Run a single training/validation step.
@@ -578,14 +569,20 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             labels = (labels[0], labels[1], labels[2], labels[3].squeeze())
 
         num_atoms = torch.bincount(g.batch)
+        stress_mask = None
+        pbc = getattr(g, "pbc", None)
+        if self.model.calc_stresses and pbc is not None:
+            periodic = pbc.reshape(-1, 3).any(dim=1)
+            stress_mask = periodic[:, None, None].expand(-1, 3, 3).reshape(-1, 3)
         results = self.loss_fn(
             loss=self.loss,  # type: ignore
             preds=preds,
             labels=labels,
             num_atoms=num_atoms,
+            stress_mask=stress_mask,
         )
         batch_size = preds[0].numel()
-        self._last_metric_counts = self._metric_counts(labels)
+        self._last_metric_counts = self._metric_counts(labels, stress_mask)
 
         self._last_preds = preds
         self._last_labels = labels
@@ -637,7 +634,7 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             "num_atoms": self._last_num_atoms,
         }
 
-    def _metric_counts(self, labels: tuple) -> dict[str, torch.Tensor]:
+    def _metric_counts(self, labels: tuple, stress_mask: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         """Number of labelled elements behind each MAE/RMSE returned by ``loss_fn``.
 
         Missing (NaN) labels are excluded, matching ``allow_missing_labels``. Components that ``loss_fn`` does not
@@ -651,7 +648,13 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         counts = {
             "Energy": n_valid(labels[0]),
             "Force": n_valid(labels[1]),
-            "Stress": n_valid(labels[2]) if self.model.calc_stresses else zero,
+            "Stress": (
+                ((~torch.isnan(labels[2])) & stress_mask).sum()
+                if self.model.calc_stresses and stress_mask is not None
+                else n_valid(labels[2])
+                if self.model.calc_stresses
+                else zero
+            ),
             "Magmom": n_valid(labels[3]) if self.model.calc_magmom and len(labels) > 3 else zero,
             "Charge": n_valid(labels[3]) if self.model.calc_charge and len(labels) > 3 else zero,
         }
@@ -663,6 +666,7 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         labels: tuple,
         preds: tuple,
         num_atoms: torch.Tensor | None = None,
+        stress_mask: torch.Tensor | None = None,
     ) -> dict[str, Any]:
         """Compute losses for EFS.
 
@@ -671,6 +675,7 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
             labels: Labels.
             preds: Predictions
             num_atoms: Number of atoms.
+            stress_mask: Entries eligible for bulk stress supervision; molecules are excluded.
 
         Returns::
 
@@ -693,10 +698,18 @@ class PotentialLightningModule(MatglLightningModuleMixin, pl.LightningModule):
         if num_atoms is None:
             num_atoms = torch.ones_like(preds[0])
         valid_num_atoms = num_atoms
-        if self.allow_missing_labels:
+        if self.allow_missing_labels or stress_mask is not None:
             valid_labels, valid_preds = [], []
-            for index, label in enumerate(labels):
-                valid_value_indices = ~torch.isnan(label)
+            for index, label in enumerate(labels[: len(preds)]):
+                if index == 2 and not self.model.calc_stresses:
+                    valid_labels.append(label)
+                    valid_preds.append(preds[index])
+                    continue
+                valid_value_indices = (
+                    ~torch.isnan(label) if self.allow_missing_labels else torch.ones_like(label, dtype=torch.bool)
+                )
+                if index == 2 and stress_mask is not None:
+                    valid_value_indices = valid_value_indices & stress_mask
                 valid_labels.append(label[valid_value_indices])
                 if index == 0:
                     valid_num_atoms = num_atoms[valid_value_indices]
@@ -994,7 +1007,7 @@ def _matpes_samples_to_lists(
     *,
     include_charges: bool | ChargesSource = False,
     include_magmoms: bool | MagmomsSource = False,
-) -> tuple[list[Structure], dict[str, list]]:
+) -> tuple[list[Structure | Molecule], dict[str, list]]:
     """Walk a MatPES sample list and return parallel structures + labels dict.
 
     Extracts ``energies`` and ``forces``, plus ``stresses`` when present. Per-atom optional
@@ -1078,11 +1091,9 @@ def _matpes_samples_to_lists(
     else:
         samples = list(samples)
 
-    has_stress = all("stress" in raw for raw in samples)
-    if not has_stress and any("stress" in raw for raw in samples):
-        raise ValueError("Stress labels must be present for every sample or omitted from every sample.")
+    has_stress = any(raw.get("stress") is not None for raw in samples)
 
-    structures: list[Structure] = []
+    structures: list[Structure | Molecule] = []
     energies: list[float] = []
     forces: list = []
     stresses: list = []
@@ -1106,13 +1117,25 @@ def _matpes_samples_to_lists(
             continue
 
         struct = raw["structure"]
-        if not isinstance(struct, Structure):
-            struct = Structure.from_dict(struct)
+        if not isinstance(struct, (Structure, Molecule)):
+            struct = Structure.from_dict(struct) if "lattice" in struct else Molecule.from_dict(struct)
+        for key in ("total_charge", "spin_multiplicity"):
+            if key in raw:
+                struct.properties[key] = raw[key]
         structures.append(struct)
-        energies.append(float(raw["energy"]))
-        forces.append(np.asarray(raw["forces"], dtype="float64").tolist())
+        energies.append(float("nan") if raw["energy"] is None else float(raw["energy"]))
+        forces.append(None if raw["forces"] is None else np.asarray(raw["forces"], dtype="float64").tolist())
         if has_stress:
-            stresses.append((np.asarray(raw["stress"], dtype="float64") * factor).tolist())
+            raw_stress = raw.get("stress")
+            if raw_stress is None:
+                stresses.append(None)
+            else:
+                stress = np.asarray(raw_stress, dtype="float64")
+                if stress.shape == (6,):
+                    from ase.stress import voigt_6_to_full_3x3_stress
+
+                    stress = voigt_6_to_full_3x3_stress(stress)
+                stresses.append((stress.reshape(3, 3) * factor).tolist())
         for label, val in optional_values.items():
             optional_lists[label].append(val)
 
@@ -1181,18 +1204,18 @@ def _build_pes_dataset(
 ) -> MGLDataset:
     """Construct an ``MGLDataset`` from parallel structure / label lists."""
     # Lazy imports to avoid circulars (``matgl.utils.training`` is foundational).
-    from matgl.ext.pymatgen import Molecule2Graph, Structure2Graph, get_element_list
+    from matgl.ext.pymatgen import Molecule2Graph, Structure2Graph, System2Graph, get_element_list
     from matgl.graph.data import MGLDataset
 
     if element_types is None:
         element_types = get_element_list(list(structures))
-    converter: Structure2Graph | Molecule2Graph
+    converter: Structure2Graph | Molecule2Graph | System2Graph
     if all(isinstance(item, Structure) for item in structures):
         converter = Structure2Graph(element_types=element_types, cutoff=cutoff)
     elif all(isinstance(item, Molecule) for item in structures):
         converter = Molecule2Graph(element_types=element_types, cutoff=cutoff)
     else:
-        raise ValueError("A PES dataset cannot mix periodic structures and nonperiodic molecules.")
+        converter = System2Graph(element_types=element_types, cutoff=cutoff)
     ds_kwargs: dict = {
         "structures": list(structures),
         "converter": converter,
@@ -1378,14 +1401,17 @@ class MGLDatasetLoader:
         eV/angstrom^3 with tensile-positive sign, matching matgl after unit
         conversion to GPa, so ``stress_unit`` defaults to ``"eV/A3"``.
 
-        All frames must be either fully periodic or fully nonperiodic. The
-        former are converted to pymatgen ``Structure`` objects and the latter
-        to ``Molecule`` objects. Partially periodic frames and mixed
-        structure/molecule trajectories are rejected.
+        Periodic frames (including slabs) become pymatgen ``Structure`` objects;
+        nonperiodic frames become ``Molecule`` objects. Missing targets are NaN
+        and can be masked with ``allow_missing_labels=True`` in the trainer.
+        ``Atoms.info['total_charge']`` (or ``charge``) and ``spin_multiplicity``
+        are preserved as graph conditioning metadata, independently of target charges.
         """
         from ase.io import read
         from ase.stress import voigt_6_to_full_3x3_stress
         from pymatgen.io.ase import AseAtomsAdaptor
+
+        from matgl.graph.converters import get_system_metadata
 
         def get_value(atoms, key: str) -> Any:
             results = getattr(getattr(atoms, "calc", None), "results", {})
@@ -1395,7 +1421,7 @@ class MGLDatasetLoader:
                 return atoms.arrays[key]
             if key in atoms.info:
                 return atoms.info[key]
-            raise KeyError(f"Extended XYZ frame is missing required field {key!r}")
+            return None
 
         frames = read(path, index=":", format="extxyz")
         if not frames:
@@ -1404,16 +1430,13 @@ class MGLDatasetLoader:
         adaptor = AseAtomsAdaptor()
         structures: list[Structure | Molecule] = []
         labels: dict[str, list] = {"energies": [], "forces": []}
-        periodicity: bool | None = None
         stress_present = [
             stress_key in getattr(getattr(atoms, "calc", None), "results", {})
             or stress_key in atoms.info
             or stress_key in atoms.arrays
             for atoms in frames
         ]
-        if any(stress_present) and not all(stress_present):
-            raise ValueError("Stress labels must be present for every Extended XYZ frame or omitted from every frame.")
-        has_stress = all(stress_present)
+        has_stress = any(stress_present)
         if has_stress:
             labels["stresses"] = []
         if include_charges:
@@ -1424,28 +1447,44 @@ class MGLDatasetLoader:
         factor = _STRESS_UNIT_TO_GPA[stress_unit]
         for atoms in frames:
             pbc = np.asarray(atoms.pbc, dtype=bool)
-            if pbc.any() and not pbc.all():
-                raise ValueError("Partially periodic Extended XYZ frames are not supported.")
-            is_periodic = bool(pbc.all())
-            if periodicity is not None and is_periodic != periodicity:
-                raise ValueError("Extended XYZ cannot mix periodic structures and nonperiodic molecules.")
-            periodicity = is_periodic
-            structures.append(adaptor.get_structure(atoms) if is_periodic else adaptor.get_molecule(atoms))
-            labels["energies"].append(float(np.asarray(get_value(atoms, energy_key)).squeeze()))
-            labels["forces"].append(np.asarray(get_value(atoms, forces_key), dtype="float64").tolist())
+            _, charge, spin = get_system_metadata(atoms, is_atoms=True)
+            system = (
+                adaptor.get_structure(atoms)
+                if pbc.any()
+                else Molecule(
+                    atoms.get_chemical_symbols(),
+                    atoms.get_positions(),
+                    charge=charge,
+                    spin_multiplicity=None if np.isnan(spin) else int(spin),
+                )
+            )
+            system.properties["total_charge"] = charge
+            system.properties["spin_multiplicity"] = spin
+            structures.append(system)
+            energy, forces = get_value(atoms, energy_key), get_value(atoms, forces_key)
+            if energy is None and forces is None:
+                raise ValueError("An Extended XYZ training frame must contain energy or forces.")
+            labels["energies"].append(float("nan") if energy is None else float(np.asarray(energy).squeeze()))
+            labels["forces"].append(None if forces is None else np.asarray(forces, dtype="float64").tolist())
             if has_stress:
-                stress = np.asarray(get_value(atoms, stress_key), dtype="float64")
-                if stress.shape == (6,):
-                    stress = voigt_6_to_full_3x3_stress(stress)
-                elif stress.size == 9:
-                    stress = stress.reshape(3, 3)
+                raw_stress = get_value(atoms, stress_key)
+                if raw_stress is None:
+                    labels["stresses"].append(None)
                 else:
-                    raise ValueError(f"Extended XYZ stress must contain 6 or 9 values; got shape {stress.shape}.")
-                labels["stresses"].append((stress * factor).tolist())
+                    stress = np.asarray(raw_stress, dtype="float64")
+                    if stress.shape == (6,):
+                        stress = voigt_6_to_full_3x3_stress(stress)
+                    elif stress.size == 9:
+                        stress = stress.reshape(3, 3)
+                    else:
+                        raise ValueError(f"Extended XYZ stress must contain 6 or 9 values; got shape {stress.shape}.")
+                    labels["stresses"].append((stress * factor).tolist())
             if include_charges:
-                labels["charges"].append(np.asarray(get_value(atoms, charges_key), dtype="float64").tolist())
+                value = get_value(atoms, charges_key)
+                labels["charges"].append(None if value is None else np.asarray(value, dtype="float64").tolist())
             if include_magmoms:
-                labels["magmoms"].append(np.asarray(get_value(atoms, magmoms_key), dtype="float64").tolist())
+                value = get_value(atoms, magmoms_key)
+                labels["magmoms"].append(None if value is None else np.asarray(value, dtype="float64").tolist())
 
         return _build_pes_dataset(
             structures,
@@ -1663,7 +1702,7 @@ class MGLPotentialTrainer:
         # Loss term weights.
         energy_weight: float = 1.0,
         force_weight: float = 1.0,
-        stress_weight: float = 0.1,
+        stress_weight: float | None = None,
         magmom_weight: float = 0.0,
         charge_weight: float = 0.0,
         loss: str = "huber_loss",
@@ -1685,6 +1724,7 @@ class MGLPotentialTrainer:
         # Pass-through escape hatches.
         trainer_kwargs: dict | None = None,
         loader_kwargs: dict | None = None,
+        allow_missing_labels: bool = True,
     ) -> None:
         """Initialise the trainer.
 
@@ -1694,8 +1734,8 @@ class MGLPotentialTrainer:
                 with the ``element_types`` and ``cutoff`` you want to train.
             energy_weight: Energy loss weight.
             force_weight: Force loss weight.
-            stress_weight: Stress loss weight. Set to ``0`` for datasets
-                without stress labels (e.g. cluster / dimer extxyz files).
+            stress_weight: Stress loss weight. ``None`` selects 0.1 when periodic
+                stress targets are available and 0.0 otherwise. Set ``0`` to disable it.
                 Stress labels are expected in **GPa** with compressive =
                 negative (matgl convention; see the README "Model Training"
                 section). The MatPES loaders apply the kbar → GPa /
@@ -1743,12 +1783,16 @@ class MGLPotentialTrainer:
                 :func:`split_dataset` via :meth:`_build_dataloaders`.
                 Recognised split-only keys: ``frac_list``, ``shuffle``,
                 ``random_state``.
+            allow_missing_labels: Skip NaN targets in each property loss. Defaults
+                to ``True`` for mixed datasets with partially populated labels.
         """
         self.model = model
 
         self.energy_weight = energy_weight
         self.force_weight = force_weight
-        self.stress_weight = stress_weight
+        self._auto_stress_weight = stress_weight is None
+        self.stress_weight = 0.1 if stress_weight is None else stress_weight
+        self.allow_missing_labels = allow_missing_labels
         self.magmom_weight = magmom_weight
         self.charge_weight = charge_weight
         self.loss = loss
@@ -1824,6 +1868,20 @@ class MGLPotentialTrainer:
             batch_size=self.batch_size,
             **loader_kwargs,
         )
+
+    @staticmethod
+    def _has_periodic_stress(dataset: MGLDataset | Mapping[str, MGLDataset]) -> bool:
+        """Check for an actual stress target on a periodic system."""
+        from matgl.graph.data import MGLDataset
+
+        data = dataset if isinstance(dataset, MGLDataset) else cast("Mapping[str, MGLDataset]", dataset)["train"]
+        for index, value in enumerate(data.labels.get("stresses", [])):
+            if value is None or not np.isfinite(np.asarray(value)).any():
+                continue
+            pbc = getattr(data.graphs[index], "pbc", None)
+            if pbc is None or bool(pbc.any()):
+                return True
+        return False
 
     @staticmethod
     def _dataset_element_types(dataset: MGLDataset | Mapping[str, MGLDataset]) -> tuple[str, ...] | None:
@@ -1934,9 +1992,8 @@ class MGLPotentialTrainer:
             ``self.atomrefs``) is updated.
 
         Notes:
-            Loss-term toggling follows the constructor weights: set
-            ``stress_weight=0`` for datasets without stress labels (e.g.
-            cluster / dimer extxyz files), and set ``magmom_weight`` /
+            Stress training is enabled automatically when periodic stress labels
+            are available. Set ``stress_weight=0`` to disable it, and set ``magmom_weight`` /
             ``charge_weight`` ``> 0`` only when the dataset actually carries
             ``"magmoms"`` / ``"charges"`` labels.
         """
@@ -1952,6 +2009,13 @@ class MGLPotentialTrainer:
         self.dataset = dataset
         self.atomrefs = atomrefs
 
+        has_stress = self._has_periodic_stress(dataset)
+        stress_weight = self.stress_weight
+        if self._auto_stress_weight and not has_stress:
+            stress_weight = 0.0
+        elif stress_weight > 0 and not has_stress:
+            raise ValueError("stress_weight > 0 requires at least one periodic stress label.")
+
         train_loader, val_loader, test_loader = self._build_dataloaders(dataset)
         self.loaders = {"train": train_loader, "val": val_loader, "test": test_loader}
 
@@ -1960,7 +2024,7 @@ class MGLPotentialTrainer:
             element_refs=atomrefs,
             energy_weight=self.energy_weight,
             force_weight=self.force_weight,
-            stress_weight=self.stress_weight,
+            stress_weight=stress_weight,
             magmom_weight=self.magmom_weight,
             charge_weight=self.charge_weight,
             data_mean=self.data_mean,
@@ -1970,6 +2034,7 @@ class MGLPotentialTrainer:
             lr=self.lr,
             decay_steps=self.decay_steps,
             decay_alpha=self.decay_alpha,
+            allow_missing_labels=self.allow_missing_labels,
         )
         self.trainer = pl.Trainer(
             max_epochs=self.max_epochs,

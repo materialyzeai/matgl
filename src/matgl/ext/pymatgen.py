@@ -190,3 +190,36 @@ class Structure2Graph(GraphConverter):
             frac_coords,
         )
         return g, lat, state_attr
+
+
+class System2Graph(GraphConverter):
+    """Convert each pymatgen Structure or Molecule with the appropriate boundary conditions."""
+
+    def __init__(self, element_types: tuple[str, ...], cutoff: float = 5.0):
+        """Initialize a converter sharing one element ordering and cutoff across both domains.
+
+        Args:
+            element_types: Element ordering of the model, including when fine-tuning.
+            cutoff: Neighbor cutoff in angstrom.
+        """
+        self.element_types = tuple(element_types)
+        self.cutoff = cutoff
+        self._structures = Structure2Graph(self.element_types, cutoff)
+        self._molecules = Molecule2Graph(self.element_types, cutoff)
+
+    def get_graph(self, structure):
+        """Convert one system, preserving its per-graph PBC and conditioning metadata.
+
+        Args:
+            structure: A pymatgen Structure or Molecule.
+
+        Returns:
+            Graph, lattice and state attributes.
+        """
+        from pymatgen.core import Molecule, Structure
+
+        if isinstance(structure, Structure):
+            return self._structures.get_graph(structure)
+        if isinstance(structure, Molecule):
+            return self._molecules.get_graph(structure)
+        raise TypeError(f"System2Graph expects a pymatgen Structure or Molecule, got {type(structure).__name__}.")
