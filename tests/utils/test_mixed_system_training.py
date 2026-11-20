@@ -303,6 +303,23 @@ def test_periodic_stress_rejects_zero_volume():
         Potential(_model(), calc_stresses=True).eval()(graph, lattice)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_periodic_stress_does_not_synchronize_on_cuda():
+    # The cell-volume check runs on the device: a host synchronization in every stress call stalls
+    # the pipeline and prevents capturing the stress path in a CUDA graph.
+    graph, lattice, _ = Structure2Graph(("H",), cutoff=2.5).get_graph(_systems()[1])
+    potential = Potential(_model(), calc_stresses=True).eval().cuda()
+    graph, lattice = graph.to("cuda"), lattice.to("cuda")
+    expected = potential(graph, lattice)  # the first call may fill caches from the host
+    torch.cuda.set_sync_debug_mode("error")
+    try:
+        _, _, stresses, _ = potential(graph, lattice)
+    finally:
+        torch.cuda.set_sync_debug_mode("default")
+    assert torch.allclose(stresses, expected[2])
+    assert torch.isfinite(stresses).all()
+
+
 @pytest.mark.parametrize("property_name", ["energies", "forces", "stresses"])
 def test_collation_rejects_infinite_targets(property_name):
     graph, lattice, state = Molecule2Graph(("H",), cutoff=2.5).get_graph(_systems()[0])

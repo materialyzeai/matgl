@@ -7,6 +7,9 @@ nav_order: 3
 # Change Log
 
 ## Unreleased
+- `Potential` checks the periodic cell volume for stress on the device (`torch._assert_async`) instead of
+  branching on a GPU tensor in Python, which forced a host-device synchronization in every stress call and made
+  stress training and MD impossible to capture in a CUDA graph. On CPU the check still raises `ValueError`.
 - Support joint molecule/material PES datasets in the JSON and Extended XYZ loaders, including partial PBC and
   missing targets. `System2Graph` dispatches mixed pymatgen inputs with shared element ordering.
 - Converters preserve per-system PBC, net charge and spin multiplicity. QET receives net charge independently of

@@ -389,8 +389,15 @@ class Potential(nn.Module, IOMixIn):
                 if matgl.float_th == torch.float16
                 else torch.abs(torch.det(lattice))
             )
-            if torch.any(periodic & ((volume <= 0) | ~torch.isfinite(volume))):
-                raise ValueError("Periodic stress requires a finite, nonzero cell volume.")
+            invalid = periodic & ((volume <= 0) | ~torch.isfinite(volume))
+            if invalid.device.type == "cpu":
+                if torch.any(invalid):
+                    raise ValueError("Periodic stress requires a finite, nonzero cell volume.")
+            else:
+                # On accelerators the check runs on the device: a Python branch on a device tensor
+                # would block on a host-device synchronization in every call, which stalls the
+                # pipeline and makes the stress path impossible to capture in a CUDA graph.
+                torch._assert_async(~torch.any(invalid), "Periodic stress requires a finite, nonzero cell volume.")
             volume = torch.where(periodic, volume, torch.ones_like(volume))
             # grads[1] is dE/dε with shape either (3, 3) [unbatched] or (B, 3, 3) [batched].
             # Stress = (1/V) * dE/dε in eV/Å³, converted to GPa.
